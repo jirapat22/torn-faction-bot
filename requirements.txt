@@ -1,0 +1,10 @@
+# Python dependencies for Torn Faction Discord Bot
+
+# Discord library
+discord.py>=2.3.0
+
+# Async HTTP client (for Torn API in Phase 2+)
+aiohttp>=3.9.0
+
+# For future .env file support
+python-dotenv>=1.0.0
