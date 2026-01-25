@@ -230,10 +230,11 @@ class ChainTracker:
 
     async def has_active_chain_event(self):
         """
-        Check if there's an active Chain Event in Discord scheduled events
+        Check if there's an active Chain Event or War Event in Discord scheduled events
+        (Chains happen during both chain events and war events)
 
         Returns:
-            bool: True if a chain event is active, False otherwise
+            bool: True if a chain or war event is active, False otherwise
         """
         try:
             for guild in self.bot.guilds:
@@ -241,9 +242,9 @@ class ChainTracker:
                 events = guild.scheduled_events
 
                 for event in events:
-                    # Check if event name contains "Chain" and is active/started
+                    # Check if event name contains "Chain" or "War" and is active/started
                     event_name = event.name.lower()
-                    if 'chain' in event_name:
+                    if 'chain' in event_name or 'war' in event_name:
                         # Check if event is active (started or scheduled for now)
                         from datetime import datetime, timezone
                         now = datetime.now(timezone.utc)
