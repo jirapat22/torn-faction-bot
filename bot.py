@@ -81,14 +81,14 @@ async def on_ready():
     try:
         guild = discord.Object(id=GUILD_ID)
 
-        # Clear global commands first (removes duplicates)
-        bot.tree.clear_commands(guild=None)
-        await bot.tree.sync()  # Sync empty global commands
-
-        # Now sync to guild only
+        # Step 1: Copy commands to guild FIRST (before clearing)
         bot.tree.copy_global_to(guild=guild)
         synced = await bot.tree.sync(guild=guild)
         print(f'Synced {len(synced)} slash command(s) to guild {GUILD_ID}')
+
+        # Step 2: Clear global commands (removes duplicates from other servers)
+        bot.tree.clear_commands(guild=None)
+        await bot.tree.sync()  # Sync empty global
         print('Global commands cleared - no more duplicates')
     except Exception as e:
         print(f'Failed to sync commands: {e}')
