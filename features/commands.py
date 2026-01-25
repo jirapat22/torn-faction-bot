@@ -189,68 +189,7 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
 
         await interaction.followup.send(embed=embed, ephemeral=True)
 
-    @bot.tree.command(name='whois', description='Look up a Discord user\'s Torn profile')
-    @app_commands.describe(user='The Discord user to look up')
-    async def whois(interaction: discord.Interaction, user: discord.Member):
-        """Look up which Torn ID a Discord user is linked to"""
-        torn_id = inactivity_tracker.get_torn_id(user.id)
-
-        if not torn_id:
-            embed = create_embed(
-                title='Not Registered',
-                description=f'{user.mention} has not linked their Torn ID yet.',
-                color=EMBED_COLOR_INFO
-            )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-            return
-
-        await interaction.response.defer()
-
-        # Fetch Torn data
-        members = await fetch_faction_members()
-
-        if not members:
-            embed = create_embed(
-                title='API Error',
-                description='Could not connect to Torn API. Please try again later.',
-                color=EMBED_COLOR_CRITICAL
-            )
-            await interaction.followup.send(embed=embed)
-            return
-
-        torn_member = members.get(torn_id)
-
-        if not torn_member:
-            embed = create_embed(
-                title='Error',
-                description=f'Torn ID {torn_id} not found in faction.',
-                color=EMBED_COLOR_CRITICAL
-            )
-            await interaction.followup.send(embed=embed)
-            return
-
-        torn_name = torn_member.get('name', 'Unknown')
-        torn_level = torn_member.get('level', '?')
-        last_action_data = torn_member.get('last_action', {})
-        last_action_timestamp = last_action_data.get('timestamp')
-
-        days_inactive = get_days_since(last_action_timestamp) if last_action_timestamp else 999
-
-        embed = create_embed(
-            title=f'Torn Profile: {torn_name}',
-            description=f'{user.mention} is linked to this Torn account',
-            color=EMBED_COLOR_INFO,
-            fields=[
-                {'name': 'Torn Name', 'value': torn_name, 'inline': True},
-                {'name': 'Torn ID', 'value': f'[{torn_id}](https://www.torn.com/profiles.php?XID={torn_id})', 'inline': True},
-                {'name': 'Level', 'value': str(torn_level), 'inline': True},
-                {'name': 'Last Action', 'value': format_timestamp(last_action_timestamp, 'R') if last_action_timestamp else 'Unknown', 'inline': True},
-                {'name': 'Days Inactive', 'value': str(days_inactive) if days_inactive != 999 else 'Unknown', 'inline': True}
-            ]
-        )
-
-        await interaction.followup.send(embed=embed)
-
+    # Note: /whois command moved to features/verification.py
     # Note: /registered command removed - use /verify stats instead
 
     # ===== CHAIN COMMANDS (Phase 3) =====
