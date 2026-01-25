@@ -251,56 +251,7 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
 
         await interaction.followup.send(embed=embed)
 
-    @bot.tree.command(name='registered', description='Show all registered members')
-    async def registered(interaction: discord.Interaction):
-        """Show all Discord users who have registered their Torn ID"""
-        await interaction.response.defer()
-
-        mappings = inactivity_tracker.get_all_mappings()
-
-        if not mappings:
-            embed = create_embed(
-                title='No Registered Members',
-                description='No one has registered their Torn ID yet.',
-                color=EMBED_COLOR_INFO
-            )
-            await interaction.followup.send(embed=embed)
-            return
-
-        # Fetch Torn data for names
-        members = await fetch_faction_members()
-
-        embed = create_embed(
-            title='Registered Members',
-            description=f'{len(mappings)} members have linked their Torn ID',
-            color=EMBED_COLOR_SUCCESS
-        )
-
-        # Add each registered user
-        for discord_id, torn_id in list(mappings.items())[:25]:  # Discord embed limit is 25 fields
-            try:
-                discord_member = await interaction.guild.fetch_member(int(discord_id))
-                discord_name = discord_member.mention
-            except:
-                discord_name = f'Unknown (<@{discord_id}>)'
-
-            if members and torn_id in members:
-                torn_name = members[torn_id].get('name', 'Unknown')
-                torn_level = members[torn_id].get('level', '?')
-                torn_info = f'{torn_name} [Lvl {torn_level}]'
-            else:
-                torn_info = f'ID: {torn_id}'
-
-            embed.add_field(
-                name=discord_name,
-                value=torn_info,
-                inline=False
-            )
-
-        if len(mappings) > 25:
-            embed.set_footer(text=f'Showing 25 of {len(mappings)} registered members')
-
-        await interaction.followup.send(embed=embed)
+    # Note: /registered command removed - use /verify stats instead
 
     # ===== CHAIN COMMANDS (Phase 3) =====
 

@@ -79,11 +79,17 @@ async def on_ready():
     # Sync slash commands with Discord (guild-specific for instant updates)
     from config import GUILD_ID
     try:
-        # Copy global commands to guild for instant updates
         guild = discord.Object(id=GUILD_ID)
+
+        # Clear global commands first (removes duplicates)
+        bot.tree.clear_commands(guild=None)
+        await bot.tree.sync()  # Sync empty global commands
+
+        # Now sync to guild only
         bot.tree.copy_global_to(guild=guild)
         synced = await bot.tree.sync(guild=guild)
         print(f'Synced {len(synced)} slash command(s) to guild {GUILD_ID}')
+        print('Global commands cleared - no more duplicates')
     except Exception as e:
         print(f'Failed to sync commands: {e}')
 
