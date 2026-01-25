@@ -46,37 +46,7 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
 
         await interaction.response.send_message(embed=embed)
 
-    @bot.tree.command(name='register', description='Link your Discord account to your Torn ID')
-    @app_commands.describe(torn_id='Your Torn user ID (find it in your Torn profile URL)')
-    async def register(interaction: discord.Interaction, torn_id: int):
-        """Register Discord user with their Torn ID"""
-        # Defer response since API call may take a moment
-        await interaction.response.defer(ephemeral=True)
-
-        # Register the user
-        success, message = await inactivity_tracker.register_user(interaction.user.id, torn_id)
-
-        if success:
-            embed = create_embed(
-                title='Registration Successful',
-                description=message,
-                color=EMBED_COLOR_SUCCESS,
-                fields=[
-                    {'name': 'Discord User', 'value': interaction.user.mention, 'inline': True},
-                    {'name': 'Torn ID', 'value': str(torn_id), 'inline': True}
-                ]
-            )
-        else:
-            embed = create_embed(
-                title='Registration Failed',
-                description=message,
-                color=EMBED_COLOR_CRITICAL,
-                fields=[
-                    {'name': 'Tip', 'value': 'Make sure you\'re using your Torn ID (numbers only) and that you\'re in the faction', 'inline': False}
-                ]
-            )
-
-        await interaction.followup.send(embed=embed, ephemeral=True)
+    # Note: /register command moved to features/verification.py for better verification system
 
     @bot.tree.command(name='unregister', description='Unlink your Discord account from your Torn ID')
     async def unregister(interaction: discord.Interaction):
