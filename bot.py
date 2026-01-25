@@ -14,6 +14,7 @@ from config import BOT_TOKEN, COMMAND_PREFIX
 from features.inactivity import InactivityTracker
 from features.chains import ChainTracker
 from features.wars import WarTracker
+from features.verification import VerificationSystem, setup_verification_commands
 from features.commands import setup_commands
 from utils.helpers import ensure_data_directories
 from utils.torn_api import verify_api_key
@@ -31,12 +32,13 @@ bot = commands.Bot(command_prefix=COMMAND_PREFIX, intents=intents)
 inactivity_tracker = None
 chain_tracker = None
 war_tracker = None
+verification_system = None
 
 
 @bot.event
 async def on_ready():
     """Called when the bot successfully connects to Discord"""
-    global inactivity_tracker, chain_tracker, war_tracker
+    global inactivity_tracker, chain_tracker, war_tracker, verification_system
 
     print(f'Bot logged in as {bot.user.name} (ID: {bot.user.id})')
     print(f'Connected to {len(bot.guilds)} server(s)')
@@ -65,6 +67,11 @@ async def on_ready():
     # Initialize war tracker (Phase 4)
     war_tracker = WarTracker(bot)
     await war_tracker.load_war_history()
+
+    # Initialize verification system
+    verification_system = VerificationSystem(bot)
+    await verification_system.load_config()
+    await setup_verification_commands(bot, verification_system)
 
     # Register slash commands
     await setup_commands(bot, inactivity_tracker, chain_tracker, war_tracker)

@@ -180,3 +180,22 @@ async def get_member_last_action(torn_id):
         return None
 
     return member.get('last_action', {}).get('timestamp')
+
+
+async def fetch_player_data(torn_id):
+    """
+    Fetch player data for any Torn player (for verification)
+
+    Args:
+        torn_id: Torn user ID
+
+    Returns:
+        Dict with player data or None if error
+        Includes: player_id, name, level, faction info, last_action
+    """
+    data = await _make_api_request(
+        f'user/{torn_id}',
+        {'selections': 'profile'}
+    )
+
+    return data
