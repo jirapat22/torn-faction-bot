@@ -28,6 +28,9 @@ WAR_CHANNEL_ID = int(os.getenv("WAR_CHANNEL_ID", "0"))
 WAR_MANAGEMENT_CHANNEL_ID = int(os.getenv("WAR_MANAGEMENT_CHANNEL_ID", "0"))
 CHAINING_CHANNEL_ID = int(os.getenv("CHAINING_CHANNEL_ID", "0"))
 HAPPY_JUMP_CHANNEL_ID = int(os.getenv("HAPPY_JUMP_CHANNEL_ID", "0"))
+WELCOME_CHANNEL_ID = int(os.getenv("WELCOME_CHANNEL_ID", "0"))  # welcome-pit channel
+RULES_CHANNEL_ID = int(os.getenv("RULES_CHANNEL_ID", "0"))  # faction-edicts
+GENERAL_CHANNEL_ID = int(os.getenv("GENERAL_CHANNEL_ID", "0"))  # punk-plaza
 
 # ===== TORN API SETTINGS =====
 # Get your Torn API key from: https://www.torn.com/preferences.php#tab=api
@@ -44,6 +47,10 @@ if MANAGEMENT_ROLE_IDS_STR:
     MANAGEMENT_ROLE_IDS = [int(role_id.strip()) for role_id in MANAGEMENT_ROLE_IDS_STR.split(",") if role_id.strip()]
 else:
     MANAGEMENT_ROLE_IDS = []
+
+# Role IDs for pinging on specific events
+MANAGEMENT_PING_ROLE_ID = int(os.getenv("MANAGEMENT_PING_ROLE_ID", "0"))  # Ping for inactivity/war
+CHAINWATCHER_ROLE_ID = int(os.getenv("CHAINWATCHER_ROLE_ID", "0"))  # Ping for chain updates
 
 # Inactivity thresholds (in days)
 INACTIVITY_WARNING_DAYS = int(os.getenv("INACTIVITY_WARNING_DAYS", "3"))

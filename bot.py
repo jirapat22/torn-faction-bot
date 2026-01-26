@@ -1,6 +1,6 @@
 """
 Torn Faction Discord Bot - Main Entry Point
-Phase 3: Chain Tracking + Inactivity Tracking
+Full featured bot with war tracking, chain tracking, verification, and more
 """
 
 import discord
@@ -15,6 +15,9 @@ from features.inactivity import InactivityTracker
 from features.chains import ChainTracker
 from features.wars import WarTracker
 from features.verification import VerificationSystem, setup_verification_commands
+from features.subscriptions import SubscriptionManager, setup_subscription_commands
+from features.roles import RoleSyncManager, setup_rolesync_commands
+from features.enemies import EnemyWatchlist, setup_enemy_commands
 from features.commands import setup_commands
 from utils.helpers import ensure_data_directories
 from utils.torn_api import verify_api_key
@@ -23,22 +26,25 @@ from utils.torn_api import verify_api_key
 intents = discord.Intents.default()
 intents.members = True  # Required to see member info
 intents.guilds = True  # Required to see server info
-# Note: We don't need message_content anymore - using Torn API instead!
 
 # Create bot instance
 bot = commands.Bot(command_prefix=COMMAND_PREFIX, intents=intents)
 
-# Initialize trackers
+# Initialize trackers (set in on_ready)
 inactivity_tracker = None
 chain_tracker = None
 war_tracker = None
 verification_system = None
+subscription_manager = None
+role_sync_manager = None
+enemy_watchlist = None
 
 
 @bot.event
 async def on_ready():
     """Called when the bot successfully connects to Discord"""
     global inactivity_tracker, chain_tracker, war_tracker, verification_system
+    global subscription_manager, role_sync_manager, enemy_watchlist
 
     print(f'Bot logged in as {bot.user.name} (ID: {bot.user.id})')
     print(f'Connected to {len(bot.guilds)} server(s)')
@@ -56,22 +62,42 @@ async def on_ready():
         print('WARNING: Torn API key is invalid or faction ID is wrong!')
         print('Please check TORN_API_KEY and TORN_FACTION_ID in config.py')
 
+    # Initialize subscription manager (needed by other modules)
+    subscription_manager = SubscriptionManager(bot)
+    await subscription_manager.load_subscriptions()
+    await setup_subscription_commands(bot, subscription_manager)
+
     # Initialize inactivity tracker
     inactivity_tracker = InactivityTracker(bot)
     await inactivity_tracker.load_user_mapping()
 
-    # Initialize chain tracker (Phase 3)
+    # Initialize chain tracker
     chain_tracker = ChainTracker(bot)
+    chain_tracker.subscription_manager = subscription_manager
     await chain_tracker.load_chain_history()
 
-    # Initialize war tracker (Phase 4)
+    # Initialize war tracker
     war_tracker = WarTracker(bot)
+    war_tracker.subscription_manager = subscription_manager
     await war_tracker.load_war_history()
 
     # Initialize verification system
     verification_system = VerificationSystem(bot)
     await verification_system.load_config()
     await setup_verification_commands(bot, verification_system)
+
+    # Initialize role sync manager
+    role_sync_manager = RoleSyncManager(bot)
+    await role_sync_manager.load_config()
+    await setup_rolesync_commands(bot, role_sync_manager)
+
+    # Initialize enemy watchlist
+    enemy_watchlist = EnemyWatchlist(bot, subscription_manager)
+    await enemy_watchlist.load_watchlist()
+    await setup_enemy_commands(bot, enemy_watchlist)
+
+    # Link enemy watchlist to war tracker for auto-clear
+    war_tracker.enemy_watchlist = enemy_watchlist
 
     # Register slash commands
     await setup_commands(bot, inactivity_tracker, chain_tracker, war_tracker)
@@ -103,10 +129,13 @@ async def on_ready():
     if not war_update_check.is_running():
         war_update_check.start()
 
+    if not role_sync_check.is_running():
+        role_sync_check.start()
+
+    if not enemy_status_check.is_running():
+        enemy_status_check.start()
+
     print('Bot is ready!')
-
-
-# No longer tracking Discord messages - using Torn API instead!
 
 
 @tasks.loop(hours=24)
@@ -167,6 +196,69 @@ async def before_war_check():
     """Wait until bot is ready before starting the war check loop"""
     await bot.wait_until_ready()
     print('War update checker started (checks every minute)')
+
+
+@tasks.loop(hours=1)
+async def role_sync_check():
+    """Background task that runs every hour to sync roles"""
+    if role_sync_manager:
+        await role_sync_manager.sync_all_members()
+
+
+@role_sync_check.before_loop
+async def before_role_sync():
+    """Wait until bot is ready before starting role sync"""
+    await bot.wait_until_ready()
+    print('Role sync checker started (checks every hour)')
+
+
+@tasks.loop(minutes=15)
+async def enemy_status_check():
+    """Background task that runs every 15 minutes to check enemy status"""
+    if enemy_watchlist and enemy_watchlist.get_enemy_count() > 0:
+        await enemy_watchlist.check_all_enemies(post_updates=True)
+
+
+@enemy_status_check.before_loop
+async def before_enemy_check():
+    """Wait until bot is ready before starting enemy check"""
+    await bot.wait_until_ready()
+    print('Enemy status checker started (checks every 15 minutes)')
+
+
+@bot.event
+async def on_member_join(member):
+    """Welcome new members when they join the server"""
+    from config import WELCOME_CHANNEL_ID, RULES_CHANNEL_ID, GENERAL_CHANNEL_ID
+
+    # Build channel mentions (uses Discord's <#ID> format)
+    rules = f"<#{RULES_CHANNEL_ID}>" if RULES_CHANNEL_ID else "#faction-edicts"
+    general = f"<#{GENERAL_CHANNEL_ID}>" if GENERAL_CHANNEL_ID else "#punk-plaza"
+
+    welcome_message = (
+        f"🎉 Welcome to Ascended Punks, {member.mention}!\n\n"
+        f"1️⃣ Run `/register` with your Torn ID.\n"
+        f"2️⃣ Head to {rules} and read the rules.\n"
+        f"3️⃣ Once you're Verified, jump into {general} and say hi."
+    )
+
+    # Try to send to welcome channel
+    if WELCOME_CHANNEL_ID:
+        channel = bot.get_channel(WELCOME_CHANNEL_ID)
+        if channel:
+            try:
+                await channel.send(welcome_message)
+                print(f'Welcomed new member: {member.name}')
+                return
+            except Exception as e:
+                print(f'Failed to send welcome message to channel: {e}')
+
+    # Fallback: DM the user
+    try:
+        await member.send(welcome_message.replace(member.mention, member.name))
+        print(f'Welcomed new member via DM: {member.name}')
+    except Exception as e:
+        print(f'Failed to DM welcome message to {member.name}: {e}')
 
 
 @bot.event

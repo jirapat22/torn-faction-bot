@@ -17,7 +17,8 @@ from config import (
     EMBED_COLOR_INFO,
     EMBED_COLOR_SUCCESS,
     EMBED_COLOR_WARNING,
-    EMBED_COLOR_CRITICAL
+    EMBED_COLOR_CRITICAL,
+    CHAINWATCHER_ROLE_ID
 )
 
 
@@ -32,6 +33,7 @@ class ChainTracker:
         self.chain_state_file = 'data/chain_state.json'
         self.chain_history = {}
         self.last_reported_chain_id = None  # Track last reported chain to prevent duplicates
+        self.subscription_manager = None  # Set by bot.py
 
     async def load_chain_history(self):
         """Load chain history from JSON file"""
@@ -295,9 +297,20 @@ class ChainTracker:
 
                     # Check if we've already reported this chain
                     if chain_id != self.last_reported_chain_id:
-                        # Post chain report
+                        # Post chain report with subscriber pings (important event)
                         report_embed = await self.format_chainreport_embed(chainreport)
-                        await channel.send('🏁 **Chain Complete!**', embed=report_embed)
+
+                        # Ping subscribers and/or role
+                        pings = []
+                        if CHAINWATCHER_ROLE_ID:
+                            pings.append(f'<@&{CHAINWATCHER_ROLE_ID}>')
+                        if self.subscription_manager:
+                            sub_pings = self.subscription_manager.get_subscriber_mentions('chain')
+                            if sub_pings:
+                                pings.append(sub_pings)
+                        ping_text = ' '.join(pings) + ' ' if pings else ''
+
+                        await channel.send(f'{ping_text}🏁 **Chain Complete!**', embed=report_embed)
                         print(f'Posted chain completion report for chain #{chain_id}')
 
                         # Save this as last reported chain
@@ -348,9 +361,9 @@ class ChainTracker:
             should_post = True
 
         if should_post:
-            # Post update to #chaining channel
+            # Post update to #chaining channel (no ping for regular updates)
             embed = await self.format_chain_embed(chain)
-            await channel.send(embed=embed)
+            await channel.send(f'**Chain Update: {current_count} hits!**', embed=embed)
             print(f'Posted chain update: {current_count} hits')
 
         # Update last count

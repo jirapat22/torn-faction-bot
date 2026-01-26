@@ -20,8 +20,8 @@ from config import (
     INACTIVITY_CRITICAL_DAYS,
     EMBED_COLOR_WARNING,
     EMBED_COLOR_CRITICAL,
-    ANNOUNCEMENTS_CHANNEL_ID,
-    GUILD_ID
+    GUILD_ID,
+    MANAGEMENT_PING_ROLE_ID
 )
 
 
@@ -212,19 +212,8 @@ class InactivityTracker:
             print(f'Found {total_inactive} inactive members out of {total_checked} total')
             await self._send_inactivity_alert(channel, warning_members, critical_members, total_checked)
         else:
-            print(f'All {total_checked} faction members are active!')
-            # Still send a status update
-            status_embed = create_embed(
-                title='Daily Inactivity Check Complete',
-                description=f'All {total_checked} faction members are active!',
-                color=0x2ecc71,
-                fields=[
-                    {'name': 'Total Faction Members', 'value': str(total_checked), 'inline': True},
-                    {'name': 'Active Members', 'value': str(total_checked), 'inline': True},
-                    {'name': 'Registered in Discord', 'value': str(len(self.user_mapping)), 'inline': True}
-                ]
-            )
-            await channel.send(embed=status_embed)
+            # Don't spam channel when everyone is active - just log it
+            print(f'All {total_checked} faction members are active! (no alert needed)')
 
     async def _send_inactivity_alert(self, channel, warning_members, critical_members, total_faction_members):
         """
@@ -237,6 +226,10 @@ class InactivityTracker:
             critical_members: List of members inactive for 5+ days
             total_faction_members: Total number of faction members checked
         """
+        # Ping management role if configured
+        if MANAGEMENT_PING_ROLE_ID:
+            await channel.send(f'<@&{MANAGEMENT_PING_ROLE_ID}>')
+
         # Send critical alerts
         if critical_members:
             critical_embed = create_embed(
@@ -253,17 +246,15 @@ class InactivityTracker:
                 days = data['days']
                 last_seen = data['last_seen']
 
-                # Check if member is registered in Discord
-                if discord_member:
-                    # Registered - show Discord mention + Torn name
-                    field_name = f'{discord_member.mention} - {torn_name} [Lvl {torn_level}]'
-                else:
-                    # Not registered - show Torn name only
-                    field_name = f'{torn_name} [Lvl {torn_level}]'
+                # Show Torn name (no @mention to avoid pinging)
+                field_name = f'{torn_name} [Lvl {torn_level}]'
+
+                # Add Discord name if registered (without pinging)
+                discord_note = f'\nDiscord: {discord_member.display_name}' if discord_member else ''
 
                 critical_embed.add_field(
                     name=field_name,
-                    value=f'**{days} days** inactive on Torn\nLast action: {format_timestamp(last_seen, "R")}\nProfile: https://www.torn.com/profiles.php?XID={torn_id}',
+                    value=f'**{days} days** inactive on Torn\nLast action: {format_timestamp(last_seen, "R")}{discord_note}\nProfile: https://www.torn.com/profiles.php?XID={torn_id}',
                     inline=False
                 )
 
@@ -286,37 +277,20 @@ class InactivityTracker:
                 days = data['days']
                 last_seen = data['last_seen']
 
-                # Check if member is registered in Discord
-                if discord_member:
-                    # Registered - show Discord mention + Torn name
-                    field_name = f'{discord_member.mention} - {torn_name} [Lvl {torn_level}]'
-                else:
-                    # Not registered - show Torn name only
-                    field_name = f'{torn_name} [Lvl {torn_level}]'
+                # Show Torn name (no @mention to avoid pinging)
+                field_name = f'{torn_name} [Lvl {torn_level}]'
+
+                # Add Discord name if registered (without pinging)
+                discord_note = f'\nDiscord: {discord_member.display_name}' if discord_member else ''
 
                 warning_embed.add_field(
                     name=field_name,
-                    value=f'**{days} days** inactive on Torn\nLast action: {format_timestamp(last_seen, "R")}\nProfile: https://www.torn.com/profiles.php?XID={torn_id}',
+                    value=f'**{days} days** inactive on Torn\nLast action: {format_timestamp(last_seen, "R")}{discord_note}\nProfile: https://www.torn.com/profiles.php?XID={torn_id}',
                     inline=False
                 )
 
             await channel.send(embed=warning_embed)
             print(f'Sent warning alert for {len(warning_members)} members')
-
-        # Add footer with registration info
-        registered_count = len(self.user_mapping)
-        not_in_discord = total_faction_members - registered_count
-
-        if not_in_discord > 0:
-            info_embed = create_embed(
-                title='ℹ️ Registration Info',
-                description=f'**{registered_count}** of **{total_faction_members}** faction members are registered in Discord.\n**{not_in_discord}** faction members are not registered (shown without @mention).',
-                color=0x95a5a6,
-                fields=[
-                    {'name': 'Want Discord Mentions?', 'value': 'Use `/register <torn_id>` to link your Torn account', 'inline': False}
-                ]
-            )
-            await channel.send(embed=info_embed)
 
     def get_all_mappings(self):
         """
