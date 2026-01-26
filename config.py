@@ -62,6 +62,13 @@ EMBED_COLOR_WARNING = 0xf39c12  # Orange for warnings
 EMBED_COLOR_CRITICAL = 0xe74c3c # Red for critical alerts
 EMBED_COLOR_SUCCESS = 0x2ecc71  # Green for success messages
 
+# ===== AVAILABILITY POLLING SETTINGS =====
+# Role name required to participate in availability polls
+VERIFIED_ROLE_NAME = os.getenv("VERIFIED_ROLE_NAME", "Verified")
+
+# Channel ID for availability polls (0 = use command channel)
+AVAILABILITY_CHANNEL_ID = int(os.getenv("AVAILABILITY_CHANNEL_ID", "0"))
+
 # ===== API RATE LIMITING =====
 # Torn API rate limit settings
 TORN_API_CACHE_SECONDS = int(os.getenv("TORN_API_CACHE_SECONDS", "30"))

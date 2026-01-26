@@ -18,6 +18,7 @@ from features.verification import VerificationSystem, setup_verification_command
 from features.subscriptions import SubscriptionManager, setup_subscription_commands
 from features.roles import RoleSyncManager, setup_rolesync_commands
 from features.enemies import EnemyWatchlist, setup_enemy_commands
+from features.availability import AvailabilityManager, setup_availability_commands, restore_availability_views
 from features.commands import setup_commands
 from utils.helpers import ensure_data_directories
 from utils.torn_api import verify_api_key
@@ -38,13 +39,14 @@ verification_system = None
 subscription_manager = None
 role_sync_manager = None
 enemy_watchlist = None
+availability_manager = None
 
 
 @bot.event
 async def on_ready():
     """Called when the bot successfully connects to Discord"""
     global inactivity_tracker, chain_tracker, war_tracker, verification_system
-    global subscription_manager, role_sync_manager, enemy_watchlist
+    global subscription_manager, role_sync_manager, enemy_watchlist, availability_manager
 
     print(f'Bot logged in as {bot.user.name} (ID: {bot.user.id})')
     print(f'Connected to {len(bot.guilds)} server(s)')
@@ -98,6 +100,13 @@ async def on_ready():
 
     # Link enemy watchlist to war tracker for auto-clear
     war_tracker.enemy_watchlist = enemy_watchlist
+
+    # Initialize availability polling system
+    from config import VERIFIED_ROLE_NAME
+    availability_manager = AvailabilityManager(bot)
+    await availability_manager.load_data()
+    await setup_availability_commands(bot, availability_manager, VERIFIED_ROLE_NAME)
+    await restore_availability_views(bot, availability_manager, VERIFIED_ROLE_NAME)
 
     # Register slash commands
     await setup_commands(bot, inactivity_tracker, chain_tracker, war_tracker)
