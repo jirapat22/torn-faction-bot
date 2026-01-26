@@ -64,7 +64,7 @@ EMBED_COLOR_SUCCESS = 0x2ecc71  # Green for success messages
 
 # ===== AVAILABILITY POLLING SETTINGS =====
 # Role name required to participate in availability polls
-VERIFIED_ROLE_NAME = os.getenv("VERIFIED_ROLE_NAME", "Verified")
+VERIFIED_ROLE_NAME = os.getenv("VERIFIED_ROLE_NAME", "Ascended punks")
 
 # Channel ID for availability polls (0 = use command channel)
 AVAILABILITY_CHANNEL_ID = int(os.getenv("AVAILABILITY_CHANNEL_ID", "0"))

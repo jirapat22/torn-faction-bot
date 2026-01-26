@@ -7,6 +7,7 @@ Features:
 - /avail_summary - View availability summary with ASCII timetable
 - /tct_now - Show current Torn time
 - Button-based time block selection for verified members
+- Multi-day support for events spanning multiple days
 """
 
 import discord
@@ -23,8 +24,31 @@ from config import (
 )
 
 
-# Block labels (A-L for up to 12 blocks)
-BLOCK_LABELS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L']
+# Block labels (A-X for up to 24 blocks)
+BLOCK_LABELS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L',
+                'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X']
+
+
+def parse_date(date_str: str) -> datetime:
+    """Parse DD-MM-YYYY date string to datetime"""
+    return datetime.strptime(date_str, '%d-%m-%Y')
+
+
+def format_date(dt: datetime) -> str:
+    """Format datetime to DD-MM-YYYY string"""
+    return dt.strftime('%d-%m-%Y')
+
+
+def date_to_internal(date_str: str) -> str:
+    """Convert DD-MM-YYYY to internal YYYY-MM-DD format for storage"""
+    dt = parse_date(date_str)
+    return dt.strftime('%Y-%m-%d')
+
+
+def internal_to_display(internal_str: str) -> str:
+    """Convert internal YYYY-MM-DD to DD-MM-YYYY for display"""
+    dt = datetime.strptime(internal_str, '%Y-%m-%d')
+    return dt.strftime('%d-%m-%Y')
 
 
 class AvailabilityManager:
@@ -34,8 +58,8 @@ class AvailabilityManager:
         self.bot = bot
         self.polls_file = 'data/availability_polls.json'
         self.data_file = 'data/availability_data.json'
-        self.polls = {}  # {date: poll_config}
-        self.data = {}   # {date: {block_id: [user_ids]}}
+        self.polls = {}  # {poll_id: poll_config}
+        self.data = {}   # {poll_id: {block_id: [user_ids]}}
 
     async def load_data(self):
         """Load polls and availability data from JSON files"""
@@ -51,64 +75,71 @@ class AvailabilityManager:
         """Save availability data to JSON"""
         save_json(self.data_file, self.data)
 
-    def create_poll(self, date: str, channel_id: int, message_id: int,
-                    start_time: str, end_time: str, block_length: int) -> List[Dict]:
+    def create_poll(self, start_date: str, end_date: str, channel_id: int, message_id: int,
+                    start_time: str, end_time: str, block_length: int) -> tuple:
         """
-        Create a new availability poll
+        Create a new availability poll (supports multi-day)
 
         Args:
-            date: Date string (YYYY-MM-DD)
+            start_date: Start date (DD-MM-YYYY)
+            end_date: End date (DD-MM-YYYY)
             channel_id: Discord channel ID where poll was posted
             message_id: Discord message ID of the poll
-            start_time: Start time (HH:MM)
-            end_time: End time (HH:MM)
+            start_time: Start time on first day (HH:MM)
+            end_time: End time on last day (HH:MM)
             block_length: Hours per block
 
         Returns:
-            List of block definitions
+            Tuple of (poll_id, blocks list)
         """
+        # Parse dates
+        start_dt = parse_date(start_date)
+        end_dt = parse_date(end_date)
+
         # Parse times
         start_h, start_m = map(int, start_time.split(':'))
         end_h, end_m = map(int, end_time.split(':'))
 
-        # Calculate total hours
-        start_minutes = start_h * 60 + start_m
-        end_minutes = end_h * 60 + end_m
+        # Create datetime objects in UTC
+        start_datetime = start_dt.replace(hour=start_h, minute=start_m, tzinfo=timezone.utc)
+        end_datetime = end_dt.replace(hour=end_h, minute=end_m, tzinfo=timezone.utc)
 
-        # Handle overnight (e.g., 22:00 to 06:00)
-        if end_minutes <= start_minutes:
-            end_minutes += 24 * 60
-
-        total_minutes = end_minutes - start_minutes
-        total_hours = total_minutes / 60
+        # Handle end time of 00:00 meaning end of day
+        if end_h == 0 and end_m == 0:
+            end_datetime = end_datetime + timedelta(days=1)
 
         # Generate blocks
         blocks = []
-        current_minutes = start_minutes
+        current_dt = start_datetime
         block_id = 0
 
-        while current_minutes < end_minutes and block_id < 12:
-            block_start_h = (current_minutes // 60) % 24
-            block_start_m = current_minutes % 60
-
-            next_minutes = current_minutes + (block_length * 60)
-            block_end_h = (next_minutes // 60) % 24
-            block_end_m = next_minutes % 60
+        while current_dt < end_datetime and block_id < 24:
+            block_end_dt = current_dt + timedelta(hours=block_length)
+            if block_end_dt > end_datetime:
+                block_end_dt = end_datetime
 
             blocks.append({
                 'id': block_id,
                 'label': BLOCK_LABELS[block_id],
-                'start': f'{block_start_h:02d}:{block_start_m:02d}',
-                'end': f'{block_end_h:02d}:{block_end_m:02d}'
+                'start_unix': int(current_dt.timestamp()),
+                'end_unix': int(block_end_dt.timestamp()),
+                'start_time': current_dt.strftime('%H:%M'),
+                'end_time': block_end_dt.strftime('%H:%M'),
+                'date': current_dt.strftime('%d-%m-%Y')
             })
 
-            current_minutes = next_minutes
+            current_dt = block_end_dt
             block_id += 1
 
+        # Create unique poll ID
+        poll_id = f"{date_to_internal(start_date)}_{date_to_internal(end_date)}"
+
         # Store poll config
-        self.polls[date] = {
+        self.polls[poll_id] = {
             'channel_id': channel_id,
             'message_id': message_id,
+            'start_date': start_date,
+            'end_date': end_date,
             'start_time': start_time,
             'end_time': end_time,
             'block_length': block_length,
@@ -116,72 +147,77 @@ class AvailabilityManager:
             'created_at': datetime.now(timezone.utc).isoformat()
         }
 
-        # Initialize empty data for this date
-        self.data[date] = {str(b['id']): [] for b in blocks}
+        # Initialize empty data for this poll
+        self.data[poll_id] = {str(b['id']): [] for b in blocks}
 
-        return blocks
+        return poll_id, blocks
 
-    def toggle_availability(self, date: str, block_id: int, user_id: int) -> bool:
+    def toggle_availability(self, poll_id: str, block_id: int, user_id: int) -> bool:
         """
         Toggle a user's availability for a specific block
-
-        Args:
-            date: Date string
-            block_id: Block ID (0-11)
-            user_id: Discord user ID
 
         Returns:
             True if user is now available, False if removed
         """
-        if date not in self.data:
-            self.data[date] = {}
+        if poll_id not in self.data:
+            self.data[poll_id] = {}
 
         block_key = str(block_id)
-        if block_key not in self.data[date]:
-            self.data[date][block_key] = []
+        if block_key not in self.data[poll_id]:
+            self.data[poll_id][block_key] = []
 
         user_id_str = str(user_id)
 
-        if user_id_str in self.data[date][block_key]:
-            self.data[date][block_key].remove(user_id_str)
+        if user_id_str in self.data[poll_id][block_key]:
+            self.data[poll_id][block_key].remove(user_id_str)
             return False
         else:
-            self.data[date][block_key].append(user_id_str)
+            self.data[poll_id][block_key].append(user_id_str)
             return True
 
-    def get_block_count(self, date: str, block_id: int) -> int:
+    def get_block_count(self, poll_id: str, block_id: int) -> int:
         """Get number of users available for a block"""
-        if date not in self.data:
+        if poll_id not in self.data:
             return 0
         block_key = str(block_id)
-        if block_key not in self.data[date]:
+        if block_key not in self.data[poll_id]:
             return 0
-        return len(self.data[date][block_key])
+        return len(self.data[poll_id][block_key])
 
-    def get_user_selections(self, date: str, user_id: int) -> List[int]:
+    def get_user_selections(self, poll_id: str, user_id: int) -> List[int]:
         """Get list of block IDs the user has selected"""
-        if date not in self.data:
+        if poll_id not in self.data:
             return []
 
         user_id_str = str(user_id)
         selected = []
-        for block_key, users in self.data[date].items():
+        for block_key, users in self.data[poll_id].items():
             if user_id_str in users:
                 selected.append(int(block_key))
         return selected
 
-    def get_poll(self, date: str) -> Optional[Dict]:
-        """Get poll configuration for a date"""
-        return self.polls.get(date)
+    def get_poll(self, poll_id: str) -> Optional[Dict]:
+        """Get poll configuration by ID"""
+        return self.polls.get(poll_id)
 
-    def get_summary(self, date: str) -> Optional[Dict]:
+    def find_poll_by_date(self, date: str) -> Optional[str]:
+        """Find a poll that includes the given date (DD-MM-YYYY)"""
+        target_dt = parse_date(date)
+        for poll_id, poll in self.polls.items():
+            start_dt = parse_date(poll['start_date'])
+            end_dt = parse_date(poll['end_date'])
+            if start_dt <= target_dt <= end_dt:
+                return poll_id
+        return None
+
+    def get_summary(self, poll_id: str) -> Optional[Dict]:
         """
-        Get availability summary for a date
+        Get availability summary for a poll
 
         Returns:
             Dict with block counts and best windows, or None if no poll
         """
-        poll = self.polls.get(date)
+        poll = self.polls.get(poll_id)
         if not poll:
             return None
 
@@ -189,12 +225,15 @@ class AvailabilityManager:
         block_counts = []
 
         for block in blocks:
-            count = self.get_block_count(date, block['id'])
+            count = self.get_block_count(poll_id, block['id'])
             block_counts.append({
                 'id': block['id'],
                 'label': block['label'],
-                'start': block['start'],
-                'end': block['end'],
+                'start_unix': block['start_unix'],
+                'end_unix': block['end_unix'],
+                'start_time': block['start_time'],
+                'end_time': block['end_time'],
+                'date': block['date'],
                 'count': count
             })
 
@@ -203,22 +242,22 @@ class AvailabilityManager:
         best_windows = sorted_blocks[:3] if sorted_blocks else []
 
         return {
-            'date': date,
+            'poll_id': poll_id,
+            'start_date': poll['start_date'],
+            'end_date': poll['end_date'],
             'blocks': block_counts,
             'best_windows': best_windows,
-            'block_length': poll['block_length'],
-            'start_time': poll['start_time'],
-            'end_time': poll['end_time']
+            'block_length': poll['block_length']
         }
 
-    def generate_timetable(self, date: str) -> str:
+    def generate_timetable(self, poll_id: str) -> str:
         """
         Generate ASCII timetable for availability
 
         Returns:
             Formatted string with bar chart
         """
-        summary = self.get_summary(date)
+        summary = self.get_summary(poll_id)
         if not summary:
             return "No poll data available."
 
@@ -228,11 +267,20 @@ class AvailabilityManager:
             max_count = 1
 
         lines = []
+        current_date = None
+
         for block in summary['blocks']:
-            time_range = f"{block['start'][:2]}–{block['end'][:2]}"
+            # Add date header if date changed
+            if block['date'] != current_date:
+                if current_date is not None:
+                    lines.append("")  # Blank line between days
+                lines.append(f"─── {block['date']} ───")
+                current_date = block['date']
+
+            time_range = f"{block['start_time']}–{block['end_time']}"
             count = block['count']
 
-            # Scale bars (1 block = roughly 1-2 people, max ~10 blocks)
+            # Scale bars
             if count == 0:
                 bar = '·'
             else:
@@ -247,17 +295,18 @@ class AvailabilityManager:
 class AvailabilityView(discord.ui.View):
     """Persistent view with buttons for availability selection"""
 
-    def __init__(self, manager: AvailabilityManager, date: str, blocks: List[Dict], verified_role_name: str):
+    def __init__(self, manager: AvailabilityManager, poll_id: str, blocks: List[Dict], verified_role_name: str):
         super().__init__(timeout=None)  # Persistent view
         self.manager = manager
-        self.date = date
+        self.poll_id = poll_id
         self.verified_role_name = verified_role_name
 
-        # Add buttons for each block (max 12)
-        for block in blocks[:12]:
+        # Add buttons for each block (max 24, but Discord limits to 25 components / 5 rows)
+        # Use max 20 buttons (4 rows of 5)
+        for block in blocks[:20]:
             button = AvailabilityButton(
                 manager=manager,
-                date=date,
+                poll_id=poll_id,
                 block=block,
                 verified_role_name=verified_role_name
             )
@@ -267,19 +316,20 @@ class AvailabilityView(discord.ui.View):
 class AvailabilityButton(discord.ui.Button):
     """Button for a single time block"""
 
-    def __init__(self, manager: AvailabilityManager, date: str, block: Dict, verified_role_name: str):
+    def __init__(self, manager: AvailabilityManager, poll_id: str, block: Dict, verified_role_name: str):
         self.manager = manager
-        self.date = date
+        self.poll_id = poll_id
         self.block = block
         self.verified_role_name = verified_role_name
 
         # Get current count
-        count = manager.get_block_count(date, block['id'])
+        count = manager.get_block_count(poll_id, block['id'])
 
+        # Short label for button (just letter and count)
         super().__init__(
             style=discord.ButtonStyle.secondary,
-            label=f"{block['label']}: {block['start']}–{block['end']} ({count})",
-            custom_id=f"avail_{date}_{block['id']}"
+            label=f"{block['label']} ({count})",
+            custom_id=f"avail_{poll_id}_{block['id']}"
         )
 
     async def callback(self, interaction: discord.Interaction):
@@ -289,7 +339,7 @@ class AvailabilityButton(discord.ui.Button):
         if not verified_role:
             try:
                 await interaction.user.send(
-                    f"You must be **Verified** to set availability. "
+                    f"You must have the **{self.verified_role_name}** role to set availability. "
                     f"Please use `/register` with your Torn ID first."
                 )
             except discord.Forbidden:
@@ -299,18 +349,18 @@ class AvailabilityButton(discord.ui.Button):
 
         # Toggle availability
         is_now_available = self.manager.toggle_availability(
-            self.date,
+            self.poll_id,
             self.block['id'],
             interaction.user.id
         )
         await self.manager.save_data()
 
         # Update button label with new count
-        count = self.manager.get_block_count(self.date, self.block['id'])
-        self.label = f"{self.block['label']}: {self.block['start']}–{self.block['end']} ({count})"
+        count = self.manager.get_block_count(self.poll_id, self.block['id'])
+        self.label = f"{self.block['label']} ({count})"
 
         # Change button style based on user's selection
-        user_selections = self.manager.get_user_selections(self.date, interaction.user.id)
+        user_selections = self.manager.get_user_selections(self.poll_id, interaction.user.id)
         if self.block['id'] in user_selections:
             self.style = discord.ButtonStyle.success  # Green when selected
         else:
@@ -319,29 +369,14 @@ class AvailabilityButton(discord.ui.Button):
         # Update the message
         await interaction.response.edit_message(view=self.view)
 
-        # Send ephemeral feedback
+        # Send ephemeral feedback with both local and TCT time
+        time_display = f"<t:{self.block['start_unix']}:t> ({self.block['start_time']}–{self.block['end_time']} TCT)"
         if is_now_available:
-            status = f"✅ You're now **available** for {self.block['start']}–{self.block['end']} TCT"
+            status = f"✅ You're now **available** for {time_display}"
         else:
-            status = f"❌ You're now **unavailable** for {self.block['start']}–{self.block['end']} TCT"
+            status = f"❌ You're now **unavailable** for {time_display}"
 
         await interaction.followup.send(status, ephemeral=True)
-
-
-def time_to_unix(date_str: str, time_str: str) -> int:
-    """
-    Convert date and TCT time to Unix timestamp
-
-    Args:
-        date_str: YYYY-MM-DD
-        time_str: HH:MM
-
-    Returns:
-        Unix timestamp
-    """
-    dt = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M")
-    dt = dt.replace(tzinfo=timezone.utc)
-    return int(dt.timestamp())
 
 
 async def setup_availability_commands(bot, manager: AvailabilityManager, verified_role_name: str):
@@ -363,16 +398,18 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
         description='[Management] Create an availability poll for war/chain planning'
     )
     @app_commands.describe(
-        date='Date for availability (YYYY-MM-DD)',
+        start_date='Start date (DD-MM-YYYY)',
         start_time='Start time in TCT/UTC (HH:MM, e.g., 00:00)',
-        end_time='End time in TCT/UTC (HH:MM, e.g., 24:00 or 23:59)',
+        end_time='End time in TCT/UTC (HH:MM, e.g., 24:00)',
+        end_date='End date if different from start (DD-MM-YYYY) - leave empty for same day',
         block_length='Hours per time block (1-6, default: 2)'
     )
     async def avail_setup(
         interaction: discord.Interaction,
-        date: str,
+        start_date: str,
         start_time: str,
         end_time: str,
+        end_date: Optional[str] = None,
         block_length: int = 2
     ):
         """Create an availability poll"""
@@ -396,13 +433,28 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
             await interaction.response.send_message(embed=embed, ephemeral=True)
             return
 
-        # Validate date format
+        # Default end_date to start_date if not provided
+        if not end_date:
+            end_date = start_date
+
+        # Validate date format (DD-MM-YYYY)
         try:
-            parsed_date = datetime.strptime(date, '%Y-%m-%d')
+            start_dt = parse_date(start_date)
+            end_dt = parse_date(end_date)
         except ValueError:
             embed = create_embed(
                 title='Invalid Date',
-                description='Please use YYYY-MM-DD format (e.g., 2026-01-30)',
+                description='Please use DD-MM-YYYY format (e.g., 30-01-2026)',
+                color=EMBED_COLOR_WARNING
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        # Validate end_date >= start_date
+        if end_dt < start_dt:
+            embed = create_embed(
+                title='Invalid Date Range',
+                description='End date must be on or after start date.',
                 color=EMBED_COLOR_WARNING
             )
             await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -410,26 +462,32 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
 
         # Validate time format
         try:
-            # Handle 24:00 as special case
-            if end_time == '24:00':
-                end_time = '23:59'
-
+            # Handle 24:00 as special case (means end of day = 00:00 next day)
+            check_end = end_time if end_time != '24:00' else '00:00'
             datetime.strptime(start_time, '%H:%M')
-            datetime.strptime(end_time, '%H:%M')
+            datetime.strptime(check_end, '%H:%M')
         except ValueError:
             embed = create_embed(
                 title='Invalid Time',
-                description='Please use HH:MM format (e.g., 00:00, 14:30)',
+                description='Please use HH:MM format (e.g., 00:00, 14:30, 24:00)',
                 color=EMBED_COLOR_WARNING
             )
             await interaction.response.send_message(embed=embed, ephemeral=True)
             return
 
+        # Convert 24:00 to 00:00 for processing
+        if end_time == '24:00':
+            end_time = '00:00'
+            # Also shift end_date forward by 1 day
+            end_dt = end_dt + timedelta(days=1)
+            end_date = format_date(end_dt)
+
         await interaction.response.defer()
 
-        # Create blocks
-        blocks = manager.create_poll(
-            date=date,
+        # Create poll
+        poll_id, blocks = manager.create_poll(
+            start_date=start_date,
+            end_date=end_date,
             channel_id=interaction.channel.id,
             message_id=0,  # Will update after sending
             start_time=start_time,
@@ -448,19 +506,30 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
 
         # Build block list with both local and TCT times
         block_list = []
+        current_date = None
         for block in blocks:
-            unix_start = time_to_unix(date, block['start'])
-            unix_end = time_to_unix(date, block['end'])
+            # Add date header if date changed
+            if block['date'] != current_date:
+                if current_date is not None:
+                    block_list.append("")  # Blank line
+                block_list.append(f"**{block['date']}:**")
+                current_date = block['date']
+
             # Show local time with TCT in parentheses
             block_list.append(
-                f"**{block['label']}**: <t:{unix_start}:t> – <t:{unix_end}:t> "
-                f"({block['start']}–{block['end']} TCT)"
+                f"  **{block['label']}**: <t:{block['start_unix']}:t> – <t:{block['end_unix']}:t> "
+                f"({block['start_time']}–{block['end_time']} TCT)"
             )
 
+        # Create title based on single day or multi-day
+        if start_date == end_date or (start_dt == end_dt - timedelta(days=1) and end_time == '00:00'):
+            title = f"🕒 Availability Poll – {start_date}"
+        else:
+            title = f"🕒 Availability Poll – {start_date} to {end_date}"
+
         # Create embed
-        unix_date = time_to_unix(date, '00:00')
         embed = create_embed(
-            title=f"🕒 Availability Poll – <t:{unix_date}:D>",
+            title=title,
             description=(
                 f"**Select ALL time blocks when you are available.**\n\n"
                 f"Click buttons to toggle your availability.\n"
@@ -469,35 +538,36 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
             ),
             color=EMBED_COLOR_INFO
         )
-        embed.set_footer(text=f"Date: {date} | Block size: {block_length}h | Only Verified members can vote")
+        embed.set_footer(text=f"Block size: {block_length}h | Only {verified_role_name} members can vote")
 
         # Create view with buttons
-        view = AvailabilityView(manager, date, blocks, verified_role_name)
+        view = AvailabilityView(manager, poll_id, blocks, verified_role_name)
 
         # Send message
         message = await interaction.followup.send(embed=embed, view=view)
 
         # Update poll with message ID
-        manager.polls[date]['message_id'] = message.id
+        manager.polls[poll_id]['message_id'] = message.id
         await manager.save_polls()
 
-        print(f'Availability poll created for {date} with {len(blocks)} blocks')
+        print(f'Availability poll created: {poll_id} with {len(blocks)} blocks')
 
     # ===== /avail_summary command =====
     @bot.tree.command(
         name='avail_summary',
-        description='View availability summary for a specific date'
+        description='View availability summary for a poll'
     )
     @app_commands.describe(
-        date='Date to check (YYYY-MM-DD)'
+        date='Any date within the poll range (DD-MM-YYYY)'
     )
     async def avail_summary(interaction: discord.Interaction, date: str):
         """Show availability summary with timetable"""
         await interaction.response.defer()
 
-        summary = manager.get_summary(date)
+        # Find poll containing this date
+        poll_id = manager.find_poll_by_date(date)
 
-        if not summary:
+        if not poll_id:
             embed = create_embed(
                 title='No Poll Found',
                 description=f'No availability poll exists for {date}.',
@@ -506,12 +576,20 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
             await interaction.followup.send(embed=embed)
             return
 
+        summary = manager.get_summary(poll_id)
+
         # Build block summary with local and TCT times
         block_lines = []
+        current_date = None
         for block in summary['blocks']:
-            unix_start = time_to_unix(date, block['start'])
+            if block['date'] != current_date:
+                if current_date is not None:
+                    block_lines.append("")
+                block_lines.append(f"**{block['date']}:**")
+                current_date = block['date']
+
             block_lines.append(
-                f"**{block['label']}** (<t:{unix_start}:t> / {block['start']}–{block['end']} TCT): "
+                f"  **{block['label']}** (<t:{block['start_unix']}:t> / {block['start_time']}–{block['end_time']} TCT): "
                 f"**{block['count']}** available"
             )
 
@@ -519,16 +597,19 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
         best_lines = []
         for block in summary['best_windows']:
             if block['count'] > 0:
-                unix_start = time_to_unix(date, block['start'])
                 best_lines.append(
-                    f"• **{block['label']}** (<t:{unix_start}:t> / {block['start']}–{block['end']} TCT) – "
-                    f"**{block['count']}** members"
+                    f"• **{block['label']}** ({block['date']} <t:{block['start_unix']}:t> / "
+                    f"{block['start_time']}–{block['end_time']} TCT) – **{block['count']}** members"
                 )
 
-        # Create embed
-        unix_date = time_to_unix(date, '00:00')
+        # Create title
+        if summary['start_date'] == summary['end_date']:
+            title = f"🧮 Availability Summary – {summary['start_date']}"
+        else:
+            title = f"🧮 Availability Summary – {summary['start_date']} to {summary['end_date']}"
+
         embed = create_embed(
-            title=f"🧮 Availability Summary – <t:{unix_date}:D>",
+            title=title,
             description='\n'.join(block_lines),
             color=EMBED_COLOR_SUCCESS
         )
@@ -549,8 +630,8 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
         embed.set_footer(text=f"Times shown: Local time / TCT (Torn City Time = UTC)")
 
         # Generate ASCII timetable
-        timetable = manager.generate_timetable(date)
-        timetable_text = f"```\n🕒 Availability – {date} (Torn Time)\n\n{timetable}\n```"
+        timetable = manager.generate_timetable(poll_id)
+        timetable_text = f"```\n🕒 Availability (Torn Time)\n\n{timetable}\n```"
 
         await interaction.followup.send(embed=embed, content=timetable_text)
 
@@ -567,7 +648,7 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
         embed = create_embed(
             title='🕒 Torn City Time (TCT)',
             description=(
-                f"**Current TCT:** {now.strftime('%H:%M:%S')} ({now.strftime('%Y-%m-%d')})\n\n"
+                f"**Current TCT:** {now.strftime('%H:%M:%S')} ({now.strftime('%d-%m-%Y')})\n\n"
                 f"**Your local time:** <t:{unix}:F>\n"
                 f"**Relative:** <t:{unix}:R>"
             ),
@@ -583,7 +664,7 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
         description='[Management] Delete an availability poll'
     )
     @app_commands.describe(
-        date='Date of poll to delete (YYYY-MM-DD)'
+        date='Any date within the poll to delete (DD-MM-YYYY)'
     )
     async def avail_delete(interaction: discord.Interaction, date: str):
         """Delete an availability poll"""
@@ -596,7 +677,8 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
             await interaction.response.send_message(embed=embed, ephemeral=True)
             return
 
-        if date not in manager.polls:
+        poll_id = manager.find_poll_by_date(date)
+        if not poll_id:
             embed = create_embed(
                 title='Not Found',
                 description=f'No availability poll exists for {date}.',
@@ -605,17 +687,19 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
             await interaction.response.send_message(embed=embed, ephemeral=True)
             return
 
+        poll = manager.polls[poll_id]
+
         # Delete poll and data
-        del manager.polls[date]
-        if date in manager.data:
-            del manager.data[date]
+        del manager.polls[poll_id]
+        if poll_id in manager.data:
+            del manager.data[poll_id]
 
         await manager.save_polls()
         await manager.save_data()
 
         embed = create_embed(
             title='✅ Poll Deleted',
-            description=f'Availability poll for {date} has been deleted.',
+            description=f"Availability poll for {poll['start_date']} to {poll['end_date']} has been deleted.",
             color=EMBED_COLOR_SUCCESS
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -623,16 +707,16 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
     # ===== /my_availability command =====
     @bot.tree.command(
         name='my_availability',
-        description='View your availability selections for a date'
+        description='View your availability selections for a poll'
     )
     @app_commands.describe(
-        date='Date to check (YYYY-MM-DD)'
+        date='Any date within the poll (DD-MM-YYYY)'
     )
     async def my_availability(interaction: discord.Interaction, date: str):
         """View your own availability selections"""
-        poll = manager.get_poll(date)
+        poll_id = manager.find_poll_by_date(date)
 
-        if not poll:
+        if not poll_id:
             embed = create_embed(
                 title='No Poll Found',
                 description=f'No availability poll exists for {date}.',
@@ -641,13 +725,14 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
             await interaction.response.send_message(embed=embed, ephemeral=True)
             return
 
-        selections = manager.get_user_selections(date, interaction.user.id)
+        poll = manager.get_poll(poll_id)
+        selections = manager.get_user_selections(poll_id, interaction.user.id)
         blocks = poll['blocks']
 
         if not selections:
             embed = create_embed(
                 title='Your Availability',
-                description=f'You have not selected any time blocks for {date}.',
+                description=f"You have not selected any time blocks for {poll['start_date']} to {poll['end_date']}.",
                 color=EMBED_COLOR_INFO
             )
             await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -657,14 +742,18 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
         selected_blocks = []
         for block in blocks:
             if block['id'] in selections:
-                unix_start = time_to_unix(date, block['start'])
                 selected_blocks.append(
-                    f"✅ **{block['label']}**: <t:{unix_start}:t> ({block['start']}–{block['end']} TCT)"
+                    f"✅ **{block['label']}**: {block['date']} <t:{block['start_unix']}:t> "
+                    f"({block['start_time']}–{block['end_time']} TCT)"
                 )
 
-        unix_date = time_to_unix(date, '00:00')
+        if poll['start_date'] == poll['end_date']:
+            title = f"Your Availability – {poll['start_date']}"
+        else:
+            title = f"Your Availability – {poll['start_date']} to {poll['end_date']}"
+
         embed = create_embed(
-            title=f'Your Availability – <t:{unix_date}:D>',
+            title=title,
             description='\n'.join(selected_blocks),
             color=EMBED_COLOR_SUCCESS
         )
@@ -672,7 +761,40 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    print('Availability commands registered (/avail_setup, /avail_summary, /avail_delete, /my_availability, /tct_now)')
+    # ===== /avail_list command =====
+    @bot.tree.command(
+        name='avail_list',
+        description='List all active availability polls'
+    )
+    async def avail_list(interaction: discord.Interaction):
+        """List all active polls"""
+        if not manager.polls:
+            embed = create_embed(
+                title='No Active Polls',
+                description='There are no availability polls currently active.',
+                color=EMBED_COLOR_INFO
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        poll_list = []
+        for poll_id, poll in manager.polls.items():
+            total_votes = sum(len(users) for users in manager.data.get(poll_id, {}).values())
+            if poll['start_date'] == poll['end_date']:
+                poll_list.append(f"• **{poll['start_date']}** – {len(poll['blocks'])} blocks, {total_votes} votes")
+            else:
+                poll_list.append(f"• **{poll['start_date']} to {poll['end_date']}** – {len(poll['blocks'])} blocks, {total_votes} votes")
+
+        embed = create_embed(
+            title='📊 Active Availability Polls',
+            description='\n'.join(poll_list),
+            color=EMBED_COLOR_INFO
+        )
+        embed.set_footer(text="Use /avail_summary <date> to see details")
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    print('Availability commands registered (/avail_setup, /avail_summary, /avail_delete, /avail_list, /my_availability, /tct_now)')
 
 
 async def restore_availability_views(bot, manager: AvailabilityManager, verified_role_name: str):
@@ -680,7 +802,7 @@ async def restore_availability_views(bot, manager: AvailabilityManager, verified
     Restore persistent views for existing polls after bot restart.
     Call this in on_ready after loading data.
     """
-    for date, poll in manager.polls.items():
+    for poll_id, poll in manager.polls.items():
         channel_id = poll.get('channel_id')
         message_id = poll.get('message_id')
         blocks = poll.get('blocks', [])
@@ -694,9 +816,9 @@ async def restore_availability_views(bot, manager: AvailabilityManager, verified
                 continue
 
             # Re-create view and add to bot
-            view = AvailabilityView(manager, date, blocks, verified_role_name)
+            view = AvailabilityView(manager, poll_id, blocks, verified_role_name)
             bot.add_view(view, message_id=message_id)
-            print(f'Restored availability view for {date}')
+            print(f'Restored availability view for {poll_id}')
 
         except Exception as e:
-            print(f'Failed to restore availability view for {date}: {e}')
+            print(f'Failed to restore availability view for {poll_id}: {e}')
