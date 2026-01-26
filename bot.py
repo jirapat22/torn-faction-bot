@@ -239,7 +239,8 @@ async def on_member_join(member):
         f"🎉 Welcome to Ascended Punks, {member.mention}!\n\n"
         f"1️⃣ Run `/register` with your Torn ID.\n"
         f"2️⃣ Head to {rules} and read the rules.\n"
-        f"3️⃣ Once you're Verified, jump into {general} and say hi."
+        f"3️⃣ Once you're Verified, jump into {general} and say hi.\n\n"
+        f"Please contact Ikaros22[3571142] if there is any issue with register process."
     )
 
     # Try to send to welcome channel
