@@ -163,7 +163,7 @@ class RoleSyncManager:
 async def setup_rolesync_commands(bot, role_sync_manager: RoleSyncManager):
     """Set up role sync slash commands"""
     from discord import app_commands
-    from utils.helpers import create_embed
+    from utils.helpers import create_embed, load_json
     from utils.torn_api import fetch_faction_members
     from config import EMBED_COLOR_SUCCESS, EMBED_COLOR_INFO, EMBED_COLOR_CRITICAL, MANAGEMENT_ROLE_IDS
 
@@ -316,15 +316,92 @@ async def setup_rolesync_commands(bot, role_sync_manager: RoleSyncManager):
             if unmatched:
                 match_text += f'**No mapping:** {", ".join(unmatched)}\n'
 
-            # Now run the actual sync
-            await role_sync_manager.sync_all_members()
+            # Run sync manually with detailed tracking
+            verified_users = load_json('data/verified_users.json', default={})
+
+            # Also check inactivity tracker database
+            inactivity_users = load_json('data/discord_to_torn.json', default={})
+
+            # Build Torn ID -> Discord ID mapping from both databases
+            torn_to_discord = {}
+            for discord_id, data in verified_users.items():
+                torn_id = str(data.get('torn_id', ''))
+                if torn_id:
+                    torn_to_discord[torn_id] = discord_id
+
+            # Also add from inactivity tracker (discord_id -> torn_id format)
+            for discord_id, torn_id in inactivity_users.items():
+                if str(torn_id) not in torn_to_discord:
+                    torn_to_discord[str(torn_id)] = discord_id
+
+            total_faction = len(faction_members)
+            verified_matched = 0
+            role_changed = 0
+            already_correct = 0
+            not_in_server = 0
+            no_mapping = 0
+            errors = 0
+
+            for torn_id, mdata in faction_members.items():
+                discord_id = torn_to_discord.get(torn_id)
+                if not discord_id:
+                    continue
+                verified_matched += 1
+
+                try:
+                    discord_member = guild.get_member(int(discord_id))
+                    if not discord_member:
+                        discord_member = await guild.fetch_member(int(discord_id))
+                except:
+                    not_in_server += 1
+                    continue
+
+                position = mdata.get('position', '')
+                role_id = role_sync_manager.get_role_for_position(position)
+                if not role_id:
+                    no_mapping += 1
+                    continue
+
+                role = guild.get_role(role_id)
+                if not role:
+                    errors += 1
+                    continue
+
+                if role in discord_member.roles:
+                    already_correct += 1
+                    continue
+
+                # Actually assign the role
+                try:
+                    all_position_role_ids = set(role_sync_manager.position_roles.values())
+                    roles_to_remove = [r for r in discord_member.roles if r.id in all_position_role_ids and r.id != role_id]
+                    if roles_to_remove:
+                        await discord_member.remove_roles(*roles_to_remove, reason='Role sync')
+                    await discord_member.add_roles(role, reason=f'Role sync: Torn position is {position}')
+                    role_changed += 1
+                except discord.Forbidden:
+                    errors += 1
+                except Exception:
+                    errors += 1
+
+            sync_text = (
+                f'**Faction members:** {total_faction}\n'
+                f'**Verified in database:** {len(torn_to_discord)}\n'
+                f'**Matched to faction:** {verified_matched}\n'
+                f'**Roles changed:** {role_changed}\n'
+                f'**Already correct:** {already_correct}\n'
+                f'**Not in server:** {not_in_server}\n'
+                f'**No position mapping:** {no_mapping}\n'
+                f'**Errors:** {errors}'
+            )
 
             embed = create_embed(
                 title='Sync Complete - Diagnostic',
                 description=(
                     f'**Torn API Positions Found:**\n{positions_text}\n\n'
                     f'**Your Mappings:**\n{mapping_text}\n\n'
-                    f'**Match Status:**\n{match_text}'
+                    f'**Match Status:**\n{match_text}\n'
+                    f'**Sync Results:**\n{sync_text}'
                 ),
                 color=EMBED_COLOR_SUCCESS
             )
