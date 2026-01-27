@@ -17,6 +17,7 @@ from utils.helpers import load_json, save_json, create_embed
 from utils.torn_api import fetch_player_data
 from config import (
     GUILD_ID,
+    TORN_FACTION_ID,
     EMBED_COLOR_SUCCESS,
     EMBED_COLOR_WARNING,
     EMBED_COLOR_CRITICAL,
@@ -319,6 +320,7 @@ async def setup_verification_commands(bot, verification_system: VerificationSyst
         app_commands.Choice(name='manual - Manually verify a member', value='manual'),
         app_commands.Choice(name='unverify - Remove verification from member', value='unverify'),
         app_commands.Choice(name='fixrole - Give verified role to registered users missing it', value='fixrole'),
+        app_commands.Choice(name='bulksync - Re-verify members by matching nicknames to faction', value='bulksync'),
         app_commands.Choice(name='stats - Show verification statistics', value='stats')
     ])
     @app_commands.choices(setting=[
@@ -565,6 +567,103 @@ async def setup_verification_commands(bot, verification_system: VerificationSyst
                 description=f'**Fixed:** {fixed_count} members given the {role.mention} role\n'
                            f'**Already had role:** {already_has_role}\n'
                            f'**Failed:** {failed_count}',
+                color=EMBED_COLOR_SUCCESS
+            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+
+        elif action == 'bulksync':
+            # Re-verify members by matching Discord nicknames to Torn faction members
+            import re
+            from utils.torn_api import fetch_faction_members
+
+            faction_members = await fetch_faction_members()
+            if not faction_members:
+                await interaction.followup.send('Could not fetch faction members from Torn API.', ephemeral=True)
+                return
+
+            # Build lookup: torn_id -> member_data
+            torn_lookup = {}
+            name_lookup = {}  # torn_name_lower -> {torn_id, data}
+            for tid, mdata in faction_members.items():
+                torn_lookup[tid] = mdata
+                name_lookup[mdata.get('name', '').lower()] = {'torn_id': tid, 'data': mdata}
+
+            synced = 0
+            already_verified = 0
+            not_matched = []
+
+            for discord_member in guild.members:
+                if discord_member.bot:
+                    continue
+
+                discord_id = str(discord_member.id)
+
+                # Skip if already verified
+                if discord_id in verification_system.verified_users:
+                    already_verified += 1
+                    continue
+
+                # Try to extract Torn ID from nickname like "Name [12345]"
+                display = discord_member.nick or discord_member.display_name
+                id_match = re.search(r'\[(\d+)\]', display)
+
+                matched_tid = None
+                matched_data = None
+
+                if id_match:
+                    potential_tid = id_match.group(1)
+                    if potential_tid in torn_lookup:
+                        matched_tid = potential_tid
+                        matched_data = torn_lookup[potential_tid]
+
+                # Fallback: try matching by name
+                if not matched_tid:
+                    # Try exact name match against faction members
+                    clean_name = re.sub(r'\s*\[\d+\]', '', display).strip().lower()
+                    if clean_name in name_lookup:
+                        matched_tid = name_lookup[clean_name]['torn_id']
+                        matched_data = name_lookup[clean_name]['data']
+
+                if matched_tid and matched_data:
+                    # Register this member
+                    verification_system.verified_users[discord_id] = {
+                        'torn_id': int(matched_tid),
+                        'torn_name': matched_data.get('name', ''),
+                        'faction_id': int(TORN_FACTION_ID),
+                        'faction_name': matched_data.get('faction', {}).get('faction_name', ''),
+                        'verified_at': datetime.now(timezone.utc).isoformat(),
+                        'verified_by': 'bulksync'
+                    }
+
+                    # Also save to inactivity tracker
+                    if verification_system.inactivity_tracker:
+                        verification_system.inactivity_tracker.user_mapping[discord_id] = matched_tid
+
+                    synced += 1
+                else:
+                    if not discord_member.bot:
+                        not_matched.append(discord_member.display_name)
+
+            # Save all at once
+            await verification_system.save_verified_users()
+            if verification_system.inactivity_tracker:
+                await verification_system.inactivity_tracker.save_user_mapping()
+
+            unmatched_text = ''
+            if not_matched:
+                unmatched_text = f'\n\n**Could not match ({len(not_matched)}):**\n'
+                unmatched_text += ', '.join(not_matched[:15])
+                if len(not_matched) > 15:
+                    unmatched_text += f'\n...and {len(not_matched) - 15} more'
+
+            embed = create_embed(
+                title='Bulk Sync Complete',
+                description=(
+                    f'**Newly verified:** {synced}\n'
+                    f'**Already verified:** {already_verified}\n'
+                    f'**Could not match:** {len(not_matched)}'
+                    f'{unmatched_text}'
+                ),
                 color=EMBED_COLOR_SUCCESS
             )
             await interaction.followup.send(embed=embed, ephemeral=True)
