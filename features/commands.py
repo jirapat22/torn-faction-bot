@@ -18,7 +18,7 @@ from config import (
 )
 
 
-async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracker=None):
+async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracker=None, verification_system=None):
     """
     Register all slash commands with the bot
 
@@ -27,6 +27,7 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
         inactivity_tracker: InactivityTracker instance
         chain_tracker: ChainTracker instance (optional, for Phase 3)
         war_tracker: WarTracker instance (optional, for Phase 4)
+        verification_system: VerificationSystem instance (for unregister sync)
     """
 
     @bot.tree.command(name='ping', description='Check if the bot is responding')
@@ -50,13 +51,20 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
 
     @bot.tree.command(name='unregister', description='Unlink your Discord account from your Torn ID')
     async def unregister(interaction: discord.Interaction):
-        """Unregister Discord user (remove Torn ID link)"""
-        success = await inactivity_tracker.unregister_user(interaction.user.id)
+        """Unregister Discord user (remove Torn ID link from all databases)"""
+        discord_id = str(interaction.user.id)
+
+        # Remove from both databases and remove verified role
+        if verification_system:
+            success = await verification_system.unregister_user(discord_id, guild=interaction.guild)
+        else:
+            success = await inactivity_tracker.unregister_user(interaction.user.id)
 
         if success:
             embed = create_embed(
                 title='Unregistered',
-                description='Your Torn ID has been unlinked from your Discord account.',
+                description='Your Torn ID has been unlinked and your verified role has been removed.\n'
+                           'You can use `/register` again with the correct Torn ID.',
                 color=EMBED_COLOR_SUCCESS
             )
         else:

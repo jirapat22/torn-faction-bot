@@ -34,6 +34,7 @@ class VerificationSystem:
         self.verified_users_file = 'data/verified_users.json'
         self.config = {}
         self.verified_users = {}
+        self.inactivity_tracker = None  # Set by bot.py to keep databases in sync
 
     async def load_config(self):
         """Load verification config from JSON file"""
@@ -168,6 +169,11 @@ class VerificationSystem:
         }
         await self.save_verified_users()
 
+        # Also save to inactivity tracker database (keep both in sync)
+        if self.inactivity_tracker:
+            self.inactivity_tracker.user_mapping[discord_id] = str(torn_id)
+            await self.inactivity_tracker.save_user_mapping()
+
         # Build response message
         status_parts = []
         if rename_success:
@@ -187,13 +193,34 @@ class VerificationSystem:
 
         return True, f'Successfully verified as **{player_info["name"]}** [{torn_id}]\n\n{status_msg}'
 
-    async def unregister_user(self, discord_id: str):
-        """Remove a user's verification"""
+    async def unregister_user(self, discord_id: str, guild=None):
+        """Remove a user's verification from all databases"""
+        removed = False
+
+        # Remove from verification database
         if discord_id in self.verified_users:
             del self.verified_users[discord_id]
             await self.save_verified_users()
-            return True
-        return False
+            removed = True
+
+        # Also remove from inactivity tracker database
+        if self.inactivity_tracker and discord_id in self.inactivity_tracker.user_mapping:
+            del self.inactivity_tracker.user_mapping[discord_id]
+            await self.inactivity_tracker.save_user_mapping()
+            removed = True
+
+        # Remove verified role from the member
+        if guild and self.config.get('verified_role_id'):
+            try:
+                member = guild.get_member(int(discord_id))
+                if member:
+                    role = guild.get_role(self.config['verified_role_id'])
+                    if role and role in member.roles:
+                        await member.remove_roles(role)
+            except Exception:
+                pass  # Best effort role removal
+
+        return removed
 
 
 async def setup_verification_commands(bot, verification_system: VerificationSystem):
@@ -423,7 +450,7 @@ async def setup_verification_commands(bot, verification_system: VerificationSyst
                 await interaction.followup.send(f'Could not find Torn player with ID {torn_id}.', ephemeral=True)
                 return
 
-            # Save verification
+            # Save verification to both databases
             discord_id = str(member.id)
             verification_system.verified_users[discord_id] = {
                 'torn_id': torn_id,
@@ -434,6 +461,11 @@ async def setup_verification_commands(bot, verification_system: VerificationSyst
                 'verified_by': str(interaction.user.id)
             }
             await verification_system.save_verified_users()
+
+            # Also save to inactivity tracker
+            if verification_system.inactivity_tracker:
+                verification_system.inactivity_tracker.user_mapping[discord_id] = str(torn_id)
+                await verification_system.inactivity_tracker.save_user_mapping()
 
             # Try to rename and add role
             new_name = f"{player_info['name']} [{torn_id}]"
@@ -465,20 +497,33 @@ async def setup_verification_commands(bot, verification_system: VerificationSyst
                 return
 
             discord_id = str(member.id)
-            if discord_id in verification_system.verified_users:
-                old_data = verification_system.verified_users[discord_id]
-                await verification_system.unregister_user(discord_id)
+
+            # Check both databases for this user
+            old_data = verification_system.verified_users.get(discord_id)
+            in_inactivity = (verification_system.inactivity_tracker and
+                           discord_id in verification_system.inactivity_tracker.user_mapping)
+
+            if old_data or in_inactivity:
+                # Get info for the response message
+                torn_info = ''
+                if old_data:
+                    torn_info = f'Was: **{old_data.get("torn_name")}** [{old_data.get("torn_id")}]'
+                elif in_inactivity:
+                    torn_id = verification_system.inactivity_tracker.user_mapping.get(discord_id)
+                    torn_info = f'Was: Torn ID {torn_id}'
+
+                await verification_system.unregister_user(discord_id, guild=guild)
 
                 embed = create_embed(
                     title='✅ Verification Removed',
-                    description=f'Removed verification for {member.mention}\n'
-                               f'Was: **{old_data.get("torn_name")}** [{old_data.get("torn_id")}]',
+                    description=f'Removed verification for {member.mention}\n{torn_info}\n'
+                               f'Verified role has been removed.',
                     color=EMBED_COLOR_SUCCESS
                 )
             else:
                 embed = create_embed(
                     title='Not Verified',
-                    description=f'{member.mention} was not verified.',
+                    description=f'{member.mention} was not found in any database.',
                     color=EMBED_COLOR_WARNING
                 )
 

@@ -85,6 +85,7 @@ async def on_ready():
 
     # Initialize verification system
     verification_system = VerificationSystem(bot)
+    verification_system.inactivity_tracker = inactivity_tracker  # Sync both databases
     await verification_system.load_config()
     await setup_verification_commands(bot, verification_system)
 
@@ -109,7 +110,7 @@ async def on_ready():
     await restore_availability_views(bot, availability_manager, VERIFIED_ROLE_NAME)
 
     # Register slash commands
-    await setup_commands(bot, inactivity_tracker, chain_tracker, war_tracker)
+    await setup_commands(bot, inactivity_tracker, chain_tracker, war_tracker, verification_system)
 
     # Sync slash commands with Discord (guild-specific for instant updates)
     from config import GUILD_ID
