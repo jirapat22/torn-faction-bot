@@ -160,23 +160,23 @@ async def before_daily_check():
     """Wait until bot is ready before starting the daily check loop"""
     await bot.wait_until_ready()
 
-    # Wait until next 12:00 PM to start the loop
-    now = datetime.now()
-    target_hour = 12   # 12 PM (noon)
+    # Wait until next 00:00 TCT (UTC) to start the loop
+    now = datetime.utcnow()
+    target_hour = 0   # 00:00 TCT (midnight UTC)
 
-    # Calculate seconds until next 12 PM
-    if now.hour >= target_hour:
-        # If it's past 12 PM today, wait until 12 PM tomorrow
-        seconds_until_target = ((24 - now.hour + target_hour) * 3600
+    # Calculate seconds until next 00:00 TCT
+    if now.hour >= target_hour and (now.hour > 0 or now.minute > 0 or now.second > 0):
+        # Past midnight today, wait until midnight tomorrow
+        seconds_until_target = ((24 - now.hour) * 3600
                                - now.minute * 60
                                - now.second)
     else:
-        # If it's before 12 PM today, wait until 12 PM today
+        # Before midnight (shouldn't happen for target=0, but kept for safety)
         seconds_until_target = ((target_hour - now.hour) * 3600
                                - now.minute * 60
                                - now.second)
 
-    print(f'Daily inactivity check will start in {seconds_until_target/3600:.1f} hours (at 12:00 PM)')
+    print(f'Daily inactivity check will start in {seconds_until_target/3600:.1f} hours (at 00:00 TCT)')
     await asyncio.sleep(seconds_until_target)
 
 
