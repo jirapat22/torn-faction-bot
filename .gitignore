@@ -20,6 +20,7 @@ ENV/
 # Data files (Railway will create these automatically)
 data/
 *.json
+!railway.json
 
 # IDE
 .vscode/
