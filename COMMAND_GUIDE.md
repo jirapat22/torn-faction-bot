@@ -98,6 +98,7 @@ Manage verification settings.
 - `toggle` - Toggle settings (change_name, append_id, etc.)
 - `manual` - Manually verify a member
 - `unverify` - Remove verification
+- `fixrole` - Give verified role to registered users missing it
 - `stats` - View verification statistics
 
 ### `/rolesync <action>`
@@ -115,6 +116,39 @@ Manage enemy watchlist during war.
 - `remove` - Remove enemy from watchlist
 - `check` - Force check all enemy statuses
 - `clear` - Clear entire watchlist
+
+---
+
+## Availability Commands (Requires Verified Role)
+
+### `/avail_setup <title> <date> <start_hour> <end_hour> [end_date]`
+Create an availability poll for war/chain planning.
+- **title**: Name of the event (e.g. "Chain Event")
+- **date**: Start date in DD-MM-YYYY format
+- **start_hour**: Start hour in TCT (0-23)
+- **end_hour**: End hour in TCT (0-23)
+- **end_date**: Optional end date for multi-day events (DD-MM-YYYY)
+- Creates buttons for each time block (labeled A-X)
+- Members click buttons to toggle availability
+- Shows both TCT and local time
+
+### `/avail_summary <poll_id>`
+View an ASCII timetable of who is available when.
+- **poll_id**: The poll ID shown when created
+
+### `/avail_delete <poll_id>`
+Delete an availability poll.
+- **poll_id**: The poll ID to delete
+
+### `/avail_list`
+List all active availability polls.
+
+### `/my_availability <poll_id>`
+Check your own availability selections for a poll.
+- **poll_id**: The poll ID to check
+
+### `/tct_now`
+Show the current Torn City Time (UTC).
 
 ---
 
@@ -164,6 +198,9 @@ Manage enemy watchlist during war.
 | `/verify` | Management | Manage verification |
 | `/rolesync` | Management | Configure role sync |
 | `/enemy add/remove` | Management | Manage watchlist |
+| `/avail_setup` | Verified | Create availability poll |
+| `/avail_summary` | Verified | View availability timetable |
+| `/tct_now` | Everyone | Show current TCT time |
 
 ---
 

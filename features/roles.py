@@ -164,6 +164,7 @@ async def setup_rolesync_commands(bot, role_sync_manager: RoleSyncManager):
     """Set up role sync slash commands"""
     from discord import app_commands
     from utils.helpers import create_embed
+    from utils.torn_api import fetch_faction_members
     from config import EMBED_COLOR_SUCCESS, EMBED_COLOR_INFO, EMBED_COLOR_CRITICAL, MANAGEMENT_ROLE_IDS
 
     def is_management(interaction: discord.Interaction) -> bool:
@@ -267,10 +268,64 @@ async def setup_rolesync_commands(bot, role_sync_manager: RoleSyncManager):
             await interaction.followup.send(embed=embed, ephemeral=True)
 
         elif action == 'sync':
+            # Run sync with diagnostic output
+            if not role_sync_manager.position_roles:
+                await interaction.followup.send('No position mappings configured. Use `/rolesync setrole` first.', ephemeral=True)
+                return
+
+            guild = interaction.guild
+
+            # Fetch faction data
+            faction_members = await fetch_faction_members()
+            if not faction_members:
+                await interaction.followup.send('Could not fetch faction members from Torn API.', ephemeral=True)
+                return
+
+            # Show what positions Torn API returns
+            positions_found = {}
+            for tid, mdata in faction_members.items():
+                pos = mdata.get('position', 'Unknown')
+                if pos not in positions_found:
+                    positions_found[pos] = []
+                positions_found[pos].append(mdata.get('name', tid))
+
+            positions_text = '\n'.join([
+                f'**{pos}**: {len(names)} members'
+                for pos, names in sorted(positions_found.items())
+            ])
+
+            # Show current mappings vs API positions
+            mappings = role_sync_manager.get_all_position_roles()
+            mapping_text = '\n'.join([
+                f'`{pos}` -> <@&{rid}>'
+                for pos, rid in mappings.items()
+            ])
+
+            # Check which API positions have mappings
+            matched = []
+            unmatched = []
+            for api_pos in positions_found:
+                if api_pos.lower() in mappings:
+                    matched.append(api_pos)
+                else:
+                    unmatched.append(api_pos)
+
+            match_text = ''
+            if matched:
+                match_text += f'**Matched:** {", ".join(matched)}\n'
+            if unmatched:
+                match_text += f'**No mapping:** {", ".join(unmatched)}\n'
+
+            # Now run the actual sync
             await role_sync_manager.sync_all_members()
+
             embed = create_embed(
-                title='Sync Complete',
-                description='Role sync has been run for all verified members.',
+                title='Sync Complete - Diagnostic',
+                description=(
+                    f'**Torn API Positions Found:**\n{positions_text}\n\n'
+                    f'**Your Mappings:**\n{mapping_text}\n\n'
+                    f'**Match Status:**\n{match_text}'
+                ),
                 color=EMBED_COLOR_SUCCESS
             )
             await interaction.followup.send(embed=embed, ephemeral=True)
