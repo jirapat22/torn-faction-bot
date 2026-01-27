@@ -5,7 +5,7 @@ Includes JSON file handling, embed creation, etc.
 
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 import discord
 from config import EMBED_COLOR_INFO, EMBED_COLOR_WARNING, EMBED_COLOR_CRITICAL, EMBED_COLOR_SUCCESS
 
@@ -78,7 +78,7 @@ def create_embed(title, description, color=EMBED_COLOR_INFO, fields=None):
         title=title,
         description=description,
         color=color,
-        timestamp=datetime.now()
+        timestamp=datetime.now(timezone.utc)
     )
 
     if fields:

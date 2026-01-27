@@ -121,31 +121,31 @@ Manage enemy watchlist during war.
 
 ## Availability Commands (Requires Verified Role)
 
-### `/avail_setup <title> <date> <start_hour> <end_hour> [end_date]`
+### `/avail_setup <start_date> <start_time> <end_time> [end_date] [block_length]`
 Create an availability poll for war/chain planning.
-- **title**: Name of the event (e.g. "Chain Event")
-- **date**: Start date in DD-MM-YYYY format
-- **start_hour**: Start hour in TCT (0-23)
-- **end_hour**: End hour in TCT (0-23)
+- **start_date**: Start date in DD-MM-YYYY format
+- **start_time**: Start time in TCT/UTC (HH:MM, e.g. 00:00)
+- **end_time**: End time in TCT/UTC (HH:MM, e.g. 24:00)
 - **end_date**: Optional end date for multi-day events (DD-MM-YYYY)
+- **block_length**: Hours per time block (1-6, default: 2)
 - Creates buttons for each time block (labeled A-X)
 - Members click buttons to toggle availability
 - Shows both TCT and local time
 
-### `/avail_summary <poll_id>`
+### `/avail_summary <date>`
 View an ASCII timetable of who is available when.
-- **poll_id**: The poll ID shown when created
+- **date**: Any date within the poll range (DD-MM-YYYY)
 
-### `/avail_delete <poll_id>`
+### `/avail_delete <date>`
 Delete an availability poll.
-- **poll_id**: The poll ID to delete
+- **date**: Any date within the poll to delete (DD-MM-YYYY)
 
 ### `/avail_list`
 List all active availability polls.
 
-### `/my_availability <poll_id>`
+### `/my_availability <date>`
 Check your own availability selections for a poll.
-- **poll_id**: The poll ID to check
+- **date**: Any date within the poll (DD-MM-YYYY)
 
 ### `/tct_now`
 Show the current Torn City Time (UTC).
@@ -155,7 +155,7 @@ Show the current Torn City Time (UTC).
 ## Automatic Features
 
 ### Inactivity Alerts
-- Runs daily at 12:00 PM
+- Runs daily at 00:00 TCT (midnight UTC)
 - Posts to #inactivity-alerts
 - Pings @Management only if inactive members found
 - Warning: 3+ days inactive

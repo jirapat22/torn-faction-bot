@@ -630,7 +630,7 @@ async def setup_verification_commands(bot, verification_system: VerificationSyst
                         'torn_id': int(matched_tid),
                         'torn_name': matched_data.get('name', ''),
                         'faction_id': int(TORN_FACTION_ID),
-                        'faction_name': matched_data.get('faction', {}).get('faction_name', ''),
+                        'faction_name': '',  # Not available from faction members endpoint
                         'verified_at': datetime.now(timezone.utc).isoformat(),
                         'verified_by': 'bulksync'
                     }
@@ -672,11 +672,12 @@ async def setup_verification_commands(bot, verification_system: VerificationSyst
             total_verified = len(verification_system.verified_users)
             total_members = guild.member_count
 
+            rate = f'{(total_verified / total_members * 100):.1f}%' if total_members > 0 else '0%'
             embed = create_embed(
                 title='Verification Statistics',
                 description=f'**Verified Members:** {total_verified}\n'
                            f'**Total Members:** {total_members}\n'
-                           f'**Verification Rate:** {(total_verified/total_members*100):.1f}%' if total_members > 0 else '0%',
+                           f'**Verification Rate:** {rate}',
                 color=EMBED_COLOR_INFO
             )
             await interaction.followup.send(embed=embed, ephemeral=True)

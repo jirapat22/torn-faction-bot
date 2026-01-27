@@ -125,15 +125,20 @@ class RoleSyncManager:
             return
 
         # Load verified users to get Discord ID -> Torn ID mapping
-        from features.verification import VerificationSystem
         verified_users = load_json('data/verified_users.json', default={})
+        inactivity_users = load_json('data/discord_to_torn.json', default={})
 
-        # Create Torn ID -> Discord ID mapping
+        # Create Torn ID -> Discord ID mapping from both databases
         torn_to_discord = {}
         for discord_id, data in verified_users.items():
             torn_id = str(data.get('torn_id', ''))
             if torn_id:
                 torn_to_discord[torn_id] = discord_id
+
+        # Also add from inactivity tracker (discord_id -> torn_id format)
+        for discord_id, torn_id in inactivity_users.items():
+            if str(torn_id) not in torn_to_discord:
+                torn_to_discord[str(torn_id)] = discord_id
 
         # Sync each verified member
         synced_count = 0

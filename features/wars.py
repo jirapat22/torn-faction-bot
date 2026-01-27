@@ -21,7 +21,8 @@ from config import (
     EMBED_COLOR_SUCCESS,
     EMBED_COLOR_WARNING,
     EMBED_COLOR_CRITICAL,
-    MANAGEMENT_PING_ROLE_ID
+    MANAGEMENT_PING_ROLE_ID,
+    TORN_FACTION_ID
 )
 
 
@@ -107,19 +108,17 @@ class WarTracker:
         end_time = war.get('end', 0)
         target = war.get('target', 0)  # Goal points to win
 
-        # Get our faction and enemy faction
+        # Get our faction and enemy faction by matching TORN_FACTION_ID
         our_faction = None
         enemy_faction = None
 
         for faction_id, faction_data in factions.items():
-            if faction_data.get('name') == 'Unknown':  # This will be our faction
+            if str(faction_id) == str(TORN_FACTION_ID):
                 our_faction = faction_data
-                our_faction_id = faction_id
             else:
                 enemy_faction = faction_data
-                enemy_faction_id = faction_id
 
-        # If we can't identify factions, just use first two
+        # Fallback: just use first two if ID match failed
         if not our_faction or not enemy_faction:
             faction_list = list(factions.values())
             our_faction = faction_list[0] if len(faction_list) > 0 else {}
@@ -267,7 +266,10 @@ class WarTracker:
 
         # Use final_data if available, otherwise use war_info
         data_to_use = final_data if final_data else war_info['data']
-        war_id = final_data.get('war_id', war_info.get('war_id', 'Unknown')) if final_data else war_info['war_id']
+        if final_data:
+            war_id = final_data.get('war_id', 'Unknown')
+        else:
+            war_id = war_info['war_id']
 
         factions = data_to_use.get('factions', {})
 
@@ -278,7 +280,7 @@ class WarTracker:
         enemy_faction_data = None
 
         for faction_id, faction_data in factions.items():
-            if faction_data.get('name') == 'Unknown':
+            if str(faction_id) == str(TORN_FACTION_ID):
                 our_members = faction_data.get('members', {})
                 our_faction_data = faction_data
             else:
