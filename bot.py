@@ -239,21 +239,18 @@ async def before_enemy_check():
 @bot.event
 async def on_member_join(member):
     """Welcome new members when they join the server"""
-    from config import WELCOME_CHANNEL_ID, RULES_CHANNEL_ID, GENERAL_CHANNEL_ID
+    from config import WELCOME_CHANNEL_ID
 
-    # Build channel mentions (uses Discord's <#ID> format)
-    rules = f"<#{RULES_CHANNEL_ID}>" if RULES_CHANNEL_ID else "#faction-edicts"
-    general = f"<#{GENERAL_CHANNEL_ID}>" if GENERAL_CHANNEL_ID else "#punk-plaza"
-
+    # Use plain text channel names (not <#ID> mentions) so unverified users can read them
     welcome_message = (
         f"🎉 Welcome to Ascended Punks, {member.mention}!\n\n"
-        f"1️⃣ Run `/register` with your Torn ID.\n"
-        f"2️⃣ Head to {rules} and read the rules.\n"
-        f"3️⃣ Once you're Verified, jump into {general} and say hi.\n\n"
+        f"1️⃣ Run `/register` with your Torn ID in **#welcome-pit**.\n"
+        f"2️⃣ Head to **#faction-edicts** and read the rules.\n"
+        f"3️⃣ Once you're Verified, jump into **#punk-plaza** and say hi.\n\n"
         f"Please contact Ikaros22[3571142] if there is any issue with register process."
     )
 
-    # Try to send to welcome channel
+    # Send to welcome channel
     if WELCOME_CHANNEL_ID:
         channel = bot.get_channel(WELCOME_CHANNEL_ID)
         if channel:
@@ -263,11 +260,13 @@ async def on_member_join(member):
                 return
             except Exception as e:
                 print(f'Failed to send welcome message to channel: {e}')
+        else:
+            print(f'Welcome channel {WELCOME_CHANNEL_ID} not found')
 
-    # Fallback: DM the user
+    # Fallback: DM the user only if channel send failed
     try:
         await member.send(welcome_message.replace(member.mention, member.name))
-        print(f'Welcomed new member via DM: {member.name}')
+        print(f'Welcomed new member via DM (channel unavailable): {member.name}')
     except Exception as e:
         print(f'Failed to DM welcome message to {member.name}: {e}')
 
