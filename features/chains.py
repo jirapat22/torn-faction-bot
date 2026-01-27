@@ -219,7 +219,7 @@ class ChainTracker:
         # Add top contributors (max 5)
         if sorted_members:
             top_contributors = '\n'.join([
-                f'{i+1}. **{m["name"]}**: {m["respect"]:.2f} respect{f" ({m['hits']} hits)" if m["hits"] > 0 else ""}'
+                f'{i+1}. **{m["name"]}**: {m["respect"]:.2f} respect' + (f' ({m["hits"]} hits)' if m["hits"] > 0 else '')
                 for i, m in enumerate(sorted_members[:5])
             ])
             embed.add_field(
