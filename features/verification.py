@@ -291,6 +291,7 @@ async def setup_verification_commands(bot, verification_system: VerificationSyst
         app_commands.Choice(name='toggle - Toggle a setting', value='toggle'),
         app_commands.Choice(name='manual - Manually verify a member', value='manual'),
         app_commands.Choice(name='unverify - Remove verification from member', value='unverify'),
+        app_commands.Choice(name='fixrole - Give verified role to registered users missing it', value='fixrole'),
         app_commands.Choice(name='stats - Show verification statistics', value='stats')
     ])
     @app_commands.choices(setting=[
@@ -310,9 +311,20 @@ async def setup_verification_commands(bot, verification_system: VerificationSyst
         value: bool = None
     ):
         """Verification admin command"""
-        # Check if user has management role
-        user_role_ids = [r.id for r in interaction.user.roles]
-        if not any(role_id in MANAGEMENT_ROLE_IDS for role_id in user_role_ids):
+        # Check if user has management role OR admin permission
+        has_permission = False
+
+        # Check Discord admin permission
+        if interaction.user.guild_permissions.manage_guild or interaction.user.guild_permissions.administrator:
+            has_permission = True
+
+        # Check management roles
+        if MANAGEMENT_ROLE_IDS:
+            user_role_ids = [r.id for r in interaction.user.roles]
+            if any(role_id in MANAGEMENT_ROLE_IDS for role_id in user_role_ids):
+                has_permission = True
+
+        if not has_permission:
             await interaction.response.send_message(
                 'You do not have permission to use this command.',
                 ephemeral=True
@@ -470,6 +482,46 @@ async def setup_verification_commands(bot, verification_system: VerificationSyst
                     color=EMBED_COLOR_WARNING
                 )
 
+            await interaction.followup.send(embed=embed, ephemeral=True)
+
+        elif action == 'fixrole':
+            # Give verified role to all registered users who don't have it
+            verified_role_id = verification_system.config.get('verified_role_id')
+            if not verified_role_id:
+                await interaction.followup.send('No verified role is configured. Use `/verify setrole` first.', ephemeral=True)
+                return
+
+            role = guild.get_role(verified_role_id)
+            if not role:
+                await interaction.followup.send('Verified role not found. It may have been deleted.', ephemeral=True)
+                return
+
+            fixed_count = 0
+            failed_count = 0
+            already_has_role = 0
+
+            for discord_id, data in verification_system.verified_users.items():
+                try:
+                    member_obj = guild.get_member(int(discord_id))
+                    if not member_obj:
+                        continue
+
+                    if role in member_obj.roles:
+                        already_has_role += 1
+                        continue
+
+                    await member_obj.add_roles(role)
+                    fixed_count += 1
+                except Exception:
+                    failed_count += 1
+
+            embed = create_embed(
+                title='✅ Role Fix Complete',
+                description=f'**Fixed:** {fixed_count} members given the {role.mention} role\n'
+                           f'**Already had role:** {already_has_role}\n'
+                           f'**Failed:** {failed_count}',
+                color=EMBED_COLOR_SUCCESS
+            )
             await interaction.followup.send(embed=embed, ephemeral=True)
 
         elif action == 'stats':
