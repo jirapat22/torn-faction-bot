@@ -1,0 +1,12 @@
+.env
+.git
+.gitignore
+.vscode
+__pycache__
+*.pyc
+data/
+.dockerignore
+Dockerfile
+README.md
+COMMAND_GUIDE.md
+DISCORD_PERMISSIONS_GUIDE.md
