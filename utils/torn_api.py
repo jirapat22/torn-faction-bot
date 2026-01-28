@@ -29,11 +29,11 @@ async def _make_api_request(endpoint, params=None):
     if params is None:
         params = {}
 
+    # Create cache key before adding API key (avoid key in logs/cache strings)
+    cache_key = f"{endpoint}_{str(params)}"
+
     # Add API key to params
     params['key'] = TORN_API_KEY
-
-    # Create cache key
-    cache_key = f"{endpoint}_{str(params)}"
 
     # Check cache
     if cache_key in api_cache:

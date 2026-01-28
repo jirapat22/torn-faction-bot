@@ -369,7 +369,7 @@ class ChainTracker:
         # Update last count
         self.last_chain_count = current_count
 
-        # Save chain data to history
+        # Save chain data to history (keep last 100 entries max)
         chain_id = f'chain_{get_current_timestamp()}'
         self.chain_history[chain_id] = {
             'count': current_count,
@@ -377,4 +377,11 @@ class ChainTracker:
             'max': chain.get('max', 0),
             'modifier': chain.get('modifier', 1.0)
         }
+
+        # Prune old entries if history is too large
+        if len(self.chain_history) > 100:
+            sorted_keys = sorted(self.chain_history.keys())
+            for old_key in sorted_keys[:-100]:
+                del self.chain_history[old_key]
+
         await self.save_chain_history()

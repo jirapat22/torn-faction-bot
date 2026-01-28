@@ -131,8 +131,13 @@ class AvailabilityManager:
             current_dt = block_end_dt
             block_id += 1
 
-        # Create unique poll ID
-        poll_id = f"{date_to_internal(start_date)}_{date_to_internal(end_date)}"
+        # Create unique poll ID (append suffix if dates already used)
+        base_id = f"{date_to_internal(start_date)}_{date_to_internal(end_date)}"
+        poll_id = base_id
+        suffix = 2
+        while poll_id in self.polls:
+            poll_id = f"{base_id}_{suffix}"
+            suffix += 1
 
         # Store poll config
         self.polls[poll_id] = {
@@ -355,16 +360,13 @@ class AvailabilityButton(discord.ui.Button):
         )
         await self.manager.save_data()
 
-        # Update button label with new count
-        count = self.manager.get_block_count(self.poll_id, self.block['id'])
-        self.label = f"{self.block['label']} ({count})"
-
-        # Change button style based on user's selection
-        user_selections = self.manager.get_user_selections(self.poll_id, interaction.user.id)
-        if self.block['id'] in user_selections:
-            self.style = discord.ButtonStyle.success  # Green when selected
-        else:
-            self.style = discord.ButtonStyle.secondary  # Gray when not selected
+        # Update all button labels with current counts (visible to everyone)
+        for item in self.view.children:
+            if isinstance(item, AvailabilityButton):
+                btn_count = self.manager.get_block_count(self.poll_id, item.block['id'])
+                item.label = f"{item.block['label']} ({btn_count})"
+                # Keep all buttons neutral gray - style is shared across all users
+                item.style = discord.ButtonStyle.secondary
 
         # Update the message
         await interaction.response.edit_message(view=self.view)
