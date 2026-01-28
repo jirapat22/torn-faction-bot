@@ -5,6 +5,7 @@ Includes JSON file handling, embed creation, etc.
 
 import json
 import os
+import time as _time
 from datetime import datetime, timezone
 import discord
 from config import EMBED_COLOR_INFO, EMBED_COLOR_WARNING, EMBED_COLOR_CRITICAL, EMBED_COLOR_SUCCESS
@@ -148,7 +149,7 @@ def get_days_since(timestamp):
     Returns:
         Number of days as integer
     """
-    now = datetime.now().timestamp()
+    now = _time.time()
     seconds_diff = now - timestamp
     return int(seconds_diff / 86400)  # 86400 seconds in a day
 

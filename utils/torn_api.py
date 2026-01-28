@@ -14,6 +14,25 @@ api_cache = {}
 # Torn API base URL
 TORN_API_BASE = "https://api.torn.com"
 
+# Reusable aiohttp session (created on first request)
+_session = None
+
+
+async def _get_session():
+    """Get or create a reusable aiohttp session"""
+    global _session
+    if _session is None or _session.closed:
+        _session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10))
+    return _session
+
+
+def _prune_cache():
+    """Remove expired entries from API cache"""
+    now = time.time()
+    expired = [k for k, v in api_cache.items() if now - v['timestamp'] >= TORN_API_CACHE_SECONDS]
+    for k in expired:
+        del api_cache[k]
+
 
 async def _make_api_request(endpoint, params=None):
     """
@@ -43,32 +62,36 @@ async def _make_api_request(endpoint, params=None):
             print(f'Using cached data for {endpoint} (age: {age:.1f}s)')
             return cached['data']
 
+    # Periodically prune expired cache entries
+    if len(api_cache) > 50:
+        _prune_cache()
+
     # Make API request
     url = f"{TORN_API_BASE}/{endpoint}"
 
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as response:
-                if response.status != 200:
-                    print(f'Torn API error: HTTP {response.status}')
-                    return None
+        session = await _get_session()
+        async with session.get(url, params=params) as response:
+            if response.status != 200:
+                print(f'Torn API error: HTTP {response.status}')
+                return None
 
-                data = await response.json()
+            data = await response.json()
 
-                # Check for API errors
-                if 'error' in data:
-                    error_code = data['error'].get('code', 'unknown')
-                    error_msg = data['error'].get('error', 'Unknown error')
-                    print(f'Torn API error {error_code}: {error_msg}')
-                    return None
+            # Check for API errors
+            if 'error' in data:
+                error_code = data['error'].get('code', 'unknown')
+                error_msg = data['error'].get('error', 'Unknown error')
+                print(f'Torn API error {error_code}: {error_msg}')
+                return None
 
-                # Cache the response
-                api_cache[cache_key] = {
-                    'data': data,
-                    'timestamp': time.time()
-                }
+            # Cache the response
+            api_cache[cache_key] = {
+                'data': data,
+                'timestamp': time.time()
+            }
 
-                return data
+            return data
 
     except aiohttp.ClientError as e:
         print(f'Network error accessing Torn API: {e}')

@@ -7,7 +7,8 @@ import discord
 from discord.ext import commands, tasks
 import asyncio
 import os
-from datetime import datetime
+import time
+from datetime import datetime, timezone
 
 # Import our modules
 from config import BOT_TOKEN, COMMAND_PREFIX
@@ -40,6 +41,7 @@ subscription_manager = None
 role_sync_manager = None
 enemy_watchlist = None
 availability_manager = None
+_initialized = False  # Prevent re-initialization on reconnect
 
 
 @bot.event
@@ -47,10 +49,16 @@ async def on_ready():
     """Called when the bot successfully connects to Discord"""
     global inactivity_tracker, chain_tracker, war_tracker, verification_system
     global subscription_manager, role_sync_manager, enemy_watchlist, availability_manager
+    global _initialized
 
     print(f'Bot logged in as {bot.user.name} (ID: {bot.user.id})')
     print(f'Connected to {len(bot.guilds)} server(s)')
     print('------')
+
+    # Skip full initialization on reconnect to preserve in-memory state
+    if _initialized:
+        print('Reconnected - skipping re-initialization')
+        return
 
     # Ensure data directories exist
     ensure_data_directories()
@@ -145,14 +153,18 @@ async def on_ready():
     if not enemy_status_check.is_running():
         enemy_status_check.start()
 
+    _initialized = True
     print('Bot is ready!')
 
 
 @tasks.loop(hours=24)
 async def daily_inactivity_check():
     """Background task that runs every 24 hours to check for inactive members"""
-    if inactivity_tracker:
-        await inactivity_tracker.check_and_alert_inactive()
+    try:
+        if inactivity_tracker:
+            await inactivity_tracker.check_and_alert_inactive()
+    except Exception as e:
+        print(f'Error in daily inactivity check: {e}')
 
 
 @daily_inactivity_check.before_loop
@@ -161,20 +173,11 @@ async def before_daily_check():
     await bot.wait_until_ready()
 
     # Wait until next 00:00 TCT (UTC) to start the loop
-    now = datetime.utcnow()
-    target_hour = 0   # 00:00 TCT (midnight UTC)
-
-    # Calculate seconds until next 00:00 TCT
-    if now.hour >= target_hour and (now.hour > 0 or now.minute > 0 or now.second > 0):
-        # Past midnight today, wait until midnight tomorrow
-        seconds_until_target = ((24 - now.hour) * 3600
-                               - now.minute * 60
-                               - now.second)
-    else:
-        # Before midnight (shouldn't happen for target=0, but kept for safety)
-        seconds_until_target = ((target_hour - now.hour) * 3600
-                               - now.minute * 60
-                               - now.second)
+    now = datetime.now(timezone.utc)
+    # Seconds elapsed since midnight UTC today
+    seconds_since_midnight = now.hour * 3600 + now.minute * 60 + now.second
+    # Seconds until next midnight UTC
+    seconds_until_target = 86400 - seconds_since_midnight
 
     print(f'Daily inactivity check will start in {seconds_until_target/3600:.1f} hours (at 00:00 TCT)')
     await asyncio.sleep(seconds_until_target)
@@ -183,8 +186,11 @@ async def before_daily_check():
 @tasks.loop(minutes=1)
 async def chain_update_check():
     """Background task that runs every minute to check chain updates"""
-    if chain_tracker:
-        await chain_tracker.check_chain_update()
+    try:
+        if chain_tracker:
+            await chain_tracker.check_chain_update()
+    except Exception as e:
+        print(f'Error in chain update check: {e}')
 
 
 @chain_update_check.before_loop
@@ -197,8 +203,11 @@ async def before_chain_check():
 @tasks.loop(minutes=1)
 async def war_update_check():
     """Background task that runs every minute to check war updates"""
-    if war_tracker:
-        await war_tracker.check_war_update()
+    try:
+        if war_tracker:
+            await war_tracker.check_war_update()
+    except Exception as e:
+        print(f'Error in war update check: {e}')
 
 
 @war_update_check.before_loop
@@ -211,8 +220,11 @@ async def before_war_check():
 @tasks.loop(hours=1)
 async def role_sync_check():
     """Background task that runs every hour to sync roles"""
-    if role_sync_manager:
-        await role_sync_manager.sync_all_members()
+    try:
+        if role_sync_manager:
+            await role_sync_manager.sync_all_members()
+    except Exception as e:
+        print(f'Error in role sync check: {e}')
 
 
 @role_sync_check.before_loop
@@ -225,8 +237,11 @@ async def before_role_sync():
 @tasks.loop(minutes=15)
 async def enemy_status_check():
     """Background task that runs every 15 minutes to check enemy status"""
-    if enemy_watchlist and enemy_watchlist.get_enemy_count() > 0:
-        await enemy_watchlist.check_all_enemies(post_updates=True)
+    try:
+        if enemy_watchlist and enemy_watchlist.get_enemy_count() > 0:
+            await enemy_watchlist.check_all_enemies(post_updates=True)
+    except Exception as e:
+        print(f'Error in enemy status check: {e}')
 
 
 @enemy_status_check.before_loop

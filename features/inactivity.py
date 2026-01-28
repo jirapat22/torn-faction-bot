@@ -183,10 +183,11 @@ class InactivityTracker:
 
             if discord_id and guild:
                 try:
-                    discord_member = await guild.fetch_member(int(discord_id))
-                except:
-                    # User not in Discord server anymore
-                    pass
+                    discord_member = guild.get_member(int(discord_id))
+                    if not discord_member:
+                        discord_member = await guild.fetch_member(int(discord_id))
+                except (discord.NotFound, discord.HTTPException, ValueError):
+                    pass  # User not in Discord server or invalid ID
 
             # Build member data
             member_data = {

@@ -342,43 +342,53 @@ class AvailabilityButton(discord.ui.Button):
         # Check if user has Verified role
         verified_role = discord.utils.get(interaction.user.roles, name=self.verified_role_name)
         if not verified_role:
-            try:
-                await interaction.user.send(
-                    f"You must have the **{self.verified_role_name}** role to set availability. "
-                    f"Please use `/register` with your Torn ID first."
-                )
-            except discord.Forbidden:
-                pass  # Can't DM user
-            await interaction.response.defer()
+            await interaction.response.send_message(
+                f"You must have the **{self.verified_role_name}** role to set availability. "
+                f"Please use `/register` with your Torn ID first.",
+                ephemeral=True
+            )
             return
 
-        # Toggle availability
-        is_now_available = self.manager.toggle_availability(
-            self.poll_id,
-            self.block['id'],
-            interaction.user.id
-        )
-        await self.manager.save_data()
+        try:
+            # Toggle availability
+            is_now_available = self.manager.toggle_availability(
+                self.poll_id,
+                self.block['id'],
+                interaction.user.id
+            )
+            await self.manager.save_data()
 
-        # Update all button labels with current counts (visible to everyone)
-        for item in self.view.children:
-            if isinstance(item, AvailabilityButton):
-                btn_count = self.manager.get_block_count(self.poll_id, item.block['id'])
-                item.label = f"{item.block['label']} ({btn_count})"
-                # Keep all buttons neutral gray - style is shared across all users
-                item.style = discord.ButtonStyle.secondary
+            # Update all button labels with current counts (visible to everyone)
+            for item in self.view.children:
+                if isinstance(item, AvailabilityButton):
+                    btn_count = self.manager.get_block_count(self.poll_id, item.block['id'])
+                    item.label = f"{item.block['label']} ({btn_count})"
+                    # Keep all buttons neutral gray - style is shared across all users
+                    item.style = discord.ButtonStyle.secondary
 
-        # Update the message
-        await interaction.response.edit_message(view=self.view)
+            # Update the message
+            await interaction.response.edit_message(view=self.view)
 
-        # Send ephemeral feedback with both local and TCT time
-        time_display = f"<t:{self.block['start_unix']}:t> ({self.block['start_time']}–{self.block['end_time']} TCT)"
-        if is_now_available:
-            status = f"✅ You're now **available** for {time_display}"
-        else:
-            status = f"❌ You're now **unavailable** for {time_display}"
+            # Send ephemeral feedback with both local and TCT time
+            time_display = f"<t:{self.block['start_unix']}:t> ({self.block['start_time']}–{self.block['end_time']} TCT)"
+            if is_now_available:
+                status = f"✅ You're now **available** for {time_display}"
+            else:
+                status = f"❌ You're now **unavailable** for {time_display}"
 
-        await interaction.followup.send(status, ephemeral=True)
+            await interaction.followup.send(status, ephemeral=True)
+
+        except discord.NotFound:
+            # Poll message was deleted
+            await interaction.response.send_message(
+                "This availability poll no longer exists.", ephemeral=True
+            )
+        except Exception as e:
+            print(f'Error in availability button callback: {e}')
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    "Something went wrong. Please try again.", ephemeral=True
+                )
 
 
 async def setup_availability_commands(bot, manager: AvailabilityManager, verified_role_name: str):

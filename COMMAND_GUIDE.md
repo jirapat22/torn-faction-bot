@@ -119,17 +119,17 @@ Manage enemy watchlist during war.
 
 ---
 
-## Availability Commands (Requires Verified Role)
+## Availability Commands
 
 ### `/avail_setup <start_date> <start_time> <end_time> [end_date] [block_length]`
-Create an availability poll for war/chain planning.
+Create an availability poll for war/chain planning. *(Requires Management role)*
 - **start_date**: Start date in DD-MM-YYYY format
 - **start_time**: Start time in TCT/UTC (HH:MM, e.g. 00:00)
 - **end_time**: End time in TCT/UTC (HH:MM, e.g. 24:00)
 - **end_date**: Optional end date for multi-day events (DD-MM-YYYY)
 - **block_length**: Hours per time block (1-6, default: 2)
 - Creates buttons for each time block (labeled A-X)
-- Members click buttons to toggle availability
+- Members click buttons to toggle availability *(Requires Verified role)*
 - Shows both TCT and local time
 
 ### `/avail_summary <date>`
@@ -137,7 +137,7 @@ View an ASCII timetable of who is available when.
 - **date**: Any date within the poll range (DD-MM-YYYY)
 
 ### `/avail_delete <date>`
-Delete an availability poll.
+Delete an availability poll. *(Requires Management role)*
 - **date**: Any date within the poll to delete (DD-MM-YYYY)
 
 ### `/avail_list`

@@ -71,10 +71,13 @@ class WarTracker:
         if not rankedwars:
             return None
 
-        # Get the first (current) war
+        # Get the first (current) war - must have started and not ended
+        now = get_current_timestamp()
         for war_id, war_data in rankedwars.items():
-            # Check if war is ongoing
-            if war_data.get('war', {}).get('end', 0) > get_current_timestamp():
+            war = war_data.get('war', {})
+            start = war.get('start', 0)
+            end = war.get('end', 0)
+            if start <= now and end > now:
                 return {
                     'war_id': war_id,
                     'data': war_data
@@ -173,13 +176,20 @@ class WarTracker:
         war_data = war_info['data']
         factions = war_data.get('factions', {})
 
-        # Find our faction's members
+        # Find our faction's members by matching TORN_FACTION_ID
         our_members = None
         for faction_id, faction_data in factions.items():
-            members = faction_data.get('members', {})
-            if members:
-                our_members = members
+            if str(faction_id) == str(TORN_FACTION_ID):
+                our_members = faction_data.get('members', {})
                 break
+
+        # Fallback: use first faction with members if ID match failed
+        if not our_members:
+            for faction_id, faction_data in factions.items():
+                members = faction_data.get('members', {})
+                if members:
+                    our_members = members
+                    break
 
         if not our_members:
             return create_embed(
@@ -513,4 +523,11 @@ class WarTracker:
             'timestamp': get_current_timestamp(),
             'factions': war_info['data'].get('factions', {})
         }
+
+        # Prune old war entries (keep last 20)
+        if len(self.war_history) > 20:
+            sorted_keys = sorted(self.war_history.keys(), key=lambda k: self.war_history[k].get('timestamp', 0))
+            for old_key in sorted_keys[:-20]:
+                del self.war_history[old_key]
+
         await self.save_war_history()

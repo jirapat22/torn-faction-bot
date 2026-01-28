@@ -148,9 +148,11 @@ class RoleSyncManager:
                 continue  # Not verified in Discord
 
             try:
-                discord_member = await guild.fetch_member(int(discord_id))
-            except:
-                continue  # Not in Discord server
+                discord_member = guild.get_member(int(discord_id))
+                if not discord_member:
+                    discord_member = await guild.fetch_member(int(discord_id))
+            except (discord.NotFound, discord.HTTPException, ValueError):
+                continue  # Not in Discord server or invalid ID
 
             position = member_data.get('position', '')
             if await self.sync_member_role(guild, discord_member, position):

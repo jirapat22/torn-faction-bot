@@ -10,6 +10,7 @@ Features:
 """
 
 import discord
+import asyncio
 from discord import app_commands
 from discord.ext import tasks
 from datetime import datetime, timezone
@@ -559,6 +560,7 @@ async def setup_verification_commands(bot, verification_system: VerificationSyst
 
                     await member_obj.add_roles(role)
                     fixed_count += 1
+                    await asyncio.sleep(1)  # Rate limit: avoid hitting Discord API limits
                 except Exception:
                     failed_count += 1
 
@@ -670,7 +672,7 @@ async def setup_verification_commands(bot, verification_system: VerificationSyst
 
         elif action == 'stats':
             total_verified = len(verification_system.verified_users)
-            total_members = guild.member_count
+            total_members = len([m for m in guild.members if not m.bot])
 
             rate = f'{(total_verified / total_members * 100):.1f}%' if total_members > 0 else '0%'
             embed = create_embed(
