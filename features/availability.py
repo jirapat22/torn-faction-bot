@@ -539,13 +539,19 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
         else:
             title = f"🕒 Availability Poll – {start_date} to {end_date}"
 
+        # Calculate countdown to event start
+        first_block = blocks[0]
+        event_start_unix = first_block['start_unix']
+        countdown_text = f"\n\n⏳ **Event starts:** <t:{event_start_unix}:R> (<t:{event_start_unix}:F>)"
+
         # Create embed
         embed = create_embed(
             title=title,
             description=(
                 f"**Select ALL time blocks when you are available.**\n\n"
                 f"Click buttons to toggle your availability.\n"
-                f"Times shown are your **local time** with TCT (Torn City Time = UTC) in parentheses.\n\n"
+                f"Times shown are your **local time** with TCT (Torn City Time = UTC) in parentheses."
+                f"{countdown_text}\n\n"
                 f"**Time Blocks:**\n" + '\n'.join(block_list)
             ),
             color=EMBED_COLOR_INFO

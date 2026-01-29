@@ -183,6 +183,15 @@ Show the current Torn City Time (UTC).
 - Welcomes new members in #welcome-pit
 - Directs them to /register and rules
 
+### Event Reminders (30-Hour Advance)
+- Checks Discord scheduled events every hour
+- Posts reminder when an event is ~30 hours away
+- Routes to appropriate channel based on event name:
+  - "Happy Jump" events → #punk-plaza
+  - "Chain" events → #chaining
+  - "War" events → #war
+  - Other events → #announcements
+
 ---
 
 ## Quick Reference
@@ -198,9 +207,10 @@ Show the current Torn City Time (UTC).
 | `/verify` | Management | Manage verification |
 | `/rolesync` | Management | Configure role sync |
 | `/enemy add/remove` | Management | Manage watchlist |
-| `/avail_setup` | Verified | Create availability poll |
-| `/avail_summary` | Verified | View availability timetable |
+| `/avail_setup` | Management | Create availability poll |
+| `/avail_summary` | Everyone | View availability timetable |
 | `/tct_now` | Everyone | Show current TCT time |
+| `/test_inactivity` | Management | Manually run inactivity check |
 
 ---
 

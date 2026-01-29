@@ -20,6 +20,7 @@ from features.subscriptions import SubscriptionManager, setup_subscription_comma
 from features.roles import RoleSyncManager, setup_rolesync_commands
 from features.enemies import EnemyWatchlist, setup_enemy_commands
 from features.availability import AvailabilityManager, setup_availability_commands, restore_availability_views
+from features.event_reminders import EventReminderManager
 from features.commands import setup_commands
 from utils.helpers import ensure_data_directories
 from utils.torn_api import verify_api_key
@@ -41,6 +42,7 @@ subscription_manager = None
 role_sync_manager = None
 enemy_watchlist = None
 availability_manager = None
+event_reminder_manager = None
 _initialized = False  # Prevent re-initialization on reconnect
 
 
@@ -49,7 +51,7 @@ async def on_ready():
     """Called when the bot successfully connects to Discord"""
     global inactivity_tracker, chain_tracker, war_tracker, verification_system
     global subscription_manager, role_sync_manager, enemy_watchlist, availability_manager
-    global _initialized
+    global event_reminder_manager, _initialized
 
     print(f'Bot logged in as {bot.user.name} (ID: {bot.user.id})')
     print(f'Connected to {len(bot.guilds)} server(s)')
@@ -117,6 +119,10 @@ async def on_ready():
     await setup_availability_commands(bot, availability_manager, VERIFIED_ROLE_NAME)
     await restore_availability_views(bot, availability_manager, VERIFIED_ROLE_NAME)
 
+    # Initialize event reminder manager (30-hour advance reminders)
+    event_reminder_manager = EventReminderManager(bot)
+    await event_reminder_manager.load_data()
+
     # Register slash commands
     await setup_commands(bot, inactivity_tracker, chain_tracker, war_tracker, verification_system)
 
@@ -152,6 +158,9 @@ async def on_ready():
 
     if not enemy_status_check.is_running():
         enemy_status_check.start()
+
+    if not event_reminder_check.is_running():
+        event_reminder_check.start()
 
     _initialized = True
     print('Bot is ready!')
@@ -249,6 +258,23 @@ async def before_enemy_check():
     """Wait until bot is ready before starting enemy check"""
     await bot.wait_until_ready()
     print('Enemy status checker started (checks every 15 minutes)')
+
+
+@tasks.loop(hours=1)
+async def event_reminder_check():
+    """Background task that runs every hour to check for events starting in ~30 hours"""
+    try:
+        if event_reminder_manager:
+            await event_reminder_manager.check_and_announce_events()
+    except Exception as e:
+        print(f'Error in event reminder check: {e}')
+
+
+@event_reminder_check.before_loop
+async def before_event_reminder_check():
+    """Wait until bot is ready before starting event reminder check"""
+    await bot.wait_until_ready()
+    print('Event reminder checker started (checks every hour for 30h advance reminders)')
 
 
 @bot.event

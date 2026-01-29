@@ -673,5 +673,35 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
         )
         await interaction.response.send_message(embed=embed, view=EventTypeView(), ephemeral=True)
 
-    print('Management commands registered (/announce, /createevent)')
+    @bot.tree.command(name='test_inactivity', description='[Management] Manually trigger inactivity check')
+    async def test_inactivity(interaction: discord.Interaction):
+        """Manually run the inactivity check (Management only)"""
+        if not is_management(interaction):
+            embed = create_embed(
+                title='Permission Denied',
+                description='You do not have permission to use this command.',
+                color=EMBED_COLOR_CRITICAL
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            await inactivity_tracker.check_and_alert_inactive()
+            embed = create_embed(
+                title='Inactivity Check Complete',
+                description='Manual inactivity check has been run. Check #inactivity-alerts for results.',
+                color=EMBED_COLOR_SUCCESS
+            )
+        except Exception as e:
+            embed = create_embed(
+                title='Error',
+                description=f'Inactivity check failed: {str(e)}',
+                color=EMBED_COLOR_CRITICAL
+            )
+
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    print('Management commands registered (/announce, /createevent, /test_inactivity)')
     print('Slash commands registered')
