@@ -3,11 +3,16 @@ Torn Faction Discord Bot - Main Entry Point
 Full featured bot with war tracking, chain tracking, verification, and more
 """
 
+import sys
+# Force unbuffered output for Railway logs
+sys.stdout.reconfigure(line_buffering=True)
+
 import discord
 from discord.ext import commands, tasks
 import asyncio
 import os
 import time
+import traceback
 from datetime import datetime, timezone
 
 # Import our modules
@@ -53,117 +58,122 @@ async def on_ready():
     global subscription_manager, role_sync_manager, enemy_watchlist, availability_manager
     global event_reminder_manager, _initialized
 
-    print(f'Bot logged in as {bot.user.name} (ID: {bot.user.id})')
-    print(f'Connected to {len(bot.guilds)} server(s)')
-    print('------')
-
-    # Skip full initialization on reconnect to preserve in-memory state
-    if _initialized:
-        print('Reconnected - skipping re-initialization')
-        return
-
-    # Ensure data directories exist
-    ensure_data_directories()
-
-    # Verify Torn API key
-    print('Verifying Torn API key...')
-    api_valid = await verify_api_key()
-    if api_valid:
-        print('Torn API key verified successfully!')
-    else:
-        print('WARNING: Torn API key is invalid or faction ID is wrong!')
-        print('Please check TORN_API_KEY and TORN_FACTION_ID in config.py')
-
-    # Initialize subscription manager (needed by other modules)
-    subscription_manager = SubscriptionManager(bot)
-    await subscription_manager.load_subscriptions()
-    await setup_subscription_commands(bot, subscription_manager)
-
-    # Initialize inactivity tracker
-    inactivity_tracker = InactivityTracker(bot)
-    await inactivity_tracker.load_user_mapping()
-
-    # Initialize chain tracker
-    chain_tracker = ChainTracker(bot)
-    chain_tracker.subscription_manager = subscription_manager
-    await chain_tracker.load_chain_history()
-
-    # Initialize war tracker
-    war_tracker = WarTracker(bot)
-    war_tracker.subscription_manager = subscription_manager
-    await war_tracker.load_war_history()
-
-    # Initialize verification system
-    verification_system = VerificationSystem(bot)
-    verification_system.inactivity_tracker = inactivity_tracker  # Sync both databases
-    await verification_system.load_config()
-    await setup_verification_commands(bot, verification_system)
-
-    # Initialize role sync manager
-    role_sync_manager = RoleSyncManager(bot)
-    await role_sync_manager.load_config()
-    await setup_rolesync_commands(bot, role_sync_manager)
-
-    # Initialize enemy watchlist
-    enemy_watchlist = EnemyWatchlist(bot, subscription_manager)
-    await enemy_watchlist.load_watchlist()
-    await setup_enemy_commands(bot, enemy_watchlist)
-
-    # Link enemy watchlist to war tracker for auto-clear
-    war_tracker.enemy_watchlist = enemy_watchlist
-
-    # Initialize availability polling system
-    from config import VERIFIED_ROLE_NAME
-    availability_manager = AvailabilityManager(bot)
-    await availability_manager.load_data()
-    await setup_availability_commands(bot, availability_manager, VERIFIED_ROLE_NAME)
-    await restore_availability_views(bot, availability_manager, VERIFIED_ROLE_NAME)
-
-    # Initialize event reminder manager (30-hour advance reminders)
-    event_reminder_manager = EventReminderManager(bot)
-    await event_reminder_manager.load_data()
-
-    # Register slash commands
-    await setup_commands(bot, inactivity_tracker, chain_tracker, war_tracker, verification_system)
-
-    # Sync slash commands with Discord (guild-specific for instant updates)
-    from config import GUILD_ID
     try:
-        guild = discord.Object(id=GUILD_ID)
+        print(f'Bot logged in as {bot.user.name} (ID: {bot.user.id})')
+        print(f'Connected to {len(bot.guilds)} server(s)')
+        print('------')
 
-        # Step 1: Copy commands to guild FIRST (before clearing)
-        bot.tree.copy_global_to(guild=guild)
-        synced = await bot.tree.sync(guild=guild)
-        print(f'Synced {len(synced)} slash command(s) to guild {GUILD_ID}')
+        # Skip full initialization on reconnect to preserve in-memory state
+        if _initialized:
+            print('Reconnected - skipping re-initialization')
+            return
 
-        # Step 2: Clear global commands (removes duplicates from other servers)
-        bot.tree.clear_commands(guild=None)
-        await bot.tree.sync()  # Sync empty global
-        print('Global commands cleared - no more duplicates')
+        # Ensure data directories exist
+        ensure_data_directories()
+
+        # Verify Torn API key
+        print('Verifying Torn API key...')
+        api_valid = await verify_api_key()
+        if api_valid:
+            print('Torn API key verified successfully!')
+        else:
+            print('WARNING: Torn API key is invalid or faction ID is wrong!')
+            print('Please check TORN_API_KEY and TORN_FACTION_ID in config.py')
+
+        # Initialize subscription manager (needed by other modules)
+        subscription_manager = SubscriptionManager(bot)
+        await subscription_manager.load_subscriptions()
+        await setup_subscription_commands(bot, subscription_manager)
+
+        # Initialize inactivity tracker
+        inactivity_tracker = InactivityTracker(bot)
+        await inactivity_tracker.load_user_mapping()
+
+        # Initialize chain tracker
+        chain_tracker = ChainTracker(bot)
+        chain_tracker.subscription_manager = subscription_manager
+        await chain_tracker.load_chain_history()
+
+        # Initialize war tracker
+        war_tracker = WarTracker(bot)
+        war_tracker.subscription_manager = subscription_manager
+        await war_tracker.load_war_history()
+
+        # Initialize verification system
+        verification_system = VerificationSystem(bot)
+        verification_system.inactivity_tracker = inactivity_tracker  # Sync both databases
+        await verification_system.load_config()
+        await setup_verification_commands(bot, verification_system)
+
+        # Initialize role sync manager
+        role_sync_manager = RoleSyncManager(bot)
+        await role_sync_manager.load_config()
+        await setup_rolesync_commands(bot, role_sync_manager)
+
+        # Initialize enemy watchlist
+        enemy_watchlist = EnemyWatchlist(bot, subscription_manager)
+        await enemy_watchlist.load_watchlist()
+        await setup_enemy_commands(bot, enemy_watchlist)
+
+        # Link enemy watchlist to war tracker for auto-clear
+        war_tracker.enemy_watchlist = enemy_watchlist
+
+        # Initialize availability polling system
+        from config import VERIFIED_ROLE_NAME
+        availability_manager = AvailabilityManager(bot)
+        await availability_manager.load_data()
+        await setup_availability_commands(bot, availability_manager, VERIFIED_ROLE_NAME)
+        await restore_availability_views(bot, availability_manager, VERIFIED_ROLE_NAME)
+
+        # Initialize event reminder manager (30-hour advance reminders)
+        event_reminder_manager = EventReminderManager(bot)
+        await event_reminder_manager.load_data()
+
+        # Register slash commands
+        await setup_commands(bot, inactivity_tracker, chain_tracker, war_tracker, verification_system)
+
+        # Sync slash commands with Discord (guild-specific for instant updates)
+        from config import GUILD_ID
+        try:
+            guild = discord.Object(id=GUILD_ID)
+
+            # Step 1: Copy commands to guild FIRST (before clearing)
+            bot.tree.copy_global_to(guild=guild)
+            synced = await bot.tree.sync(guild=guild)
+            print(f'Synced {len(synced)} slash command(s) to guild {GUILD_ID}')
+
+            # Step 2: Clear global commands (removes duplicates from other servers)
+            bot.tree.clear_commands(guild=None)
+            await bot.tree.sync()  # Sync empty global
+            print('Global commands cleared - no more duplicates')
+        except Exception as e:
+            print(f'Failed to sync commands: {e}')
+
+        # Start background tasks
+        if not daily_inactivity_check.is_running():
+            daily_inactivity_check.start()
+
+        if not chain_update_check.is_running():
+            chain_update_check.start()
+
+        if not war_update_check.is_running():
+            war_update_check.start()
+
+        if not role_sync_check.is_running():
+            role_sync_check.start()
+
+        if not enemy_status_check.is_running():
+            enemy_status_check.start()
+
+        if not event_reminder_check.is_running():
+            event_reminder_check.start()
+
+        _initialized = True
+        print('Bot is ready!')
+
     except Exception as e:
-        print(f'Failed to sync commands: {e}')
-
-    # Start background tasks
-    if not daily_inactivity_check.is_running():
-        daily_inactivity_check.start()
-
-    if not chain_update_check.is_running():
-        chain_update_check.start()
-
-    if not war_update_check.is_running():
-        war_update_check.start()
-
-    if not role_sync_check.is_running():
-        role_sync_check.start()
-
-    if not enemy_status_check.is_running():
-        enemy_status_check.start()
-
-    if not event_reminder_check.is_running():
-        event_reminder_check.start()
-
-    _initialized = True
-    print('Bot is ready!')
+        print(f'CRITICAL ERROR in on_ready: {e}')
+        traceback.print_exc()
 
 
 @tasks.loop(hours=24)
