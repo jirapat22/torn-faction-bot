@@ -20,6 +20,7 @@ from config import (
     INACTIVITY_CRITICAL_DAYS,
     EMBED_COLOR_WARNING,
     EMBED_COLOR_CRITICAL,
+    EMBED_COLOR_SUCCESS,
     GUILD_ID,
     MANAGEMENT_PING_ROLE_ID
 )
@@ -205,16 +206,12 @@ class InactivityTracker:
             elif days_inactive >= INACTIVITY_WARNING_DAYS:
                 warning_members.append(member_data)
 
-        # Send alerts if there are inactive members
+        # Always post daily summary
         total_inactive = len(warning_members) + len(critical_members)
         total_checked = len(torn_members)
 
-        if warning_members or critical_members:
-            print(f'Found {total_inactive} inactive members out of {total_checked} total')
-            await self._send_inactivity_alert(channel, warning_members, critical_members, total_checked)
-        else:
-            # Don't spam channel when everyone is active - just log it
-            print(f'All {total_checked} faction members are active! (no alert needed)')
+        print(f'Inactivity check: {total_inactive} inactive out of {total_checked} total')
+        await self._send_inactivity_alert(channel, warning_members, critical_members, total_checked)
 
     async def _send_inactivity_alert(self, channel, warning_members, critical_members, total_faction_members):
         """
@@ -227,9 +224,20 @@ class InactivityTracker:
             critical_members: List of members inactive for 5+ days
             total_faction_members: Total number of faction members checked
         """
-        # Ping management role if configured
-        if MANAGEMENT_PING_ROLE_ID:
+        # Only ping management if there are inactive members
+        if MANAGEMENT_PING_ROLE_ID and (warning_members or critical_members):
             await channel.send(f'<@&{MANAGEMENT_PING_ROLE_ID}>')
+
+        # If everyone is active, post a positive summary
+        if not warning_members and not critical_members:
+            active_embed = create_embed(
+                title='✅ Daily Inactivity Check',
+                description=f'All **{total_faction_members}** faction members are active!\n\nNo one has been inactive for {INACTIVITY_WARNING_DAYS}+ days.',
+                color=EMBED_COLOR_SUCCESS
+            )
+            await channel.send(embed=active_embed)
+            print(f'Posted daily check - all {total_faction_members} members active')
+            return
 
         # Send critical alerts
         if critical_members:
