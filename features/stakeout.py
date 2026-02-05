@@ -551,9 +551,12 @@ async def setup_stakeout_commands(bot, manager: StakeoutManager):
 
         await interaction.response.defer(ephemeral=True)
 
+        # Cap hours at valid range
+        actual_hours = min(max(hours, 1), 48)
+
         success, message, name = await manager.add_stakeout(
             torn_id=torn_id,
-            duration_hours=hours,
+            duration_hours=actual_hours,
             added_by=interaction.user.id
         )
 
@@ -565,7 +568,7 @@ async def setup_stakeout_commands(bot, manager: StakeoutManager):
             )
             embed.add_field(
                 name='Duration',
-                value=f'{hours} hours',
+                value=f'{actual_hours} hours',
                 inline=True
             )
             embed.add_field(
@@ -615,6 +618,30 @@ async def setup_stakeout_commands(bot, manager: StakeoutManager):
                 color=EMBED_COLOR_WARNING
             )
 
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @stakeout_group.command(name='clear', description='[Management] Clear all stakeouts (use to fix corrupted data)')
+    async def stakeout_clear(interaction: discord.Interaction):
+        """Clear all stakeouts"""
+        if not is_management(interaction):
+            embed = create_embed(
+                title='Permission Denied',
+                description='You do not have permission to use this command.',
+                color=EMBED_COLOR_CRITICAL
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        count = len(manager.stakeouts)
+        manager.stakeouts = {}
+        manager.history = {}
+        await manager.save_data()
+
+        embed = create_embed(
+            title='Stakeouts Cleared',
+            description=f'Cleared {count} stakeout(s) and all history data.',
+            color=EMBED_COLOR_SUCCESS
+        )
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @stakeout_group.command(name='list', description='Show all active stakeouts')
