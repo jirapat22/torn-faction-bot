@@ -144,7 +144,7 @@ class StakeoutManager:
         # Fetch player info to validate ID and get name
         player_data = await self._fetch_player_status(torn_id)
         if not player_data:
-            return False, 'Could not find player. Check the Torn ID.', None
+            return False, 'Could not find player. Check the Torn ID and ensure TORN_PERSONAL_API_KEY is set correctly.', None
 
         player_name = player_data.get('name', 'Unknown')
 
@@ -192,7 +192,10 @@ class StakeoutManager:
 
     async def _fetch_player_status(self, torn_id: str) -> Optional[Dict]:
         """Fetch player status from Torn API"""
-        return await fetch_player_data(torn_id, selections='profile,travel')
+        data = await fetch_player_data(torn_id, selections='profile,travel')
+        if not data:
+            print(f'Stakeout: Failed to fetch player {torn_id} - check TORN_PERSONAL_API_KEY')
+        return data
 
     def _determine_status(self, player_data: Dict) -> tuple:
         """
@@ -722,6 +725,50 @@ async def setup_stakeout_commands(bot, manager: StakeoutManager):
 
         await interaction.followup.send(content=f'```\n{heatmap_text}\n```', embed=embed)
 
+    @stakeout_group.command(name='test', description='[Management] Test API connectivity for stakeout')
+    async def stakeout_test(interaction: discord.Interaction):
+        """Test if personal API key is working"""
+        if not is_management(interaction):
+            embed = create_embed(
+                title='Permission Denied',
+                description='You do not have permission to use this command.',
+                color=EMBED_COLOR_CRITICAL
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        from config import TORN_PERSONAL_API_KEY
+
+        # Check if key is configured
+        if not TORN_PERSONAL_API_KEY:
+            embed = create_embed(
+                title='❌ API Key Missing',
+                description='`TORN_PERSONAL_API_KEY` is not set in environment variables.\n\nPlease add your personal Torn API key to Railway.',
+                color=EMBED_COLOR_CRITICAL
+            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            return
+
+        # Try to fetch a test player (use a known ID like the user's own)
+        test_data = await fetch_player_data('1', selections='profile')
+
+        if test_data:
+            embed = create_embed(
+                title='✅ API Connection Working',
+                description=f"Successfully connected to Torn API.\n\nTest player: **{test_data.get('name', 'Unknown')}**",
+                color=EMBED_COLOR_SUCCESS
+            )
+        else:
+            embed = create_embed(
+                title='❌ API Connection Failed',
+                description='Could not connect to Torn API. The personal API key may be invalid or expired.\n\nCheck Railway logs for more details.',
+                color=EMBED_COLOR_CRITICAL
+            )
+
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
     # Add group to bot
     bot.tree.add_command(stakeout_group)
-    print('Stakeout commands registered (/stakeout add, list, report, stop)')
+    print('Stakeout commands registered (/stakeout add, list, report, stop, test)')
