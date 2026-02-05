@@ -117,6 +117,18 @@ Manage enemy watchlist during war.
 - `check` - Force check all enemy statuses
 - `clear` - Clear entire watchlist
 
+### `/stakeout <action>`
+Track enemy behavior patterns over 24-48 hours.
+- `add <torn_id> [hours]` - Start watching a player (default 24h, max 48h)
+- `list` - Show all active stakeouts
+- `report <torn_id>` - View behavior analysis with:
+  - Activity heatmap by hour (TCT)
+  - Detected sleep window
+  - Best attack windows
+  - Estimated timezone
+  - Online/hospital rates
+- `stop <torn_id>` - Stop watching (keeps history for reports)
+
 ---
 
 ## Availability Commands
@@ -207,6 +219,8 @@ Show the current Torn City Time (UTC).
 | `/verify` | Management | Manage verification |
 | `/rolesync` | Management | Configure role sync |
 | `/enemy add/remove` | Management | Manage watchlist |
+| `/stakeout add/stop` | Management | Track enemy behavior |
+| `/stakeout report` | Everyone | View behavior analysis |
 | `/avail_setup` | Management | Create availability poll |
 | `/avail_summary` | Everyone | View availability timetable |
 | `/tct_now` | Everyone | Show current TCT time |

@@ -26,6 +26,7 @@ from features.roles import RoleSyncManager, setup_rolesync_commands
 from features.enemies import EnemyWatchlist, setup_enemy_commands
 from features.availability import AvailabilityManager, setup_availability_commands, restore_availability_views
 from features.event_reminders import EventReminderManager
+from features.stakeout import StakeoutManager, setup_stakeout_commands
 from features.commands import setup_commands
 from utils.helpers import ensure_data_directories
 from utils.torn_api import verify_api_key
@@ -48,6 +49,7 @@ role_sync_manager = None
 enemy_watchlist = None
 availability_manager = None
 event_reminder_manager = None
+stakeout_manager = None
 _initialized = False  # Prevent re-initialization on reconnect
 
 
@@ -56,7 +58,7 @@ async def on_ready():
     """Called when the bot successfully connects to Discord"""
     global inactivity_tracker, chain_tracker, war_tracker, verification_system
     global subscription_manager, role_sync_manager, enemy_watchlist, availability_manager
-    global event_reminder_manager, _initialized
+    global event_reminder_manager, stakeout_manager, _initialized
 
     try:
         print(f'Bot logged in as {bot.user.name} (ID: {bot.user.id})')
@@ -129,6 +131,11 @@ async def on_ready():
         event_reminder_manager = EventReminderManager(bot)
         await event_reminder_manager.load_data()
 
+        # Initialize stakeout manager (enemy behavior tracking)
+        stakeout_manager = StakeoutManager(bot)
+        await stakeout_manager.load_data()
+        await setup_stakeout_commands(bot, stakeout_manager)
+
         # Register slash commands
         await setup_commands(bot, inactivity_tracker, chain_tracker, war_tracker, verification_system)
 
@@ -167,6 +174,9 @@ async def on_ready():
 
         if not event_reminder_check.is_running():
             event_reminder_check.start()
+
+        if not stakeout_check.is_running():
+            stakeout_check.start()
 
         _initialized = True
         print('Bot is ready!')
@@ -285,6 +295,23 @@ async def before_event_reminder_check():
     """Wait until bot is ready before starting event reminder check"""
     await bot.wait_until_ready()
     print('Event reminder checker started (checks every hour for 30h advance reminders)')
+
+
+@tasks.loop(minutes=15)
+async def stakeout_check():
+    """Background task that runs every 15 minutes to check stakeout targets"""
+    try:
+        if stakeout_manager and stakeout_manager.get_stakeout_count() > 0:
+            await stakeout_manager.check_all_stakeouts()
+    except Exception as e:
+        print(f'Error in stakeout check: {e}')
+
+
+@stakeout_check.before_loop
+async def before_stakeout_check():
+    """Wait until bot is ready before starting stakeout check"""
+    await bot.wait_until_ready()
+    print('Stakeout checker started (checks every 15 minutes)')
 
 
 @bot.event
