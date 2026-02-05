@@ -48,15 +48,18 @@ class AllianceManager:
 
     async def load_data(self):
         """Load alliance data from JSON"""
+        # Default channel: alliance-monitor-beta
+        DEFAULT_ALLIANCE_CHANNEL = 1468903679040950427
+
         data = load_json(self.data_file, default={
             'allies': {},
-            'channel_id': 0,
+            'channel_id': DEFAULT_ALLIANCE_CHANNEL,
             'active_wars': {},
             'announced_wars': [],
             'announced_scheduled': []
         })
         self.allies = data.get('allies', {})
-        self.channel_id = data.get('channel_id', 0)
+        self.channel_id = data.get('channel_id', DEFAULT_ALLIANCE_CHANNEL) or DEFAULT_ALLIANCE_CHANNEL
         self.active_wars = data.get('active_wars', {})
         self.announced_wars = set(data.get('announced_wars', []))
         self.announced_scheduled = set(data.get('announced_scheduled', []))
