@@ -129,6 +129,13 @@ Track enemy behavior patterns over 24-48 hours.
   - Online/hospital rates
 - `stop <torn_id>` - Stop watching (keeps history for reports)
 
+### `/alliance <action>`
+Track ally faction wars and get announcements.
+- `add <faction_id> [faction_name]` - Add an ally faction to track
+- `remove <faction_id>` - Remove an ally from tracking
+- `list` - Show all tracked ally factions with war status
+- `status <faction_id>` - Check specific ally's current war status
+
 ---
 
 ## Availability Commands
@@ -204,6 +211,13 @@ Show the current Torn City Time (UTC).
   - "War" events → #war
   - Other events → #announcements
 
+### Alliance War Tracking
+- Checks ally factions every 5 minutes
+- Announces when ally war is scheduled (with countdown timer)
+- Announces when ally war starts
+- Announces when ally war ends (win/loss/draw with score)
+- Posts to #war channel
+
 ---
 
 ## Quick Reference
@@ -221,6 +235,8 @@ Show the current Torn City Time (UTC).
 | `/enemy add/remove` | Management | Manage watchlist |
 | `/stakeout add/stop` | Management | Track enemy behavior |
 | `/stakeout report` | Everyone | View behavior analysis |
+| `/alliance add/remove` | Management | Track ally factions |
+| `/alliance list/status` | Everyone | View ally war status |
 | `/avail_setup` | Management | Create availability poll |
 | `/avail_summary` | Everyone | View availability timetable |
 | `/tct_now` | Everyone | Show current TCT time |
@@ -228,5 +244,5 @@ Show the current Torn City Time (UTC).
 
 ---
 
-*Last updated: January 2026*
+*Last updated: February 2026*
 *Bot by Ascended Punks*

@@ -27,6 +27,7 @@ from features.enemies import EnemyWatchlist, setup_enemy_commands
 from features.availability import AvailabilityManager, setup_availability_commands, restore_availability_views
 from features.event_reminders import EventReminderManager
 from features.stakeout import StakeoutManager, setup_stakeout_commands
+from features.alliance import AllianceManager, setup_alliance_commands
 from features.commands import setup_commands
 from utils.helpers import ensure_data_directories
 from utils.torn_api import verify_api_key
@@ -50,6 +51,7 @@ enemy_watchlist = None
 availability_manager = None
 event_reminder_manager = None
 stakeout_manager = None
+alliance_manager = None
 _initialized = False  # Prevent re-initialization on reconnect
 
 
@@ -58,7 +60,7 @@ async def on_ready():
     """Called when the bot successfully connects to Discord"""
     global inactivity_tracker, chain_tracker, war_tracker, verification_system
     global subscription_manager, role_sync_manager, enemy_watchlist, availability_manager
-    global event_reminder_manager, stakeout_manager, _initialized
+    global event_reminder_manager, stakeout_manager, alliance_manager, _initialized
 
     try:
         print(f'Bot logged in as {bot.user.name} (ID: {bot.user.id})')
@@ -136,6 +138,11 @@ async def on_ready():
         await stakeout_manager.load_data()
         await setup_stakeout_commands(bot, stakeout_manager)
 
+        # Initialize alliance manager (ally faction war tracking)
+        alliance_manager = AllianceManager(bot)
+        await alliance_manager.load_data()
+        await setup_alliance_commands(bot, alliance_manager)
+
         # Register slash commands
         await setup_commands(bot, inactivity_tracker, chain_tracker, war_tracker, verification_system)
 
@@ -177,6 +184,9 @@ async def on_ready():
 
         if not stakeout_check.is_running():
             stakeout_check.start()
+
+        if not alliance_war_check.is_running():
+            alliance_war_check.start()
 
         _initialized = True
         print('Bot is ready!')
@@ -312,6 +322,23 @@ async def before_stakeout_check():
     """Wait until bot is ready before starting stakeout check"""
     await bot.wait_until_ready()
     print('Stakeout checker started (checks every 15 minutes)')
+
+
+@tasks.loop(minutes=5)
+async def alliance_war_check():
+    """Background task that runs every 5 minutes to check ally faction wars"""
+    try:
+        if alliance_manager and alliance_manager.get_ally_count() > 0:
+            await alliance_manager.check_ally_wars()
+    except Exception as e:
+        print(f'Error in alliance war check: {e}')
+
+
+@alliance_war_check.before_loop
+async def before_alliance_war_check():
+    """Wait until bot is ready before starting alliance war check"""
+    await bot.wait_until_ready()
+    print('Alliance war checker started (checks every 5 minutes)')
 
 
 @bot.event
