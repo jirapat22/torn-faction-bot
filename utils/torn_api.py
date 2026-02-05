@@ -53,8 +53,12 @@ async def _make_api_request(endpoint, params=None, use_personal_key=False):
     cache_key = f"{endpoint}_{str(params)}"
 
     # Add API key to params (use personal key for user lookups if configured)
-    if use_personal_key and TORN_PERSONAL_API_KEY:
-        params['key'] = TORN_PERSONAL_API_KEY
+    if use_personal_key:
+        if TORN_PERSONAL_API_KEY:
+            params['key'] = TORN_PERSONAL_API_KEY
+        else:
+            print(f'WARNING: TORN_PERSONAL_API_KEY not set, falling back to faction key for {endpoint}')
+            params['key'] = TORN_API_KEY
     else:
         params['key'] = TORN_API_KEY
 
