@@ -132,7 +132,11 @@ class StakeoutManager:
         Returns:
             (success: bool, message: str, player_name: str or None)
         """
-        torn_id = str(torn_id)
+        torn_id = str(torn_id).strip()
+
+        # Validate torn_id is numeric
+        if not torn_id.isdigit():
+            return False, f'Invalid Torn ID: must be a number (got: {torn_id})', None
 
         # Check if already being watched
         if torn_id in self.stakeouts:
@@ -167,7 +171,7 @@ class StakeoutManager:
         await self._record_status(torn_id, player_data)
 
         await self.save_data()
-        print(f'Stakeout added: {torn_id} - Active stakeouts: {list(self.stakeouts.keys())}')
+        print(f'Stakeout added: {torn_id} ({player_name})')
 
         return True, f'Now watching **{player_name}** [{torn_id}] for {duration_hours} hours.', player_name
 
@@ -178,13 +182,10 @@ class StakeoutManager:
         Returns:
             (success: bool, message: str)
         """
-        torn_id = str(torn_id)
-
-        # Debug logging
-        print(f'Stakeout remove: Looking for {torn_id} in {list(self.stakeouts.keys())}')
+        torn_id = str(torn_id).strip()
 
         if torn_id not in self.stakeouts:
-            return False, f'This player is not being watched. (Active: {list(self.stakeouts.keys())})'
+            return False, 'This player is not being watched.'
 
         name = self.stakeouts[torn_id].get('name', torn_id)
         del self.stakeouts[torn_id]
@@ -313,7 +314,7 @@ class StakeoutManager:
 
         Returns analysis dict or None if no data
         """
-        torn_id = str(torn_id)
+        torn_id = str(torn_id).strip()
 
         history = self.history.get(torn_id, [])
         if not history:
@@ -814,4 +815,4 @@ async def setup_stakeout_commands(bot, manager: StakeoutManager):
 
     # Add group to bot
     bot.tree.add_command(stakeout_group)
-    print('Stakeout commands registered (/stakeout add, list, report, stop, test)')
+    print('Stakeout commands registered (/stakeout add, stop, list, report, clear, test)')
