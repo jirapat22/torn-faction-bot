@@ -566,9 +566,13 @@ async def setup_stakeout_commands(bot, manager: StakeoutManager):
                 description=message,
                 color=EMBED_COLOR_SUCCESS
             )
+            # Show duration with note if capped
+            duration_note = f'{actual_hours} hours'
+            if hours > 48:
+                duration_note += ' (max 48h)'
             embed.add_field(
                 name='Duration',
-                value=f'{actual_hours} hours',
+                value=duration_note,
                 inline=True
             )
             embed.add_field(
