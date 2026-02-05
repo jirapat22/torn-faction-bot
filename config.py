@@ -34,7 +34,8 @@ GENERAL_CHANNEL_ID = int(os.getenv("GENERAL_CHANNEL_ID", "0"))  # punk-plaza
 
 # ===== TORN API SETTINGS =====
 # Get your Torn API key from: https://www.torn.com/preferences.php#tab=api
-TORN_API_KEY = os.getenv("TORN_API_KEY")
+TORN_API_KEY = os.getenv("TORN_API_KEY")  # Faction API key for faction data
+TORN_PERSONAL_API_KEY = os.getenv("TORN_PERSONAL_API_KEY")  # Personal API key for user lookups (stakeout)
 TORN_FACTION_ID = int(os.getenv("TORN_FACTION_ID", "0"))
 
 # ===== BOT SETTINGS =====

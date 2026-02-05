@@ -5,7 +5,7 @@ Handles all API calls to Torn.com
 
 import aiohttp
 import time
-from config import TORN_API_KEY, TORN_FACTION_ID, TORN_API_CACHE_SECONDS
+from config import TORN_API_KEY, TORN_PERSONAL_API_KEY, TORN_FACTION_ID, TORN_API_CACHE_SECONDS
 
 # API cache to prevent rate limiting
 # Format: {cache_key: {'data': data, 'timestamp': timestamp}}
@@ -34,13 +34,14 @@ def _prune_cache():
         del api_cache[k]
 
 
-async def _make_api_request(endpoint, params=None):
+async def _make_api_request(endpoint, params=None, use_personal_key=False):
     """
     Internal function to make API requests with caching and error handling
 
     Args:
         endpoint: API endpoint (e.g., 'faction', 'user')
         params: Dict of query parameters
+        use_personal_key: If True, use TORN_PERSONAL_API_KEY instead of faction key
 
     Returns:
         Dict with API response or None if error
@@ -51,8 +52,11 @@ async def _make_api_request(endpoint, params=None):
     # Create cache key before adding API key (avoid key in logs/cache strings)
     cache_key = f"{endpoint}_{str(params)}"
 
-    # Add API key to params
-    params['key'] = TORN_API_KEY
+    # Add API key to params (use personal key for user lookups if configured)
+    if use_personal_key and TORN_PERSONAL_API_KEY:
+        params['key'] = TORN_PERSONAL_API_KEY
+    else:
+        params['key'] = TORN_API_KEY
 
     # Check cache
     if cache_key in api_cache:
@@ -205,13 +209,14 @@ async def get_member_last_action(torn_id):
     return member.get('last_action', {}).get('timestamp')
 
 
-async def fetch_player_data(torn_id, selections='profile'):
+async def fetch_player_data(torn_id, selections='profile', use_personal_key=True):
     """
-    Fetch player data for any Torn player (for verification)
+    Fetch player data for any Torn player (for verification, stakeout, etc.)
 
     Args:
         torn_id: Torn user ID
         selections: API selections (default 'profile', can use 'profile,travel' etc.)
+        use_personal_key: If True, use personal API key for user lookups (default True)
 
     Returns:
         Dict with player data or None if error
@@ -219,7 +224,8 @@ async def fetch_player_data(torn_id, selections='profile'):
     """
     data = await _make_api_request(
         f'user/{torn_id}',
-        {'selections': selections}
+        {'selections': selections},
+        use_personal_key=use_personal_key
     )
 
     return data
