@@ -726,7 +726,8 @@ async def setup_stakeout_commands(bot, manager: StakeoutManager):
         await interaction.followup.send(content=f'```\n{heatmap_text}\n```', embed=embed)
 
     @stakeout_group.command(name='test', description='[Management] Test API connectivity for stakeout')
-    async def stakeout_test(interaction: discord.Interaction):
+    @app_commands.describe(torn_id='Optional: Test with a specific Torn player ID')
+    async def stakeout_test(interaction: discord.Interaction, torn_id: str = '1'):
         """Test if personal API key is working"""
         if not is_management(interaction):
             embed = create_embed(
@@ -751,19 +752,21 @@ async def setup_stakeout_commands(bot, manager: StakeoutManager):
             await interaction.followup.send(embed=embed, ephemeral=True)
             return
 
-        # Try to fetch a test player (use a known ID like the user's own)
-        test_data = await fetch_player_data('1', selections='profile')
+        # Try to fetch the player with same selections as stakeout uses
+        test_data = await fetch_player_data(torn_id, selections='profile,travel')
 
         if test_data:
+            name = test_data.get('name', 'Unknown')
+            level = test_data.get('level', '?')
             embed = create_embed(
                 title='✅ API Connection Working',
-                description=f"Successfully connected to Torn API.\n\nTest player: **{test_data.get('name', 'Unknown')}**",
+                description=f"Successfully fetched player data.\n\n**Player:** {name} [{torn_id}]\n**Level:** {level}",
                 color=EMBED_COLOR_SUCCESS
             )
         else:
             embed = create_embed(
-                title='❌ API Connection Failed',
-                description='Could not connect to Torn API. The personal API key may be invalid or expired.\n\nCheck Railway logs for more details.',
+                title='❌ Player Fetch Failed',
+                description=f'Could not fetch player {torn_id}.\n\nPossible reasons:\n• Player ID does not exist\n• Player account is fedded/deleted\n• API rate limited\n\nCheck Railway logs for the actual error.',
                 color=EMBED_COLOR_CRITICAL
             )
 
