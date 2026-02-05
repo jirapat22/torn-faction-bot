@@ -167,6 +167,7 @@ class StakeoutManager:
         await self._record_status(torn_id, player_data)
 
         await self.save_data()
+        print(f'Stakeout added: {torn_id} - Active stakeouts: {list(self.stakeouts.keys())}')
 
         return True, f'Now watching **{player_name}** [{torn_id}] for {duration_hours} hours.', player_name
 
@@ -179,8 +180,11 @@ class StakeoutManager:
         """
         torn_id = str(torn_id)
 
+        # Debug logging
+        print(f'Stakeout remove: Looking for {torn_id} in {list(self.stakeouts.keys())}')
+
         if torn_id not in self.stakeouts:
-            return False, 'This player is not being watched.'
+            return False, f'This player is not being watched. (Active: {list(self.stakeouts.keys())})'
 
         name = self.stakeouts[torn_id].get('name', torn_id)
         del self.stakeouts[torn_id]
