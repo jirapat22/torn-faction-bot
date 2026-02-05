@@ -192,7 +192,12 @@ class StakeoutManager:
 
     async def _fetch_player_status(self, torn_id: str) -> Optional[Dict]:
         """Fetch player status from Torn API"""
+        # Try with travel selection first (gives more data)
         data = await fetch_player_data(torn_id, selections='profile,travel')
+        if not data:
+            # Fallback to just profile if travel selection fails
+            print(f'Stakeout: Retrying {torn_id} without travel selection')
+            data = await fetch_player_data(torn_id, selections='profile')
         if not data:
             print(f'Stakeout: Failed to fetch player {torn_id} - check TORN_PERSONAL_API_KEY')
         return data
