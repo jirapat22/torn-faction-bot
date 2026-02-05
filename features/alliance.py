@@ -82,7 +82,11 @@ class AllianceManager:
         Returns:
             (success: bool, message: str)
         """
-        faction_id = str(faction_id)
+        faction_id = str(faction_id).strip()
+
+        # Validate faction_id is numeric
+        if not faction_id.isdigit():
+            return False, f'Invalid faction ID: must be a number (got: {faction_id})'
 
         if faction_id in self.allies:
             return False, f'Faction {faction_id} is already being tracked.'
@@ -109,7 +113,7 @@ class AllianceManager:
         Returns:
             (success: bool, message: str)
         """
-        faction_id = str(faction_id)
+        faction_id = str(faction_id).strip()
 
         if faction_id not in self.allies:
             return False, 'This faction is not being tracked.'
