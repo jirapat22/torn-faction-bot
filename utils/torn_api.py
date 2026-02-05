@@ -205,12 +205,13 @@ async def get_member_last_action(torn_id):
     return member.get('last_action', {}).get('timestamp')
 
 
-async def fetch_player_data(torn_id):
+async def fetch_player_data(torn_id, selections='profile'):
     """
     Fetch player data for any Torn player (for verification)
 
     Args:
         torn_id: Torn user ID
+        selections: API selections (default 'profile', can use 'profile,travel' etc.)
 
     Returns:
         Dict with player data or None if error
@@ -218,7 +219,7 @@ async def fetch_player_data(torn_id):
     """
     data = await _make_api_request(
         f'user/{torn_id}',
-        {'selections': 'profile'}
+        {'selections': selections}
     )
 
     return data

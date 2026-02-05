@@ -22,16 +22,15 @@ from discord import app_commands
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, List
 from collections import defaultdict
-import aiohttp
 
 from utils.helpers import load_json, save_json, create_embed
+from utils.torn_api import fetch_player_data
 from config import (
     EMBED_COLOR_INFO,
     EMBED_COLOR_SUCCESS,
     EMBED_COLOR_WARNING,
     EMBED_COLOR_CRITICAL,
-    MANAGEMENT_ROLE_IDS,
-    TORN_API_KEY
+    MANAGEMENT_ROLE_IDS
 )
 
 
@@ -193,24 +192,7 @@ class StakeoutManager:
 
     async def _fetch_player_status(self, torn_id: str) -> Optional[Dict]:
         """Fetch player status from Torn API"""
-        try:
-            url = f'https://api.torn.com/user/{torn_id}?selections=profile,travel&key={TORN_API_KEY}'
-
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
-                async with session.get(url) as response:
-                    if response.status != 200:
-                        return None
-
-                    data = await response.json()
-
-                    if 'error' in data:
-                        return None
-
-                    return data
-
-        except Exception as e:
-            print(f'Error fetching player {torn_id}: {e}')
-            return None
+        return await fetch_player_data(torn_id, selections='profile,travel')
 
     def _determine_status(self, player_data: Dict) -> tuple:
         """
