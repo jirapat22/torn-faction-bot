@@ -170,13 +170,14 @@ class AllianceManager:
             return None
 
     async def _fetch_faction_wars(self, faction_id: str) -> Optional[Dict]:
-        """Fetch faction war data from Torn API"""
+        """Fetch faction war data from Torn API v2"""
         try:
             if not TORN_PERSONAL_API_KEY:
                 print('Alliance: TORN_PERSONAL_API_KEY not set')
                 return None
 
-            url = f'https://api.torn.com/faction/{faction_id}?selections=basic,wars&key={TORN_PERSONAL_API_KEY}'
+            # Use API v2 - wars selection requires v2
+            url = f'https://api.torn.com/v2/faction/{faction_id}?selections=basic,wars&key={TORN_PERSONAL_API_KEY}'
 
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
                 async with session.get(url) as response:
