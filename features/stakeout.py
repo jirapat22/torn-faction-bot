@@ -980,10 +980,12 @@ async def setup_stakeout_commands(bot, manager: StakeoutManager):
         embed.add_field(name='Faction', value=result.get('faction', 'None'), inline=True)
 
         remaining = result['remaining_hours']
-        if remaining > 1:
+        if remaining <= 0:
+            time_left = 'Expired'
+        elif remaining > 1:
             time_left = f'{remaining:.1f} hours'
         else:
-            time_left = f'{int(remaining * 60)} minutes'
+            time_left = f'{max(1, int(remaining * 60))} minutes'
 
         embed.add_field(name='Stakeout Remaining', value=time_left, inline=True)
         embed.add_field(name='Records Collected', value=str(result['record_count']), inline=True)
@@ -1040,7 +1042,12 @@ async def setup_stakeout_commands(bot, manager: StakeoutManager):
 
         for s in stakeouts:
             remaining = s['remaining_hours']
-            hours_str = f'{remaining:.1f}h remaining' if remaining > 1 else f'{int(remaining * 60)}m remaining'
+            if remaining <= 0:
+                hours_str = 'Expiring...'
+            elif remaining > 1:
+                hours_str = f'{remaining:.1f}h remaining'
+            else:
+                hours_str = f'{max(1, int(remaining * 60))}m remaining'
 
             embed.add_field(
                 name=f"{s['name']} [{s['torn_id']}]",

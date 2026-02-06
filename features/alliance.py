@@ -442,12 +442,25 @@ class AllianceManager:
             ally_score = 0
             enemy_score = 0
 
-            for fid, fdata in factions.items():
-                score = fdata.get('score', 0)
-                if str(fid) == str(faction_id):
-                    ally_score = score
-                else:
-                    enemy_score = score
+            # Handle both v2 (list) and v1 (dict) formats
+            if isinstance(factions, list):
+                # v2 API format: list of faction objects
+                for fdata in factions:
+                    if isinstance(fdata, dict):
+                        fid = str(fdata.get('id', ''))
+                        score = fdata.get('score', 0)
+                        if fid == str(faction_id):
+                            ally_score = score
+                        else:
+                            enemy_score = score
+            elif isinstance(factions, dict):
+                # v1 API format: dict with faction_id keys
+                for fid, fdata in factions.items():
+                    score = fdata.get('score', 0) if isinstance(fdata, dict) else 0
+                    if str(fid) == str(faction_id):
+                        ally_score = score
+                    else:
+                        enemy_score = score
 
             if ally_score > enemy_score:
                 result = 'won'

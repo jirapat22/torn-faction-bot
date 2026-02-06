@@ -54,7 +54,6 @@ class EnemyWatchlist:
                     # Check if event name contains "War" and is active/started
                     event_name = event.name.lower()
                     if 'war' in event_name:
-                        from datetime import datetime, timezone
                         now = datetime.now(timezone.utc)
 
                         # Event is active if it has started and not ended
