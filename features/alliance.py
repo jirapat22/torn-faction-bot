@@ -45,6 +45,7 @@ class AllianceManager:
         self.active_wars = {}  # {faction_id: war_data} - track ongoing wars
         self.announced_wars = set()  # War IDs that have been announced (start)
         self.announced_scheduled = set()  # War IDs announced as scheduled
+        self.announced_24h = set()  # War IDs that have had 24-hour reminder
 
     async def load_data(self):
         """Load alliance data from JSON"""
@@ -56,13 +57,15 @@ class AllianceManager:
             'channel_id': DEFAULT_ALLIANCE_CHANNEL,
             'active_wars': {},
             'announced_wars': [],
-            'announced_scheduled': []
+            'announced_scheduled': [],
+            'announced_24h': []
         })
         self.allies = data.get('allies', {})
         self.channel_id = data.get('channel_id', DEFAULT_ALLIANCE_CHANNEL) or DEFAULT_ALLIANCE_CHANNEL
         self.active_wars = data.get('active_wars', {})
         self.announced_wars = set(data.get('announced_wars', []))
         self.announced_scheduled = set(data.get('announced_scheduled', []))
+        self.announced_24h = set(data.get('announced_24h', []))
         print(f'Loaded {len(self.allies)} alliance factions to track')
 
     async def save_data(self):
@@ -72,7 +75,8 @@ class AllianceManager:
             'channel_id': self.channel_id,
             'active_wars': self.active_wars,
             'announced_wars': list(self.announced_wars),
-            'announced_scheduled': list(self.announced_scheduled)
+            'announced_scheduled': list(self.announced_scheduled),
+            'announced_24h': list(self.announced_24h)
         })
 
     async def add_ally(self, faction_id: str, name: str = None, added_by: int = None) -> tuple:
@@ -286,12 +290,19 @@ class AllianceManager:
                     enemy_id = fid
                     break
 
-        # War hasn't started yet - announce scheduled
+        # War hasn't started yet - announce scheduled and 24h reminder
         if start_time > now:
+            hours_until = (start_time - now) / 3600
+
+            # Announce immediately when war is first detected
             if war_id not in self.announced_scheduled:
-                hours_until = (start_time - now) / 3600
                 await self._announce_war_scheduled(channel, ally_name, enemy_name, start_time, hours_until)
                 self.announced_scheduled.add(war_id)
+
+            # 24-hour reminder (within 22-26 hour window to catch it reliably)
+            if war_id not in self.announced_24h and 22 <= hours_until <= 26:
+                await self._announce_war_24h_reminder(channel, ally_name, enemy_name, start_time)
+                self.announced_24h.add(war_id)
 
         # War is active (started but not ended)
         # end_time can be None or 0 for ongoing wars
@@ -334,12 +345,19 @@ class AllianceManager:
                 enemy_id = fid
                 break
 
-        # War hasn't started yet - announce scheduled
+        # War hasn't started yet - announce scheduled and 24h reminder
         if start_time > now:
+            hours_until = (start_time - now) / 3600
+
+            # Announce immediately when war is first detected
             if war_id not in self.announced_scheduled:
-                hours_until = (start_time - now) / 3600
                 await self._announce_war_scheduled(channel, ally_name, enemy_name, start_time, hours_until)
                 self.announced_scheduled.add(war_id)
+
+            # 24-hour reminder (within 22-26 hour window to catch it reliably)
+            if war_id not in self.announced_24h and 22 <= hours_until <= 26:
+                await self._announce_war_24h_reminder(channel, ally_name, enemy_name, start_time)
+                self.announced_24h.add(war_id)
 
         # War is active (started but not ended)
         # end_time can be None or 0 for ongoing wars
@@ -381,6 +399,21 @@ class AllianceManager:
 
         await channel.send(embed=embed)
         print(f'Alliance: Announced scheduled war - {ally_name} vs {enemy_name}')
+
+    async def _announce_war_24h_reminder(self, channel, ally_name: str, enemy_name: str, start_time: int):
+        """Announce 24-hour reminder for upcoming war"""
+        embed = create_embed(
+            title='⏰ Alliance War - 24 Hours',
+            description=(
+                f"**{ally_name}** vs **{enemy_name}** starts in ~24 hours!\n\n"
+                f"**Start time:** <t:{int(start_time)}:F>\n"
+                f"**Countdown:** <t:{int(start_time)}:R>"
+            ),
+            color=EMBED_COLOR_INFO
+        )
+
+        await channel.send(embed=embed)
+        print(f'Alliance: Announced 24h reminder - {ally_name} vs {enemy_name}')
 
     async def _announce_war_started(self, channel, ally_name: str, enemy_name: str):
         """Announce a war has started"""
@@ -443,6 +476,7 @@ class AllianceManager:
         if war_id:
             self.announced_wars.discard(war_id)
             self.announced_scheduled.discard(war_id)
+            self.announced_24h.discard(war_id)
 
         print(f'Alliance: Announced war {result} - {ally_name} vs {enemy_name}')
 
@@ -620,6 +654,7 @@ async def setup_alliance_commands(bot, manager: AllianceManager):
         debug_lines.append(f'**Channel ID:** {manager.channel_id}')
         debug_lines.append(f'**Announced Wars:** {list(manager.announced_wars)}')
         debug_lines.append(f'**Announced Scheduled:** {list(manager.announced_scheduled)}')
+        debug_lines.append(f'**Announced 24h:** {list(manager.announced_24h)}')
         debug_lines.append(f'**Active Wars:** {list(manager.active_wars.keys())}')
         debug_lines.append('')
 
@@ -670,9 +705,11 @@ async def setup_alliance_commands(bot, manager: AllianceManager):
                             status = 'ended'
                         announced_start = '✓' if war_id in manager.announced_wars else '✗'
                         announced_sched = '✓' if war_id in manager.announced_scheduled else '✗'
+                        announced_24h = '✓' if war_id in manager.announced_24h else '✗'
+                        hours_until = (start - now) / 3600 if start > now else 0
                         debug_lines.append(f'  - **Ranked War {war_id}:** vs {enemy_name}')
-                        debug_lines.append(f'    Status: {status} | Start announced: {announced_start} | Scheduled announced: {announced_sched}')
-                        debug_lines.append(f'    Start: {start} | End: {end} | Now: {now:.0f}')
+                        debug_lines.append(f'    Status: {status} | Sched: {announced_sched} | 24h: {announced_24h} | Start: {announced_start}')
+                        debug_lines.append(f'    Start: {start} | End: {end} | Now: {now:.0f} | Hours: {hours_until:.1f}')
                     else:
                         debug_lines.append(f'  - No active ranked war (war_id={war_id})')
                 else:
