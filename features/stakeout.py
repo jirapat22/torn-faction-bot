@@ -484,8 +484,11 @@ class StakeoutManager:
             # Fallback to hourly average method
             sleep_window = self._find_sleep_window(hourly_online, hourly_total)
 
-        # Find best attack windows (hours with lowest online ratio)
-        attack_windows = self._find_attack_windows(hourly_online, hourly_total)
+        # Find safe windows (hours with lowest online ratio - when they're offline)
+        safe_windows = self._find_attack_windows(hourly_online, hourly_total)
+
+        # Find danger windows (hours with highest online ratio - when they're active)
+        danger_windows = self._find_danger_windows(hourly_online, hourly_total)
 
         # Estimate timezone
         estimated_tz = self._estimate_timezone(sleep_window)
@@ -527,7 +530,9 @@ class StakeoutManager:
             'last_check': last_check,
             'heatmap': heatmap,
             'sleep_window': sleep_window,
-            'attack_windows': attack_windows,
+            'safe_windows': safe_windows,
+            'danger_windows': danger_windows,
+            'attack_windows': safe_windows,  # Backwards compatibility
             'estimated_tz': estimated_tz,
             'online_pct': online_pct,
             'hospital_pct': hospital_pct,
@@ -667,9 +672,9 @@ class StakeoutManager:
 
     def _find_attack_windows(self, hourly_online: Dict, hourly_total: Dict) -> List[tuple]:
         """
-        Find best attack windows (hours with lowest online ratio)
+        Find safe windows (hours with lowest online ratio) - when target is likely offline
 
-        Returns list of (hour, offline_ratio) tuples, top 3
+        Returns list of (hour, offline_ratio) tuples, top 5
         """
         windows = []
 
@@ -681,10 +686,31 @@ class StakeoutManager:
                 offline_ratio = 1 - (online / total)
                 windows.append((hour, offline_ratio))
 
-        # Sort by offline ratio descending
+        # Sort by offline ratio descending (safest hours first)
         windows.sort(key=lambda x: x[1], reverse=True)
 
-        return windows[:5]  # Top 5 best hours
+        return windows[:5]  # Top 5 safest hours
+
+    def _find_danger_windows(self, hourly_online: Dict, hourly_total: Dict) -> List[tuple]:
+        """
+        Find danger windows (hours with highest online ratio) - when target is most active
+
+        Returns list of (hour, online_ratio) tuples, top 5
+        """
+        windows = []
+
+        for hour in range(24):
+            total = hourly_total.get(hour, 0)
+            online = hourly_online.get(hour, 0)
+
+            if total >= 2:
+                online_ratio = online / total
+                windows.append((hour, online_ratio))
+
+        # Sort by online ratio descending (most dangerous first)
+        windows.sort(key=lambda x: x[1], reverse=True)
+
+        return windows[:5]  # Top 5 most dangerous hours
 
     def _estimate_timezone(self, sleep_window: Optional[tuple]) -> Optional[str]:
         """
@@ -1098,17 +1124,17 @@ async def setup_stakeout_commands(bot, manager: StakeoutManager):
             most_active = day_activity[0]
             least_active = day_activity[-1]
             embed.add_field(
-                name='Most Active Day',
-                value=f"**{most_active[0]}** ({most_active[1]:.0f}% online)",
+                name='⚠️ Most Dangerous Day',
+                value=f"**{most_active[0]}** ({most_active[1]:.0f}% active)",
                 inline=True
             )
             embed.add_field(
-                name='Least Active Day',
-                value=f"**{least_active[0]}** ({least_active[1]:.0f}% online)",
+                name='✅ Safest Day',
+                value=f"**{least_active[0]}** ({least_active[1]:.0f}% active)",
                 inline=True
             )
 
-        # Sleep window
+        # Sleep window (when they're safest)
         if report['sleep_window']:
             start, end, confidence = report['sleep_window']
             sleep_text = f"**{start:02d}:00 - {end:02d}:00 TCT** ({confidence*100:.0f}% confidence)"
@@ -1116,23 +1142,40 @@ async def setup_stakeout_commands(bot, manager: StakeoutManager):
             sleep_text = 'Not enough data yet'
 
         embed.add_field(
-            name='Likely Sleep Window',
+            name='💤 Likely Sleep Window',
             value=sleep_text,
             inline=False
         )
 
-        # Best attack times
-        if report['attack_windows']:
-            attack_text = '\n'.join([
-                f"**{hour:02d}:00 TCT** - {ratio*100:.0f}% offline"
-                for hour, ratio in report['attack_windows'][:3]
+        # Danger windows (when they're most active - WATCH OUT)
+        danger_windows = report.get('danger_windows', [])
+        if danger_windows:
+            danger_text = '\n'.join([
+                f"🔴 **{hour:02d}:00 TCT** - {ratio*100:.0f}% active"
+                for hour, ratio in danger_windows[:3]
             ])
         else:
-            attack_text = 'Not enough data yet'
+            danger_text = 'Not enough data yet'
 
         embed.add_field(
-            name='Best Attack Windows',
-            value=attack_text,
+            name='⚠️ Peak Activity (Danger)',
+            value=danger_text,
+            inline=True
+        )
+
+        # Safe windows (when they're offline)
+        safe_windows = report.get('safe_windows', report.get('attack_windows', []))
+        if safe_windows:
+            safe_text = '\n'.join([
+                f"🟢 **{hour:02d}:00 TCT** - {ratio*100:.0f}% offline"
+                for hour, ratio in safe_windows[:3]
+            ])
+        else:
+            safe_text = 'Not enough data yet'
+
+        embed.add_field(
+            name='✅ Safe Windows',
+            value=safe_text,
             inline=True
         )
 
