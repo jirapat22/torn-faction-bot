@@ -294,7 +294,8 @@ class AllianceManager:
                 self.announced_scheduled.add(war_id)
 
         # War is active (started but not ended)
-        elif start_time <= now < end_time:
+        # end_time can be None or 0 for ongoing wars
+        elif start_time <= now and (end_time is None or end_time == 0 or now < end_time):
             if war_id not in self.announced_wars:
                 await self._announce_war_started(channel, ally_name, enemy_name)
                 self.announced_wars.add(war_id)
@@ -307,8 +308,8 @@ class AllianceManager:
                 'factions': factions
             }
 
-        # War ended
-        elif end_time > 0 and now >= end_time:
+        # War ended (only if end_time is set and has passed)
+        elif end_time and end_time > 0 and now >= end_time:
             if faction_id in self.active_wars:
                 await self._handle_war_ended(channel, faction_id, ally_name, war_item)
 
@@ -341,7 +342,8 @@ class AllianceManager:
                 self.announced_scheduled.add(war_id)
 
         # War is active (started but not ended)
-        elif start_time <= now < end_time:
+        # end_time can be None or 0 for ongoing wars
+        elif start_time <= now and (end_time is None or end_time == 0 or now < end_time):
             # Announce war start
             if war_id not in self.announced_wars:
                 await self._announce_war_started(channel, ally_name, enemy_name)
@@ -356,8 +358,8 @@ class AllianceManager:
                 'factions': factions
             }
 
-        # War ended
-        elif end_time > 0 and now >= end_time:
+        # War ended (only if end_time is set and has passed)
+        elif end_time and end_time > 0 and now >= end_time:
             if faction_id in self.active_wars:
                 await self._handle_war_ended(channel, faction_id, ally_name, war_data)
 
@@ -659,7 +661,13 @@ async def setup_alliance_commands(bot, manager: AllianceManager):
                                     break
 
                     if war_id != 'unknown' and war_id != '0':
-                        status = 'scheduled' if start > now else ('active' if now < end else 'ended')
+                        # end can be None or 0 for ongoing wars
+                        if start > now:
+                            status = 'scheduled'
+                        elif end is None or end == 0 or now < end:
+                            status = 'active'
+                        else:
+                            status = 'ended'
                         announced_start = '✓' if war_id in manager.announced_wars else '✗'
                         announced_sched = '✓' if war_id in manager.announced_scheduled else '✗'
                         debug_lines.append(f'  - **Ranked War {war_id}:** vs {enemy_name}')
