@@ -38,6 +38,37 @@ class EnemyWatchlist:
         self.watchlist = {}  # {torn_id: {name, last_status, last_check, added_by}}
         self.previous_statuses = {}  # Track previous status to detect changes
 
+    async def has_active_war_event(self) -> bool:
+        """
+        Check if there's an active War Event in Discord scheduled events.
+        Enemy alerts should only post when a war event is active.
+
+        Returns:
+            bool: True if a war event is active, False otherwise
+        """
+        try:
+            for guild in self.bot.guilds:
+                events = guild.scheduled_events
+
+                for event in events:
+                    # Check if event name contains "War" and is active/started
+                    event_name = event.name.lower()
+                    if 'war' in event_name:
+                        from datetime import datetime, timezone
+                        now = datetime.now(timezone.utc)
+
+                        # Event is active if it has started and not ended
+                        if event.status.name in ['active', 'scheduled']:
+                            if event.start_time <= now:
+                                # Event has started
+                                if event.end_time is None or event.end_time > now:
+                                    return True
+
+            return False
+        except Exception as e:
+            print(f'Error checking war events: {e}')
+            return False
+
     async def load_watchlist(self):
         """Load watchlist from JSON file"""
         self.watchlist = load_json(self.watchlist_file, default={})
@@ -159,6 +190,7 @@ class EnemyWatchlist:
 
         Args:
             post_updates: Whether to post status updates to war channel
+                          Note: Updates only posted if there's an active War Event
         """
         if not self.watchlist:
             return
@@ -167,6 +199,13 @@ class EnemyWatchlist:
         if not channel and post_updates:
             print('Enemy watchlist: Could not find war channel')
             return
+
+        # Only post updates if there's an active war event in Discord
+        if post_updates:
+            war_event_active = await self.has_active_war_event()
+            if not war_event_active:
+                # Still check statuses internally, but don't post to channel
+                post_updates = False
 
         status_changes = []
         now = get_current_timestamp()

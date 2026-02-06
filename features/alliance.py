@@ -215,22 +215,35 @@ class AllianceManager:
             try:
                 faction_data = await self._fetch_faction_wars(faction_id)
                 if not faction_data:
+                    print(f'Alliance: No data returned for {ally_name} [{faction_id}]')
                     continue
 
                 wars = faction_data.get('wars', {})
+
+                # Handle empty wars dict - war may have ended
                 if not wars:
-                    # Check if war ended
                     if faction_id in self.active_wars:
                         await self._handle_war_ended(channel, faction_id, ally_name)
                     continue
 
-                # Process ranked wars
+                # Process ranked wars (ranked war structure)
                 ranked_wars = wars.get('ranked', {})
-                for war_id, war_data in ranked_wars.items():
-                    await self._process_war(channel, faction_id, ally_name, war_id, war_data)
+
+                # Also check for direct war structure (some API responses)
+                # Torn API can return wars in different formats
+                if not ranked_wars:
+                    # Try processing wars dict directly if it contains war data
+                    for war_id, war_data in wars.items():
+                        if isinstance(war_data, dict) and 'war' in war_data:
+                            await self._process_war(channel, faction_id, ally_name, war_id, war_data)
+                else:
+                    for war_id, war_data in ranked_wars.items():
+                        await self._process_war(channel, faction_id, ally_name, war_id, war_data)
 
             except Exception as e:
                 print(f'Alliance: Error checking wars for {ally_name}: {e}')
+                import traceback
+                traceback.print_exc()
 
         await self.save_data()
 
@@ -240,6 +253,9 @@ class AllianceManager:
         start_time = war.get('start', 0)
         end_time = war.get('end', 0)
         now = datetime.now(timezone.utc).timestamp()
+
+        # Debug logging
+        print(f'Alliance: Processing war {war_id} for {ally_name} - start: {start_time}, end: {end_time}, now: {now}')
 
         # Get enemy faction info
         factions = war_data.get('factions', {})
@@ -510,6 +526,89 @@ async def setup_alliance_commands(bot, manager: AllianceManager):
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
+    @alliance_group.command(name='check', description='[Management] Force check alliance wars and show debug info')
+    async def alliance_check(interaction: discord.Interaction):
+        """Force check and show debug info"""
+        if not is_management(interaction):
+            embed = create_embed(
+                title='Permission Denied',
+                description='You do not have permission to use this command.',
+                color=EMBED_COLOR_CRITICAL
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        if not manager.allies:
+            embed = create_embed(
+                title='No Allies',
+                description='No ally factions are being tracked.',
+                color=EMBED_COLOR_INFO
+            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            return
+
+        debug_lines = []
+        debug_lines.append(f'**Channel ID:** {manager.channel_id}')
+        debug_lines.append(f'**Announced Wars:** {list(manager.announced_wars)}')
+        debug_lines.append(f'**Announced Scheduled:** {list(manager.announced_scheduled)}')
+        debug_lines.append(f'**Active Wars:** {list(manager.active_wars.keys())}')
+        debug_lines.append('')
+
+        for faction_id, ally_info in manager.allies.items():
+            ally_name = ally_info.get('name', f'Faction {faction_id}')
+            debug_lines.append(f'**Checking {ally_name} [{faction_id}]:**')
+
+            faction_data = await manager._fetch_faction_wars(faction_id)
+            if not faction_data:
+                debug_lines.append('  - ❌ No data returned from API')
+                continue
+
+            wars = faction_data.get('wars', {})
+            if not wars:
+                debug_lines.append('  - No active wars')
+                continue
+
+            debug_lines.append(f'  - Raw wars keys: {list(wars.keys())}')
+
+            ranked_wars = wars.get('ranked', {})
+            if ranked_wars:
+                debug_lines.append(f'  - Ranked wars: {list(ranked_wars.keys())}')
+                for war_id, war_data in ranked_wars.items():
+                    war = war_data.get('war', {})
+                    start = war.get('start', 0)
+                    end = war.get('end', 0)
+                    now = datetime.now(timezone.utc).timestamp()
+                    factions = war_data.get('factions', {})
+                    enemy_name = 'Unknown'
+                    for fid, fdata in factions.items():
+                        if str(fid) != str(faction_id):
+                            enemy_name = fdata.get('name', f'Faction {fid}')
+
+                    status = 'scheduled' if start > now else ('active' if now < end else 'ended')
+                    announced_start = '✓' if war_id in manager.announced_wars else '✗'
+                    announced_sched = '✓' if war_id in manager.announced_scheduled else '✗'
+                    debug_lines.append(f'    War {war_id}: vs {enemy_name}')
+                    debug_lines.append(f'      Status: {status} | Start announced: {announced_start} | Scheduled announced: {announced_sched}')
+            else:
+                # Check other war formats
+                debug_lines.append(f'  - No ranked wars, checking other formats...')
+                for key, val in wars.items():
+                    if isinstance(val, dict):
+                        debug_lines.append(f'    {key}: {list(val.keys()) if isinstance(val, dict) else type(val)}')
+
+        debug_text = '\n'.join(debug_lines)
+        if len(debug_text) > 4000:
+            debug_text = debug_text[:4000] + '\n... (truncated)'
+
+        embed = create_embed(
+            title='Alliance Debug Info',
+            description=debug_text,
+            color=EMBED_COLOR_INFO
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
     # Add group to bot
     bot.tree.add_command(alliance_group)
-    print('Alliance commands registered (/alliance add, remove, list, setchannel)')
+    print('Alliance commands registered (/alliance add, remove, list, setchannel, check)')
