@@ -225,25 +225,34 @@ class AllianceManager:
 
                 wars = faction_data.get('wars', {})
 
+                # Debug: log the structure we received
+                print(f'Alliance: {ally_name} wars data type: {type(wars)}, keys: {wars.keys() if isinstance(wars, dict) else "N/A"}')
+
                 # Handle empty wars dict - war may have ended
                 if not wars:
                     if faction_id in self.active_wars:
                         await self._handle_war_ended(channel, faction_id, ally_name)
                     continue
 
-                # Process ranked wars (ranked war structure)
-                ranked_wars = wars.get('ranked', {})
-
-                # Also check for direct war structure (some API responses)
-                # Torn API can return wars in different formats
-                if not ranked_wars:
-                    # Try processing wars dict directly if it contains war data
-                    for war_id, war_data in wars.items():
-                        if isinstance(war_data, dict) and 'war' in war_data:
-                            await self._process_war(channel, faction_id, ally_name, war_id, war_data)
-                else:
-                    for war_id, war_data in ranked_wars.items():
-                        await self._process_war(channel, faction_id, ally_name, war_id, war_data)
+                # API v2 returns wars as a list or different structure
+                # Check if it's a list (v2 format)
+                if isinstance(wars, list):
+                    for war_item in wars:
+                        if isinstance(war_item, dict):
+                            war_id = str(war_item.get('id', 'unknown'))
+                            await self._process_war_v2(channel, faction_id, ally_name, war_id, war_item)
+                elif isinstance(wars, dict):
+                    # Check for ranked wars (v1 structure)
+                    ranked_wars = wars.get('ranked', {})
+                    if ranked_wars and isinstance(ranked_wars, dict):
+                        for war_id, war_data in ranked_wars.items():
+                            if isinstance(war_data, dict):
+                                await self._process_war(channel, faction_id, ally_name, war_id, war_data)
+                    else:
+                        # Try processing wars dict directly
+                        for war_id, war_data in wars.items():
+                            if isinstance(war_data, dict) and 'war' in war_data:
+                                await self._process_war(channel, faction_id, ally_name, war_id, war_data)
 
             except Exception as e:
                 print(f'Alliance: Error checking wars for {ally_name}: {e}')
@@ -252,15 +261,70 @@ class AllianceManager:
 
         await self.save_data()
 
+    async def _process_war_v2(self, channel, faction_id: str, ally_name: str, war_id: str, war_item: Dict):
+        """Process a single war from API v2 format"""
+        # v2 format has different structure - war data is directly in the item
+        start_time = war_item.get('start', 0)
+        end_time = war_item.get('end', 0)
+        now = datetime.now(timezone.utc).timestamp()
+
+        print(f'Alliance v2: Processing war {war_id} for {ally_name} - start: {start_time}, end: {end_time}, now: {now}')
+
+        # Get enemy faction info from v2 structure
+        factions = war_item.get('factions', [])
+        enemy_name = 'Unknown Faction'
+        enemy_id = None
+
+        # v2 factions might be a list
+        if isinstance(factions, list):
+            for fdata in factions:
+                fid = str(fdata.get('id', ''))
+                if fid != str(faction_id):
+                    enemy_name = fdata.get('name', f'Faction {fid}')
+                    enemy_id = fid
+                    break
+        elif isinstance(factions, dict):
+            for fid, fdata in factions.items():
+                if str(fid) != str(faction_id):
+                    enemy_name = fdata.get('name', f'Faction {fid}') if isinstance(fdata, dict) else f'Faction {fid}'
+                    enemy_id = fid
+                    break
+
+        # War hasn't started yet - announce scheduled
+        if start_time > now:
+            if war_id not in self.announced_scheduled:
+                hours_until = (start_time - now) / 3600
+                await self._announce_war_scheduled(channel, ally_name, enemy_name, start_time, hours_until)
+                self.announced_scheduled.add(war_id)
+
+        # War is active (started but not ended)
+        elif start_time <= now < end_time:
+            if war_id not in self.announced_wars:
+                await self._announce_war_started(channel, ally_name, enemy_name)
+                self.announced_wars.add(war_id)
+
+            self.active_wars[faction_id] = {
+                'war_id': war_id,
+                'enemy_name': enemy_name,
+                'enemy_id': enemy_id,
+                'start_time': start_time,
+                'factions': factions
+            }
+
+        # War ended
+        elif end_time > 0 and now >= end_time:
+            if faction_id in self.active_wars:
+                await self._handle_war_ended(channel, faction_id, ally_name, war_item)
+
     async def _process_war(self, channel, faction_id: str, ally_name: str, war_id: str, war_data: Dict):
-        """Process a single war and send appropriate announcements"""
+        """Process a single war and send appropriate announcements (v1 format)"""
         war = war_data.get('war', {})
         start_time = war.get('start', 0)
         end_time = war.get('end', 0)
         now = datetime.now(timezone.utc).timestamp()
 
         # Debug logging
-        print(f'Alliance: Processing war {war_id} for {ally_name} - start: {start_time}, end: {end_time}, now: {now}')
+        print(f'Alliance v1: Processing war {war_id} for {ally_name} - start: {start_time}, end: {end_time}, now: {now}')
 
         # Get enemy faction info
         factions = war_data.get('factions', {})
@@ -575,33 +639,58 @@ async def setup_alliance_commands(bot, manager: AllianceManager):
                 debug_lines.append('  - No active wars')
                 continue
 
-            debug_lines.append(f'  - Raw wars keys: {list(wars.keys())}')
+            debug_lines.append(f'  - Wars type: {type(wars).__name__}')
 
-            ranked_wars = wars.get('ranked', {})
-            if ranked_wars:
-                debug_lines.append(f'  - Ranked wars: {list(ranked_wars.keys())}')
-                for war_id, war_data in ranked_wars.items():
-                    war = war_data.get('war', {})
-                    start = war.get('start', 0)
-                    end = war.get('end', 0)
-                    now = datetime.now(timezone.utc).timestamp()
-                    factions = war_data.get('factions', {})
-                    enemy_name = 'Unknown'
-                    for fid, fdata in factions.items():
-                        if str(fid) != str(faction_id):
-                            enemy_name = fdata.get('name', f'Faction {fid}')
+            # Handle v2 list format
+            if isinstance(wars, list):
+                debug_lines.append(f'  - Found {len(wars)} war(s) (v2 list format)')
+                for war_item in wars:
+                    if isinstance(war_item, dict):
+                        war_id = str(war_item.get('id', 'unknown'))
+                        start = war_item.get('start', 0)
+                        end = war_item.get('end', 0)
+                        now = datetime.now(timezone.utc).timestamp()
 
-                    status = 'scheduled' if start > now else ('active' if now < end else 'ended')
-                    announced_start = '✓' if war_id in manager.announced_wars else '✗'
-                    announced_sched = '✓' if war_id in manager.announced_scheduled else '✗'
-                    debug_lines.append(f'    War {war_id}: vs {enemy_name}')
-                    debug_lines.append(f'      Status: {status} | Start announced: {announced_start} | Scheduled announced: {announced_sched}')
-            else:
-                # Check other war formats
-                debug_lines.append(f'  - No ranked wars, checking other formats...')
-                for key, val in wars.items():
-                    if isinstance(val, dict):
-                        debug_lines.append(f'    {key}: {list(val.keys()) if isinstance(val, dict) else type(val)}')
+                        # Get enemy from factions
+                        factions = war_item.get('factions', [])
+                        enemy_name = 'Unknown'
+                        if isinstance(factions, list):
+                            for fdata in factions:
+                                fid = str(fdata.get('id', ''))
+                                if fid != str(faction_id):
+                                    enemy_name = fdata.get('name', f'Faction {fid}')
+                                    break
+
+                        status = 'scheduled' if start > now else ('active' if now < end else 'ended')
+                        announced_start = '✓' if war_id in manager.announced_wars else '✗'
+                        announced_sched = '✓' if war_id in manager.announced_scheduled else '✗'
+                        debug_lines.append(f'    War {war_id}: vs {enemy_name}')
+                        debug_lines.append(f'      Status: {status} | Start announced: {announced_start} | Scheduled announced: {announced_sched}')
+            elif isinstance(wars, dict):
+                debug_lines.append(f'  - Raw wars keys: {list(wars.keys())}')
+                ranked_wars = wars.get('ranked', {})
+                if ranked_wars and isinstance(ranked_wars, dict):
+                    debug_lines.append(f'  - Ranked wars: {list(ranked_wars.keys())}')
+                    for war_id, war_data in ranked_wars.items():
+                        if isinstance(war_data, dict):
+                            war = war_data.get('war', {})
+                            start = war.get('start', 0)
+                            end = war.get('end', 0)
+                            now = datetime.now(timezone.utc).timestamp()
+                            factions = war_data.get('factions', {})
+                            enemy_name = 'Unknown'
+                            if isinstance(factions, dict):
+                                for fid, fdata in factions.items():
+                                    if str(fid) != str(faction_id) and isinstance(fdata, dict):
+                                        enemy_name = fdata.get('name', f'Faction {fid}')
+
+                            status = 'scheduled' if start > now else ('active' if now < end else 'ended')
+                            announced_start = '✓' if war_id in manager.announced_wars else '✗'
+                            announced_sched = '✓' if war_id in manager.announced_scheduled else '✗'
+                            debug_lines.append(f'    War {war_id}: vs {enemy_name}')
+                            debug_lines.append(f'      Status: {status} | Start announced: {announced_start} | Scheduled announced: {announced_sched}')
+                else:
+                    debug_lines.append(f'  - No ranked wars found')
 
         debug_text = '\n'.join(debug_lines)
         if len(debug_text) > 4000:
