@@ -195,6 +195,86 @@ class StakeoutManager:
 
         return True, f'Stopped watching **{name}** [{torn_id}].'
 
+    async def extend_stakeout(self, torn_id: str, extra_hours: int) -> tuple:
+        """
+        Extend an existing stakeout duration
+
+        Args:
+            torn_id: Torn player ID
+            extra_hours: Additional hours to add (1-48)
+
+        Returns:
+            (success: bool, message: str, new_end_time: float or None)
+        """
+        torn_id = str(torn_id).strip()
+
+        if torn_id not in self.stakeouts:
+            return False, 'This player is not being watched.', None
+
+        # Validate hours
+        extra_hours = min(max(extra_hours, 1), 48)
+
+        config = self.stakeouts[torn_id]
+        name = config.get('name', torn_id)
+        old_end = config['end_time']
+        now = datetime.now(timezone.utc).timestamp()
+
+        # Extend from current end time (or now if already expired)
+        base_time = max(old_end, now)
+        new_end = base_time + (extra_hours * 3600)
+
+        config['end_time'] = new_end
+        config['duration_hours'] = config.get('duration_hours', 0) + extra_hours
+
+        await self.save_data()
+
+        remaining = (new_end - now) / 3600
+        return True, f'Extended stakeout for **{name}** by {extra_hours} hours.\nTotal remaining: {remaining:.1f} hours.', new_end
+
+    async def get_quick_status(self, torn_id: str) -> Optional[Dict]:
+        """
+        Get current status of a stakeout target
+
+        Returns dict with current status info or None if not found/watching
+        """
+        torn_id = str(torn_id).strip()
+
+        config = self.stakeouts.get(torn_id)
+        if not config:
+            # Check if we have history (stopped stakeout)
+            if torn_id in self.history and self.history[torn_id]:
+                return {'status': 'stopped', 'history_available': True}
+            return None
+
+        # Fetch current status
+        player_data = await self._fetch_player_status(torn_id)
+        if not player_data:
+            return {'status': 'error', 'message': 'Could not fetch player data'}
+
+        status, extra = self._determine_status(player_data)
+
+        now = datetime.now(timezone.utc).timestamp()
+        remaining = (config['end_time'] - now) / 3600
+        record_count = len(self.history.get(torn_id, []))
+
+        # Get last action info
+        last_action = player_data.get('last_action', {})
+        last_action_ts = last_action.get('timestamp', 0)
+        mins_since_action = int((now - last_action_ts) / 60) if last_action_ts else None
+
+        return {
+            'status': 'active',
+            'name': config.get('name', torn_id),
+            'torn_id': torn_id,
+            'current_status': status,
+            'extra_info': extra,
+            'remaining_hours': remaining,
+            'record_count': record_count,
+            'mins_since_action': mins_since_action,
+            'level': player_data.get('level'),
+            'faction': player_data.get('faction', {}).get('faction_name', 'None')
+        }
+
     async def _fetch_player_status(self, torn_id: str) -> Optional[Dict]:
         """Fetch player status from Torn API"""
         # Try with travel selection first (gives more data)
@@ -625,6 +705,130 @@ async def setup_stakeout_commands(bot, manager: StakeoutManager):
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
+    @stakeout_group.command(name='extend', description='[Management] Extend a stakeout duration')
+    @app_commands.describe(
+        torn_id='Torn player ID to extend',
+        hours='Additional hours to add (1-48)'
+    )
+    async def stakeout_extend(interaction: discord.Interaction, torn_id: str, hours: int = 24):
+        """Extend a stakeout"""
+        if not is_management(interaction):
+            embed = create_embed(
+                title='Permission Denied',
+                description='You do not have permission to use this command.',
+                color=EMBED_COLOR_CRITICAL
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        success, message, new_end = await manager.extend_stakeout(torn_id, hours)
+
+        if success:
+            embed = create_embed(
+                title='Stakeout Extended',
+                description=message,
+                color=EMBED_COLOR_SUCCESS
+            )
+            # Show new end time
+            if new_end:
+                embed.add_field(
+                    name='New End Time',
+                    value=f'<t:{int(new_end)}:F>',
+                    inline=False
+                )
+        else:
+            embed = create_embed(
+                title='Extension Failed',
+                description=message,
+                color=EMBED_COLOR_WARNING
+            )
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @stakeout_group.command(name='status', description='Quick status check for a stakeout target')
+    @app_commands.describe(torn_id='Torn player ID to check')
+    async def stakeout_status(interaction: discord.Interaction, torn_id: str):
+        """Quick status check"""
+        await interaction.response.defer(ephemeral=True)
+
+        result = await manager.get_quick_status(torn_id)
+
+        if not result:
+            embed = create_embed(
+                title='Not Found',
+                description=f'Player {torn_id} is not being watched and has no history.',
+                color=EMBED_COLOR_WARNING
+            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            return
+
+        if result.get('status') == 'stopped':
+            embed = create_embed(
+                title='Stakeout Stopped',
+                description=f'Player {torn_id} is no longer being watched.\nUse `/stakeout report {torn_id}` to view collected data.',
+                color=EMBED_COLOR_INFO
+            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            return
+
+        if result.get('status') == 'error':
+            embed = create_embed(
+                title='Error',
+                description=result.get('message', 'Could not fetch status'),
+                color=EMBED_COLOR_CRITICAL
+            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            return
+
+        # Build status embed
+        current = result['current_status']
+        extra = result.get('extra_info')
+
+        # Status emoji and text
+        status_display = {
+            'online': '🟢 Online',
+            'offline': '⚫ Offline',
+            'idle': '🟡 Idle',
+            'hospital': '🏥 Hospital',
+            'jail': '🔒 Jail',
+            'traveling': '✈️ Traveling'
+        }.get(current, f'❓ {current}')
+
+        # Add extra info if available
+        if current == 'traveling' and extra:
+            status_display += f' to {extra}'
+        elif current == 'hospital' and extra:
+            status_display += f' (until <t:{extra}:R>)'
+        elif current == 'jail' and extra:
+            status_display += f' (until <t:{extra}:R>)'
+        elif current in ['offline', 'idle'] and extra:
+            status_display += f' ({extra} mins)'
+
+        embed = create_embed(
+            title=f"Status: {result['name']}",
+            description=f"[View Profile](https://www.torn.com/profiles.php?XID={result['torn_id']})",
+            color=EMBED_COLOR_INFO
+        )
+
+        embed.add_field(name='Current Status', value=status_display, inline=True)
+        embed.add_field(name='Level', value=str(result.get('level', '?')), inline=True)
+        embed.add_field(name='Faction', value=result.get('faction', 'None'), inline=True)
+
+        remaining = result['remaining_hours']
+        if remaining > 1:
+            time_left = f'{remaining:.1f} hours'
+        else:
+            time_left = f'{int(remaining * 60)} minutes'
+
+        embed.add_field(name='Stakeout Remaining', value=time_left, inline=True)
+        embed.add_field(name='Records Collected', value=str(result['record_count']), inline=True)
+
+        if result.get('mins_since_action') is not None:
+            embed.add_field(name='Last Action', value=f'{result["mins_since_action"]} mins ago', inline=True)
+
+        embed.set_footer(text='Use /stakeout report for full analysis')
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
     @stakeout_group.command(name='clear', description='[Management] Clear all stakeouts (use to fix corrupted data)')
     async def stakeout_clear(interaction: discord.Interaction):
         """Clear all stakeouts"""
@@ -815,4 +1019,4 @@ async def setup_stakeout_commands(bot, manager: StakeoutManager):
 
     # Add group to bot
     bot.tree.add_command(stakeout_group)
-    print('Stakeout commands registered (/stakeout add, stop, list, report, clear, test)')
+    print('Stakeout commands registered (/stakeout add, stop, extend, status, list, report, clear, test)')
