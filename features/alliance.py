@@ -173,6 +173,7 @@ class AllianceManager:
         """Fetch faction war data from Torn API"""
         try:
             if not TORN_PERSONAL_API_KEY:
+                print('Alliance: TORN_PERSONAL_API_KEY not set')
                 return None
 
             url = f'https://api.torn.com/faction/{faction_id}?selections=basic,wars&key={TORN_PERSONAL_API_KEY}'
@@ -180,11 +181,14 @@ class AllianceManager:
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
                 async with session.get(url) as response:
                     if response.status != 200:
+                        print(f'Alliance: API returned status {response.status} for faction {faction_id}')
                         return None
 
                     data = await response.json()
 
                     if 'error' in data:
+                        error_info = data['error']
+                        print(f'Alliance: API error for faction {faction_id}: {error_info}')
                         return None
 
                     return data
