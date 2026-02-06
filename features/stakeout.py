@@ -345,8 +345,10 @@ class StakeoutManager:
         record = {
             'timestamp': now.timestamp(),
             'hour': now.hour,
+            'weekday': now.weekday(),  # 0=Monday, 6=Sunday
             'status': status,
-            'extra': extra
+            'extra': extra,
+            'attackable': status in [STATUS_ONLINE, STATUS_OFFLINE, STATUS_IDLE]  # Not hospital/jail/traveling
         }
 
         if torn_id not in self.history:
@@ -409,21 +411,53 @@ class StakeoutManager:
         hourly_hospital = defaultdict(int)
         hourly_total = defaultdict(int)
 
+        # Weekday vs weekend patterns (0-4 = weekday, 5-6 = weekend)
+        weekday_online = defaultdict(int)
+        weekday_total = defaultdict(int)
+        weekend_online = defaultdict(int)
+        weekend_total = defaultdict(int)
+
+        # Day of week patterns
+        daily_online = defaultdict(int)
+        daily_total = defaultdict(int)
+
         status_counts = defaultdict(int)
+        attackable_count = 0
 
         for record in history:
             hour = record['hour']
             status = record['status']
+            weekday = record.get('weekday', 0)  # Default to Monday for old records
 
             hourly_total[hour] += 1
             status_counts[status] += 1
 
+            # Track attackable (not in hospital/jail/traveling)
+            if record.get('attackable', status in [STATUS_ONLINE, STATUS_OFFLINE, STATUS_IDLE]):
+                attackable_count += 1
+
+            # Hourly patterns
             if status in [STATUS_ONLINE, STATUS_IDLE]:
                 hourly_online[hour] += 1
             elif status == STATUS_OFFLINE:
                 hourly_offline[hour] += 1
             elif status == STATUS_HOSPITAL:
                 hourly_hospital[hour] += 1
+
+            # Weekday vs weekend
+            if weekday < 5:  # Monday-Friday
+                weekday_total[hour] += 1
+                if status in [STATUS_ONLINE, STATUS_IDLE]:
+                    weekday_online[hour] += 1
+            else:  # Saturday-Sunday
+                weekend_total[hour] += 1
+                if status in [STATUS_ONLINE, STATUS_IDLE]:
+                    weekend_online[hour] += 1
+
+            # Daily patterns
+            daily_total[weekday] += 1
+            if status in [STATUS_ONLINE, STATUS_IDLE]:
+                daily_online[weekday] += 1
 
         # Generate heatmap (24 hours)
         heatmap = []
@@ -444,8 +478,11 @@ class StakeoutManager:
                 else:
                     heatmap.append('░')  # Rarely active
 
-        # Find sleep window (longest consecutive low-activity period)
-        sleep_window = self._find_sleep_window(hourly_online, hourly_total)
+        # Find sleep window using consecutive offline detection
+        sleep_window = self._find_sleep_window_consecutive(history)
+        if not sleep_window:
+            # Fallback to hourly average method
+            sleep_window = self._find_sleep_window(hourly_online, hourly_total)
 
         # Find best attack windows (hours with lowest online ratio)
         attack_windows = self._find_attack_windows(hourly_online, hourly_total)
@@ -457,6 +494,24 @@ class StakeoutManager:
         total_checks = len(history)
         online_pct = (status_counts[STATUS_ONLINE] + status_counts[STATUS_IDLE]) / total_checks * 100 if total_checks > 0 else 0
         hospital_pct = status_counts[STATUS_HOSPITAL] / total_checks * 100 if total_checks > 0 else 0
+        attackable_pct = attackable_count / total_checks * 100 if total_checks > 0 else 0
+
+        # Weekday vs weekend activity rates
+        weekday_checks = sum(weekday_total.values())
+        weekend_checks = sum(weekend_total.values())
+        weekday_online_pct = sum(weekday_online.values()) / weekday_checks * 100 if weekday_checks > 0 else 0
+        weekend_online_pct = sum(weekend_online.values()) / weekend_checks * 100 if weekend_checks > 0 else 0
+
+        # Find most/least active days
+        day_names = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+        day_activity = []
+        for day in range(7):
+            total = daily_total.get(day, 0)
+            if total >= 2:
+                rate = daily_online.get(day, 0) / total * 100
+                day_activity.append((day_names[day], rate, total))
+
+        day_activity.sort(key=lambda x: x[1], reverse=True)
 
         # Time range
         first_check = datetime.fromtimestamp(history[0]['timestamp'], tz=timezone.utc)
@@ -476,10 +531,94 @@ class StakeoutManager:
             'estimated_tz': estimated_tz,
             'online_pct': online_pct,
             'hospital_pct': hospital_pct,
+            'attackable_pct': attackable_pct,
+            'weekday_online_pct': weekday_online_pct,
+            'weekend_online_pct': weekend_online_pct,
+            'day_activity': day_activity,
             'status_counts': dict(status_counts),
             'hourly_online': dict(hourly_online),
             'hourly_total': dict(hourly_total)
         }
+
+    def _find_sleep_window_consecutive(self, history: List[Dict]) -> Optional[tuple]:
+        """
+        Find sleep window by analyzing actual consecutive offline periods.
+        More accurate than hourly averages.
+
+        Returns (start_hour, end_hour, confidence) or None
+        """
+        if len(history) < 8:  # Need at least 2 hours of data
+            return None
+
+        # Find all offline streaks (consecutive offline records)
+        streaks = []
+        current_streak_start = None
+        current_streak_records = 0
+
+        for i, record in enumerate(history):
+            status = record['status']
+            is_offline = status in [STATUS_OFFLINE, STATUS_IDLE]
+
+            if is_offline:
+                if current_streak_start is None:
+                    current_streak_start = record
+                current_streak_records += 1
+            else:
+                if current_streak_start is not None and current_streak_records >= 4:
+                    # Streak ended - record it (at least 1 hour = 4 checks at 15min)
+                    streak_start_hour = current_streak_start['hour']
+                    streak_end_hour = history[i-1]['hour'] if i > 0 else streak_start_hour
+                    duration_mins = current_streak_records * 15
+                    streaks.append({
+                        'start_hour': streak_start_hour,
+                        'end_hour': streak_end_hour,
+                        'duration_mins': duration_mins,
+                        'records': current_streak_records
+                    })
+                current_streak_start = None
+                current_streak_records = 0
+
+        # Don't forget ongoing streak at end
+        if current_streak_start is not None and current_streak_records >= 4:
+            streak_start_hour = current_streak_start['hour']
+            streak_end_hour = history[-1]['hour']
+            duration_mins = current_streak_records * 15
+            streaks.append({
+                'start_hour': streak_start_hour,
+                'end_hour': streak_end_hour,
+                'duration_mins': duration_mins,
+                'records': current_streak_records
+            })
+
+        if not streaks:
+            return None
+
+        # Find most common sleep start hour (looking for pattern)
+        start_hour_counts = defaultdict(int)
+        for streak in streaks:
+            if streak['duration_mins'] >= 120:  # At least 2 hours
+                start_hour_counts[streak['start_hour']] += 1
+
+        if not start_hour_counts:
+            return None
+
+        # Get most common start hour
+        most_common_start = max(start_hour_counts.keys(), key=lambda h: start_hour_counts[h])
+
+        # Calculate average duration for streaks starting near that hour
+        relevant_streaks = [s for s in streaks if abs(s['start_hour'] - most_common_start) <= 2 or
+                           abs(s['start_hour'] - most_common_start) >= 22]  # Handle midnight wrap
+
+        if not relevant_streaks:
+            return None
+
+        avg_duration = sum(s['duration_mins'] for s in relevant_streaks) / len(relevant_streaks)
+        end_hour = (most_common_start + int(avg_duration / 60)) % 24
+
+        # Confidence based on consistency
+        confidence = min(len(relevant_streaks) / 3, 1.0)  # More streaks = more confident
+
+        return (most_common_start, end_hour, confidence)
 
     def _find_sleep_window(self, hourly_online: Dict, hourly_total: Dict) -> Optional[tuple]:
         """
@@ -910,7 +1049,7 @@ async def setup_stakeout_commands(bot, manager: StakeoutManager):
             color=EMBED_COLOR_INFO
         )
 
-        # Stats
+        # Stats row 1
         embed.add_field(
             name='Data Collected',
             value=f"{report['total_checks']} checks over {report['duration_hours']:.1f}h",
@@ -922,10 +1061,52 @@ async def setup_stakeout_commands(bot, manager: StakeoutManager):
             inline=True
         )
         embed.add_field(
-            name='Hospital Rate',
-            value=f"{report['hospital_pct']:.0f}%",
+            name='Attackable',
+            value=f"{report.get('attackable_pct', 100):.0f}%",
             inline=True
         )
+
+        # Stats row 2 - Weekday vs Weekend
+        weekday_pct = report.get('weekday_online_pct', 0)
+        weekend_pct = report.get('weekend_online_pct', 0)
+        if weekday_pct > 0 or weekend_pct > 0:
+            embed.add_field(
+                name='Weekday Activity',
+                value=f"{weekday_pct:.0f}% online",
+                inline=True
+            )
+            embed.add_field(
+                name='Weekend Activity',
+                value=f"{weekend_pct:.0f}% online",
+                inline=True
+            )
+            embed.add_field(
+                name='Hospital Rate',
+                value=f"{report['hospital_pct']:.0f}%",
+                inline=True
+            )
+        else:
+            embed.add_field(
+                name='Hospital Rate',
+                value=f"{report['hospital_pct']:.0f}%",
+                inline=True
+            )
+
+        # Day of week breakdown
+        day_activity = report.get('day_activity', [])
+        if len(day_activity) >= 3:
+            most_active = day_activity[0]
+            least_active = day_activity[-1]
+            embed.add_field(
+                name='Most Active Day',
+                value=f"**{most_active[0]}** ({most_active[1]:.0f}% online)",
+                inline=True
+            )
+            embed.add_field(
+                name='Least Active Day',
+                value=f"**{least_active[0]}** ({least_active[1]:.0f}% online)",
+                inline=True
+            )
 
         # Sleep window
         if report['sleep_window']:
@@ -952,7 +1133,7 @@ async def setup_stakeout_commands(bot, manager: StakeoutManager):
         embed.add_field(
             name='Best Attack Windows',
             value=attack_text,
-            inline=False
+            inline=True
         )
 
         # Timezone estimate
@@ -960,7 +1141,7 @@ async def setup_stakeout_commands(bot, manager: StakeoutManager):
             embed.add_field(
                 name='Estimated Timezone',
                 value=report['estimated_tz'],
-                inline=False
+                inline=True
             )
 
         # Heatmap as code block
