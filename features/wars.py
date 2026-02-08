@@ -54,7 +54,7 @@ class WarTracker:
         save_json(self.war_data_file, self.war_history)
 
     async def _fetch_rankedwars(self):
-        """Fetch ranked wars data from Torn API"""
+        """Fetch ranked wars data from Torn API (v1 - works for any faction)"""
         data = await fetch_faction_data('rankedwars')
         if not data:
             return None
@@ -62,6 +62,40 @@ class WarTracker:
         if not rankedwars:
             return None
         return rankedwars
+
+    async def _fetch_war_members(self):
+        """
+        Fetch war member data using v2 wars API (includes per-member stats).
+        v2 wars returns our own faction's wars, which is what we need for warboard.
+
+        Returns:
+            Dict of {faction_id_str: faction_data} with members, or None
+        """
+        data = await fetch_faction_data('wars')
+        if not data:
+            return None
+
+        wars = data.get('wars', {})
+        if not wars:
+            return None
+
+        # v2 wars format: wars.ranked = {war_id, start, end, factions: [...]}
+        ranked = wars.get('ranked', {})
+        if not ranked:
+            return None
+
+        factions = ranked.get('factions', [])
+        if not isinstance(factions, list) or not factions:
+            return None
+
+        # Convert list format to dict keyed by faction id (matching rankedwars format)
+        result = {}
+        for faction in factions:
+            if isinstance(faction, dict):
+                fid = str(faction.get('id', 0))
+                result[fid] = faction
+
+        return result
 
     async def get_current_war(self):
         """
@@ -322,13 +356,25 @@ class WarTracker:
                 enemy_faction_id = faction_id
                 enemy_faction_data = faction_data
 
-        # Fallback: use first faction with members if ID match failed
+        # rankedwars (v1) may not include per-member stats
+        # Fall back to v2 wars API which includes member data for our own faction
         if not our_members:
-            for faction_id, faction_data in factions.items():
-                members = faction_data.get('members', {})
-                if members:
-                    our_members = members
-                    break
+            print('War: No member data in rankedwars, fetching v2 wars data...')
+            v2_factions = await self._fetch_war_members()
+            if v2_factions:
+                for fid, fdata in v2_factions.items():
+                    if str(fid) == str(TORN_FACTION_ID):
+                        our_members = fdata.get('members', {})
+                        # Keep rankedwars faction data for scores if available, otherwise use v2
+                        if not our_faction_data:
+                            our_faction_data = fdata
+                    else:
+                        if not enemy_faction_id:
+                            enemy_faction_id = fid
+                        if not enemy_faction_data:
+                            enemy_faction_data = fdata
+                if our_members:
+                    print(f'War: Got {len(our_members)} members from v2 wars API')
 
         if not our_members:
             return create_embed(
@@ -708,9 +754,26 @@ class WarTracker:
             print(f'War detected: {war_id}')
 
         # Save war data to history (with full faction data for final report)
+        # rankedwars may not include member data, so enrich with v2 wars data
+        factions_data = war_info['data'].get('factions', {})
+
+        # Check if factions have member data, if not fetch from v2 wars
+        has_members = any(
+            fd.get('members') for fd in factions_data.values() if isinstance(fd, dict)
+        )
+        if not has_members:
+            v2_factions = await self._fetch_war_members()
+            if v2_factions:
+                # Merge v2 member data into rankedwars faction data
+                for fid, fdata in v2_factions.items():
+                    if fid in factions_data and isinstance(factions_data[fid], dict):
+                        factions_data[fid]['members'] = fdata.get('members', {})
+                    else:
+                        factions_data[fid] = fdata
+
         self.war_history[war_id] = {
             'timestamp': get_current_timestamp(),
-            'factions': war_info['data'].get('factions', {})
+            'factions': factions_data
         }
 
         # Prune old war entries (keep last 20)
