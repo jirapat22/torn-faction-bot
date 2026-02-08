@@ -94,12 +94,13 @@ class ChainTracker:
 
         return chainreport
 
-    async def format_chain_embed(self, chain_data):
+    async def format_chain_embed(self, chain_data, display_count=None):
         """
         Create a Discord embed for current chain status
 
         Args:
             chain_data: Chain data from Torn API
+            display_count: Override count for display (e.g. milestone value)
 
         Returns:
             discord.Embed
@@ -112,6 +113,7 @@ class ChainTracker:
             )
 
         current = chain_data.get('current', 0)
+        show_count = display_count if display_count is not None else current
         timeout = chain_data.get('timeout', 0)
         modifier = chain_data.get('modifier', 1.0)
 
@@ -134,7 +136,7 @@ class ChainTracker:
 
         # Build fields
         fields = [
-            {'name': 'Current Chain', 'value': str(current), 'inline': True},
+            {'name': 'Current Chain', 'value': str(show_count), 'inline': True},
             {'name': 'Respect Modifier', 'value': f'{modifier:.2f}x', 'inline': True}
         ]
 
@@ -144,7 +146,7 @@ class ChainTracker:
 
         # Build embed
         embed = create_embed(
-            title=f'Current Chain: {current} hits',
+            title=f'Current Chain: {show_count} hits',
             description=status,
             color=color,
             fields=fields
@@ -385,7 +387,7 @@ class ChainTracker:
             # Use milestone value for the message so it shows "10 hits" not "11 hits"
             display_count = hit_milestone if hit_milestone else current_count
             # Post update to #chaining channel (no ping for regular updates)
-            embed = await self.format_chain_embed(chain)
+            embed = await self.format_chain_embed(chain, display_count=display_count)
             await channel.send(f'**Chain Update: {display_count} hits!**', embed=embed)
             print(f'Posted chain update: {display_count} hits (actual: {current_count})')
 
