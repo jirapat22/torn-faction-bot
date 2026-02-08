@@ -174,14 +174,16 @@ class AllianceManager:
             return None
 
     async def _fetch_faction_wars(self, faction_id: str) -> Optional[Dict]:
-        """Fetch faction war data from Torn API v2"""
+        """Fetch faction war data from Torn API v1 using rankedwars selection.
+        v1 rankedwars works for any faction, unlike v2 wars which only returns
+        the API key owner's faction wars."""
         try:
             if not TORN_PERSONAL_API_KEY:
                 print('Alliance: TORN_PERSONAL_API_KEY not set')
                 return None
 
-            # Use API v2 - wars selection requires v2
-            url = f'https://api.torn.com/v2/faction/{faction_id}?selections=basic,wars&key={TORN_PERSONAL_API_KEY}'
+            # Use API v1 with rankedwars - works for ANY faction (not just key owner's)
+            url = f'https://api.torn.com/faction/{faction_id}?selections=basic,rankedwars&key={TORN_PERSONAL_API_KEY}'
 
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
                 async with session.get(url) as response:
@@ -195,6 +197,36 @@ class AllianceManager:
                         error_info = data['error']
                         print(f'Alliance: API error for faction {faction_id}: {error_info}')
                         return None
+
+                    # Convert v1 rankedwars format to the wars format we expect
+                    # v1: {rankedwars: {war_id: {war: {start, end, target}, factions: {fid: {...}}}}}
+                    # We need: {wars: {ranked: {war_id, start, end, factions: [...]}}}
+                    rankedwars = data.get('rankedwars', {})
+                    if rankedwars:
+                        # Get the most recent/active war
+                        for wid, wdata in rankedwars.items():
+                            war_info = wdata.get('war', {})
+                            factions_dict = wdata.get('factions', {})
+
+                            # Convert factions dict to list format
+                            factions_list = []
+                            for fid, fdata in factions_dict.items():
+                                if isinstance(fdata, dict):
+                                    fdata['id'] = int(fid)
+                                    factions_list.append(fdata)
+
+                            data['wars'] = {
+                                'ranked': {
+                                    'war_id': int(wid),
+                                    'start': war_info.get('start', 0),
+                                    'end': war_info.get('end', 0),
+                                    'target': war_info.get('target', 0),
+                                    'factions': factions_list
+                                }
+                            }
+                            break  # Only process first war
+                    else:
+                        data['wars'] = {}
 
                     return data
 
@@ -270,13 +302,24 @@ class AllianceManager:
 
         print(f'Alliance v2: Processing war {war_id} for {ally_name} - start: {start_time}, end: {end_time}, now: {now}')
 
-        # Get enemy faction info from v2 structure
+        # Get enemy faction info from war data
         factions = war_item.get('factions', [])
         enemy_name = 'Unknown Faction'
         enemy_id = None
+        ally_in_war = False
 
-        # v2 factions might be a list
+        # Find enemy faction (the one that is NOT the ally)
         if isinstance(factions, list):
+            # Check if ally is actually in this war
+            for fdata in factions:
+                if str(fdata.get('id', '')) == str(faction_id):
+                    ally_in_war = True
+                    break
+
+            if not ally_in_war:
+                print(f'Alliance: War {war_id} does not involve {ally_name} [{faction_id}], skipping')
+                return
+
             for fdata in factions:
                 fid = str(fdata.get('id', ''))
                 if fid != str(faction_id):
@@ -284,6 +327,13 @@ class AllianceManager:
                     enemy_id = fid
                     break
         elif isinstance(factions, dict):
+            # Check if ally is in the war
+            ally_in_war = str(faction_id) in [str(k) for k in factions.keys()]
+
+            if not ally_in_war:
+                print(f'Alliance: War {war_id} does not involve {ally_name} [{faction_id}], skipping')
+                return
+
             for fid, fdata in factions.items():
                 if str(fid) != str(faction_id):
                     enemy_name = fdata.get('name', f'Faction {fid}') if isinstance(fdata, dict) else f'Faction {fid}'
@@ -697,16 +747,27 @@ async def setup_alliance_commands(bot, manager: AllianceManager):
                     end = ranked_war.get('end', 0)
                     now = datetime.now(timezone.utc).timestamp()
 
-                    # Get enemy from factions (v2 format - list of factions)
+                    # Get enemy from factions and verify ally is in the war
                     factions = ranked_war.get('factions', [])
                     enemy_name = 'Unknown'
+                    ally_in_war = False
                     if isinstance(factions, list):
                         for fdata in factions:
                             if isinstance(fdata, dict):
                                 fid = str(fdata.get('id', ''))
-                                if fid != str(faction_id):
+                                if fid == str(faction_id):
+                                    ally_in_war = True
+                                else:
                                     enemy_name = fdata.get('name', f'Faction {fid}')
-                                    break
+                    elif isinstance(factions, dict):
+                        ally_in_war = str(faction_id) in [str(k) for k in factions.keys()]
+                        for fid, fdata in factions.items():
+                            if str(fid) != str(faction_id):
+                                enemy_name = fdata.get('name', f'Faction {fid}') if isinstance(fdata, dict) else f'Faction {fid}'
+
+                    if not ally_in_war:
+                        debug_lines.append(f'  - ⚠️ War {war_id} does NOT involve {ally_name}! (API returned wrong war)')
+                        continue
 
                     if war_id != 'unknown' and war_id != '0':
                         # end can be None or 0 for ongoing wars
