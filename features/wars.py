@@ -73,29 +73,69 @@ class WarTracker:
         """
         data = await fetch_faction_data_v2('wars')
         if not data:
+            print('War v2: No data returned from v2 API')
             return None
 
-        wars = data.get('wars', {})
-        if not wars:
-            return None
+        print(f'War v2: Response keys: {list(data.keys())}')
 
-        # v2 wars format: wars.ranked = {war_id, start, end, factions: [...]}
-        ranked = wars.get('ranked', {})
-        if not ranked:
-            return None
+        # v2 may return wars at top level or nested
+        # Try multiple possible structures
+        wars = data.get('wars', data)
 
-        factions = ranked.get('factions', [])
-        if not isinstance(factions, list) or not factions:
-            return None
+        # If wars is a dict, check for ranked war data
+        if isinstance(wars, dict):
+            print(f'War v2: wars keys: {list(wars.keys())}')
 
-        # Convert list format to dict keyed by faction id (matching rankedwars format)
-        result = {}
-        for faction in factions:
-            if isinstance(faction, dict):
-                fid = str(faction.get('id', 0))
-                result[fid] = faction
+            # Try wars.ranked first
+            ranked = wars.get('ranked', None)
 
-        return result
+            # If no ranked key, wars itself might be the war data
+            if ranked is None:
+                # Maybe it's keyed by war ID directly
+                for key, value in wars.items():
+                    if isinstance(value, dict) and 'factions' in value:
+                        ranked = value
+                        print(f'War v2: Found war data under key "{key}"')
+                        break
+
+            if not ranked:
+                print(f'War v2: No ranked war data found in response')
+                return None
+
+            print(f'War v2: ranked keys: {list(ranked.keys()) if isinstance(ranked, dict) else type(ranked)}')
+
+            factions = ranked.get('factions', [])
+
+            # Handle both list and dict formats
+            if isinstance(factions, dict):
+                print(f'War v2: factions is dict with keys: {list(factions.keys())}')
+                # Already a dict keyed by faction id
+                result = {}
+                for fid, fdata in factions.items():
+                    if isinstance(fdata, dict):
+                        result[str(fid)] = fdata
+                        members = fdata.get('members', {})
+                        print(f'War v2: Faction {fid} has {len(members)} members')
+                return result if result else None
+
+            elif isinstance(factions, list) and factions:
+                print(f'War v2: factions is list with {len(factions)} entries')
+                # Convert list format to dict keyed by faction id
+                result = {}
+                for faction in factions:
+                    if isinstance(faction, dict):
+                        fid = str(faction.get('id', faction.get('faction_id', 0)))
+                        result[fid] = faction
+                        members = faction.get('members', {})
+                        print(f'War v2: Faction {fid} has {len(members)} members')
+                return result if result else None
+
+            else:
+                print(f'War v2: factions type: {type(factions)}, value: {factions}')
+                return None
+
+        print(f'War v2: Unexpected wars type: {type(wars)}')
+        return None
 
     async def get_current_war(self):
         """
