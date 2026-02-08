@@ -714,31 +714,26 @@ async def setup_alliance_commands(bot, manager: AllianceManager):
             return
 
         debug_lines = []
-        debug_lines.append(f'**Channel ID:** {manager.channel_id}')
-        debug_lines.append(f'**Announced Wars:** {list(manager.announced_wars)}')
-        debug_lines.append(f'**Announced Scheduled:** {list(manager.announced_scheduled)}')
-        debug_lines.append(f'**Announced 24h:** {list(manager.announced_24h)}')
-        debug_lines.append(f'**Active Wars:** {list(manager.active_wars.keys())}')
+        debug_lines.append(f'Tracking **{len(manager.allies)}** allies')
         debug_lines.append('')
 
         for faction_id, ally_info in manager.allies.items():
             ally_name = ally_info.get('name', f'Faction {faction_id}')
-            debug_lines.append(f'**Checking {ally_name} [{faction_id}]:**')
+            debug_lines.append(f'**{ally_name}**')
 
             faction_data = await manager._fetch_faction_wars(faction_id)
             if not faction_data:
-                debug_lines.append('  - ❌ No data returned from API')
+                debug_lines.append('  ❌ API error')
+                debug_lines.append('')
                 continue
 
             wars = faction_data.get('wars', {})
             if not wars:
-                debug_lines.append('  - No active wars')
+                debug_lines.append('  No wars')
+                debug_lines.append('')
                 continue
 
-            debug_lines.append(f'  - Wars type: {type(wars).__name__}')
-
             if isinstance(wars, dict):
-                debug_lines.append(f'  - Wars keys: {list(wars.keys())}')
                 ranked_war = wars.get('ranked')
 
                 if ranked_war and isinstance(ranked_war, dict):
@@ -766,7 +761,8 @@ async def setup_alliance_commands(bot, manager: AllianceManager):
                                 enemy_name = fdata.get('name', f'Faction {fid}') if isinstance(fdata, dict) else f'Faction {fid}'
 
                     if not ally_in_war:
-                        debug_lines.append(f'  - ⚠️ War {war_id} does NOT involve {ally_name}! (API returned wrong war)')
+                        debug_lines.append(f'  ⚠️ API returned wrong war (#{war_id})')
+                        debug_lines.append('')
                         continue
 
                     if war_id != 'unknown' and war_id != '0':
@@ -777,22 +773,39 @@ async def setup_alliance_commands(bot, manager: AllianceManager):
                             status = 'active'
                         else:
                             status = 'ended'
-                        announced_start = '✓' if war_id in manager.announced_wars else '✗'
-                        announced_sched = '✓' if war_id in manager.announced_scheduled else '✗'
-                        announced_24h = '✓' if war_id in manager.announced_24h else '✗'
-                        if start > now:
+                        # Status emoji and time info
+                        if status == 'scheduled':
+                            emoji = '📅'
                             time_info = f'Starts in {(start - now) / 3600:.1f}h'
-                        else:
+                        elif status == 'active':
+                            emoji = '⚔️'
                             time_info = f'Running for {(now - start) / 3600:.1f}h'
-                        debug_lines.append(f'  - **Ranked War {war_id}:** vs {enemy_name}')
-                        debug_lines.append(f'    Status: {status} | Sched: {announced_sched} | 24h: {announced_24h} | Start: {announced_start}')
-                        debug_lines.append(f'    {time_info}')
+                        else:
+                            emoji = '🏁'
+                            duration = (end - start) / 3600
+                            ended_ago = (now - end) / 3600
+                            time_info = f'Lasted {duration:.1f}h (ended {ended_ago:.1f}h ago)'
+
+                        # Announcement tracking
+                        ann = []
+                        if war_id in manager.announced_scheduled:
+                            ann.append('Sched')
+                        if war_id in manager.announced_24h:
+                            ann.append('24h')
+                        if war_id in manager.announced_wars:
+                            ann.append('Start')
+                        ann_text = ', '.join(ann) if ann else 'None'
+
+                        debug_lines.append(f'  {emoji} vs {enemy_name} (#{war_id})')
+                        debug_lines.append(f'  {time_info}')
+                        debug_lines.append(f'  Announced: {ann_text}')
                     else:
-                        debug_lines.append(f'  - No active ranked war (war_id={war_id})')
+                        debug_lines.append(f'  No ranked war')
                 else:
-                    debug_lines.append(f'  - No ranked war data')
+                    debug_lines.append(f'  No ranked war data')
             else:
-                debug_lines.append(f'  - Unexpected wars format: {type(wars)}')
+                debug_lines.append(f'  Unknown format')
+            debug_lines.append('')
 
         debug_text = '\n'.join(debug_lines)
         if len(debug_text) > 4000:
