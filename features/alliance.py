@@ -780,10 +780,13 @@ async def setup_alliance_commands(bot, manager: AllianceManager):
                         announced_start = '✓' if war_id in manager.announced_wars else '✗'
                         announced_sched = '✓' if war_id in manager.announced_scheduled else '✗'
                         announced_24h = '✓' if war_id in manager.announced_24h else '✗'
-                        hours_until = (start - now) / 3600 if start > now else 0
+                        if start > now:
+                            time_info = f'Starts in {(start - now) / 3600:.1f}h'
+                        else:
+                            time_info = f'Running for {(now - start) / 3600:.1f}h'
                         debug_lines.append(f'  - **Ranked War {war_id}:** vs {enemy_name}')
                         debug_lines.append(f'    Status: {status} | Sched: {announced_sched} | 24h: {announced_24h} | Start: {announced_start}')
-                        debug_lines.append(f'    Start: {start} | End: {end} | Now: {now:.0f} | Hours: {hours_until:.1f}')
+                        debug_lines.append(f'    {time_info}')
                     else:
                         debug_lines.append(f'  - No active ranked war (war_id={war_id})')
                 else:
