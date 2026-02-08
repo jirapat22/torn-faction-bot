@@ -13,7 +13,7 @@ Features:
 import discord
 from datetime import datetime
 from utils.helpers import load_json, save_json, create_embed, format_timestamp, get_current_timestamp
-from utils.torn_api import fetch_faction_data
+from utils.torn_api import fetch_faction_data, fetch_faction_data_v2
 from config import (
     WAR_CHANNEL_ID,
     WAR_MANAGEMENT_CHANNEL_ID,
@@ -71,7 +71,7 @@ class WarTracker:
         Returns:
             Dict of {faction_id_str: faction_data} with members, or None
         """
-        data = await fetch_faction_data('wars')
+        data = await fetch_faction_data_v2('wars')
         if not data:
             return None
 

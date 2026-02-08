@@ -148,6 +148,25 @@ async def fetch_faction_data(selections='basic'):
     return data
 
 
+async def fetch_faction_data_v2(selections='wars'):
+    """
+    Fetch faction data from Torn API v2 endpoint.
+    Some selections (like 'wars') are only available in v2.
+
+    Args:
+        selections: Comma-separated API selections
+
+    Returns:
+        Dict with faction data or None if error
+    """
+    data = await _make_api_request(
+        f'v2/faction/{TORN_FACTION_ID}',
+        {'selections': selections}
+    )
+
+    return data
+
+
 async def fetch_chain_data():
     """
     Fetch current chain data
