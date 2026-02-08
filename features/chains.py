@@ -34,6 +34,7 @@ class ChainTracker:
         self.chain_history = {}
         self.last_reported_chain_id = None  # Track last reported chain to prevent duplicates
         self.subscription_manager = None  # Set by bot.py
+        self.chain_end_checks = 0  # Counter for consecutive "no chain" checks (prevents false completion)
 
     async def load_chain_history(self):
         """Load chain history from JSON file"""
@@ -284,9 +285,17 @@ class ChainTracker:
         # Check if there's an active chain event
         chain_event_active = await self.has_active_chain_event()
 
-        # Detect chain END (was active, now not) - only report if chain event is active
+        # Detect chain END (was active, now not)
+        # Require 3 consecutive "no chain" checks to prevent false completion from API glitches
         if self.was_chain_active and not chain:
-            print('Chain ended! Checking for chain report...')
+            self.chain_end_checks += 1
+            print(f'Chain not detected, check {self.chain_end_checks}/3...')
+
+            if self.chain_end_checks < 3:
+                # Wait for more checks before declaring chain ended
+                return
+
+            print('Chain confirmed ended after 3 checks. Posting report...')
 
             # Only post chain report if chain event is active
             if chain_event_active:
@@ -300,10 +309,8 @@ class ChainTracker:
                         # Post chain report with subscriber pings (important event)
                         report_embed = await self.format_chainreport_embed(chainreport)
 
-                        # Ping subscribers and/or role
+                        # Ping chain subscribers
                         pings = []
-                        if CHAINWATCHER_ROLE_ID:
-                            pings.append(f'<@&{CHAINWATCHER_ROLE_ID}>')
                         if self.subscription_manager:
                             sub_pings = self.subscription_manager.get_subscriber_mentions('chain')
                             if sub_pings:
@@ -322,13 +329,15 @@ class ChainTracker:
             # Reset state
             self.was_chain_active = False
             self.last_chain_count = 0
+            self.chain_end_checks = 0
             return
 
         # No active chain
         if not chain:
             return
 
-        # Chain is active
+        # Chain is active - reset end check counter
+        self.chain_end_checks = 0
         current_count = chain.get('current', 0)
 
         # Only track chains with 10+ hits (official chain threshold)
@@ -348,23 +357,28 @@ class ChainTracker:
 
         # Check if count changed significantly (every 25 hits or milestone)
         should_post = False
+        hit_milestone = None
 
         # Post at milestones: 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000
         milestones = [10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000]
         for milestone in milestones:
             if current_count >= milestone and self.last_chain_count < milestone:
                 should_post = True
+                hit_milestone = milestone
                 break
 
         # Also post every 100 hits after 100
         if current_count >= 100 and (current_count // 100) > (self.last_chain_count // 100):
             should_post = True
+            hit_milestone = (current_count // 100) * 100
 
         if should_post:
+            # Use milestone value for the message so it shows "10 hits" not "11 hits"
+            display_count = hit_milestone if hit_milestone else current_count
             # Post update to #chaining channel (no ping for regular updates)
             embed = await self.format_chain_embed(chain)
-            await channel.send(f'**Chain Update: {current_count} hits!**', embed=embed)
-            print(f'Posted chain update: {current_count} hits')
+            await channel.send(f'**Chain Update: {display_count} hits!**', embed=embed)
+            print(f'Posted chain update: {display_count} hits (actual: {current_count})')
 
         # Update last count
         self.last_chain_count = current_count

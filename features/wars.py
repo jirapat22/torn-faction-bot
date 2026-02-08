@@ -69,6 +69,7 @@ class WarTracker:
 
         # Check if there's an active war
         if not rankedwars:
+            print('War: No ranked wars data found')
             return None
 
         # Get the first (current) war - must have started and not ended
@@ -77,7 +78,13 @@ class WarTracker:
             war = war_data.get('war', {})
             start = war.get('start', 0)
             end = war.get('end', 0)
-            if start <= now and end > now:
+
+            print(f'War: Checking war {war_id} - start: {start}, end: {end}, now: {now}')
+
+            # War is active if it has started and either:
+            # - end is 0/None (hasn't ended yet - active war)
+            # - end is in the future
+            if start > 0 and start <= now and (not end or end > now):
                 return {
                     'war_id': war_id,
                     'data': war_data
@@ -139,19 +146,27 @@ class WarTracker:
             color = EMBED_COLOR_WARNING
             status = f'⚠️ Losing {our_score} - {enemy_score}'
 
+        # Build fields
+        fields = [
+            {'name': 'Our Score', 'value': str(our_score), 'inline': True},
+            {'name': 'Enemy Score', 'value': str(enemy_score), 'inline': True},
+            {'name': 'Target Score', 'value': str(target) if target > 0 else 'N/A', 'inline': True},
+            {'name': 'War ID', 'value': str(war_info['war_id']), 'inline': True},
+            {'name': 'Started', 'value': format_timestamp(start_time, 'R'), 'inline': True},
+        ]
+
+        # Only show end time if it's set (0 means war hasn't ended yet)
+        if end_time and end_time > 0:
+            fields.append({'name': 'Ends', 'value': format_timestamp(end_time, 'R'), 'inline': True})
+        else:
+            fields.append({'name': 'Status', 'value': 'In Progress', 'inline': True})
+
         # Build embed
         embed = create_embed(
             title=f'Ranked War vs {enemy_name}',
             description=status,
             color=color,
-            fields=[
-                {'name': 'Our Score', 'value': str(our_score), 'inline': True},
-                {'name': 'Enemy Score', 'value': str(enemy_score), 'inline': True},
-                {'name': 'Target Score', 'value': str(target) if target > 0 else 'N/A', 'inline': True},
-                {'name': 'War ID', 'value': str(war_info['war_id']), 'inline': True},
-                {'name': 'Started', 'value': format_timestamp(start_time, 'R'), 'inline': True},
-                {'name': 'Ends', 'value': format_timestamp(end_time, 'R'), 'inline': True}
-            ]
+            fields=fields
         )
 
         return embed

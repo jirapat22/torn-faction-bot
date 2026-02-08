@@ -118,23 +118,31 @@ Manage enemy watchlist during war.
 - `clear` - Clear entire watchlist
 
 ### `/stakeout <action>`
-Track enemy behavior patterns over 24-48 hours.
+Track enemy behavior patterns for strategic threat analysis over 24-48 hours.
 - `add <torn_id> [hours]` - Start watching a player (default 24h, max 48h)
-- `list` - Show all active stakeouts
-- `report <torn_id>` - View behavior analysis with:
+- `extend <torn_id> <hours>` - Add more tracking time without losing data
+- `status <torn_id>` - Quick current status check (online/hospital/etc.)
+- `list` - Show all active stakeouts with time remaining
+- `report <torn_id>` - View comprehensive threat analysis with:
   - Activity heatmap by hour (TCT)
-  - Detected sleep window
-  - Best attack windows
+  - **Peak Danger Windows** (when they're most active/online)
+  - **Safe Windows** (when they're offline/hospital - opportunity to act)
+  - Sleep pattern detection (consecutive offline streaks)
+  - Weekday vs Weekend activity comparison
+  - Most dangerous and safest days
   - Estimated timezone
-  - Online/hospital rates
+  - Online/hospital percentages
 - `stop <torn_id>` - Stop watching (keeps history for reports)
+- `clear` - Remove all stakeouts and historical data
+- `test` - Test stakeout functionality (development)
 
 ### `/alliance <action>`
 Track ally faction wars and get announcements.
 - `add <faction_id> [faction_name]` - Add an ally faction to track
 - `remove <faction_id>` - Remove an ally from tracking
 - `list` - Show all tracked ally factions with war status
-- `status <faction_id>` - Check specific ally's current war status
+- `setchannel [channel]` - Set channel for war announcements (default: current)
+- `check` - Force check all ally wars now (debug)
 
 ---
 
@@ -168,6 +176,23 @@ Check your own availability selections for a poll.
 
 ### `/tct_now`
 Show the current Torn City Time (UTC).
+
+---
+
+## Stakeout vs Enemy: What's the Difference?
+
+| Feature | **Stakeout** | **Enemy Watchlist** |
+|---------|-------------|---------------------|
+| **Purpose** | Strategic long-term intelligence | Real-time tactical alerts |
+| **Duration** | 24-48 hours of monitoring | Active during war events only |
+| **Output** | Detailed behavior analysis reports | Instant status change alerts |
+| **Use Case** | Learn enemy patterns (sleep, activity) | Know when to attack NOW |
+| **Data** | Activity heatmaps, danger/safe windows | Current online/hospital status |
+| **When** | Before or between wars | During active war |
+
+**Stakeout** = "Study their habits" — Track strong enemies over time to understand when they're most active (dangerous) or offline (safe windows to act).
+
+**Enemy Watchlist** = "Alert me NOW" — Get pinged the moment an enemy comes online or leaves hospital during an active war.
 
 ---
 
@@ -214,9 +239,17 @@ Show the current Torn City Time (UTC).
 ### Alliance War Tracking
 - Checks ally factions every 5 minutes
 - Announces when ally war is scheduled (with countdown timer)
+- **24-hour reminder** before ally war starts
 - Announces when ally war starts
 - Announces when ally war ends (win/loss/draw with score)
-- Posts to #war channel
+- Posts to configured alliance channel (default: #war)
+
+### Stakeout Monitoring
+- Checks all stakeout targets every 15 minutes
+- Records online/offline/hospital status over time
+- Tracks weekday vs weekend patterns separately
+- Detects consecutive offline streaks for sleep pattern analysis
+- Auto-expires stakeouts after their duration ends
 
 ---
 
@@ -233,10 +266,13 @@ Show the current Torn City Time (UTC).
 | `/verify` | Management | Manage verification |
 | `/rolesync` | Management | Configure role sync |
 | `/enemy add/remove` | Management | Manage watchlist |
-| `/stakeout add/stop` | Management | Track enemy behavior |
-| `/stakeout report` | Everyone | View behavior analysis |
+| `/stakeout add/stop/extend` | Management | Track enemy behavior |
+| `/stakeout status/report` | Everyone | View threat analysis |
+| `/stakeout clear` | Management | Clear all stakeout data |
 | `/alliance add/remove` | Management | Track ally factions |
-| `/alliance list/status` | Everyone | View ally war status |
+| `/alliance setchannel` | Management | Set announcement channel |
+| `/alliance list` | Everyone | View ally war status |
+| `/alliance check` | Management | Force check ally wars |
 | `/avail_setup` | Management | Create availability poll |
 | `/avail_summary` | Everyone | View availability timetable |
 | `/tct_now` | Everyone | Show current TCT time |
@@ -244,5 +280,5 @@ Show the current Torn City Time (UTC).
 
 ---
 
-*Last updated: February 2026*
+*Last updated: February 7, 2026*
 *Bot by Ascended Punks*
