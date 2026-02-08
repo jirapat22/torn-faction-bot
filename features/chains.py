@@ -40,13 +40,16 @@ class ChainTracker:
         """Load chain history from JSON file"""
         self.chain_history = load_json(self.chain_data_file, default={})
 
-        # Load chain state (last reported chain ID)
+        # Load chain state (last reported chain ID + last chain count)
         state = load_json(self.chain_state_file, default={})
         self.last_reported_chain_id = state.get('last_reported_chain_id')
+        self.last_chain_count = state.get('last_chain_count', 0)
 
         print(f'Loaded chain history with {len(self.chain_history)} records')
         if self.last_reported_chain_id:
             print(f'Last reported chain: #{self.last_reported_chain_id}')
+        if self.last_chain_count > 0:
+            print(f'Restored last chain count: {self.last_chain_count}')
 
     async def save_chain_history(self):
         """Save chain history to JSON file"""
@@ -322,7 +325,10 @@ class ChainTracker:
 
                         # Save this as last reported chain
                         self.last_reported_chain_id = chain_id
-                        save_json(self.chain_state_file, {'last_reported_chain_id': chain_id})
+                        save_json(self.chain_state_file, {
+                            'last_reported_chain_id': chain_id,
+                            'last_chain_count': self.last_chain_count
+                        })
                     else:
                         print(f'Chain #{chain_id} already reported, skipping duplicate')
 
@@ -383,8 +389,12 @@ class ChainTracker:
             await channel.send(f'**Chain Update: {display_count} hits!**', embed=embed)
             print(f'Posted chain update: {display_count} hits (actual: {current_count})')
 
-        # Update last count
+        # Update last count and persist to disk (survives restarts)
         self.last_chain_count = current_count
+        save_json(self.chain_state_file, {
+            'last_reported_chain_id': self.last_reported_chain_id,
+            'last_chain_count': self.last_chain_count
+        })
 
         # Save chain data to history (keep last 100 entries max)
         chain_id = f'chain_{get_current_timestamp()}'
