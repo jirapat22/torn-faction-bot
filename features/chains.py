@@ -364,22 +364,16 @@ class ChainTracker:
             self.last_chain_count = current_count
             return
 
-        # Check if count changed significantly (every 25 hits or milestone)
+        # Only post at bonus milestones
         should_post = False
         hit_milestone = None
 
-        # Post at milestones: 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000
         milestones = [10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000]
         for milestone in milestones:
             if current_count >= milestone and self.last_chain_count < milestone:
                 should_post = True
                 hit_milestone = milestone
                 break
-
-        # Also post every 100 hits after 100
-        if current_count >= 100 and (current_count // 100) > (self.last_chain_count // 100):
-            should_post = True
-            hit_milestone = (current_count // 100) * 100
 
         if should_post:
             # Use milestone value for the message so it shows "10 hits" not "11 hits"
