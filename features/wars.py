@@ -534,29 +534,48 @@ class WarTracker:
             ]
         )
 
-        # Build ALL member lines (compact format)
-        member_lines = []
+        # Build monospace table for clean alignment
+        # Find the longest name to set column width
+        max_name = max(len(m['name']) for m in sorted_members)
+        max_name = min(max_name, 15)  # Cap at 15 chars to fit mobile
+
+        # Build table lines
+        header = f'{"#":>2}  {"Name":<{max_name}}  War  Out  Hit'
+        separator = '-' * len(header)
+        table_lines = [header, separator]
+
         for i, m in enumerate(sorted_members):
-            if data_source == 'report' and m['score'] > 0:
-                line = f'`{i+1:>2}.` **{m["name"]}** — {m["score"]:.2f} pts'
+            name = m['name'][:max_name]
+            line = f'{i+1:>2}  {name:<{max_name}}  {m["war_hits"]:>3}  {m["outside_hits"]:>3}  {m["incoming"]:>3}'
+            table_lines.append(line)
+
+        # Split table into code block chunks that fit Discord's 1024 char field limit
+        # Each line is wrapped in a code block, so account for ``` markers (8 chars)
+        table_chunks = []
+        current_chunk = []
+        current_length = 0
+
+        for line in table_lines:
+            # +1 for newline, +8 for ``` markers
+            if current_length + len(line) + 1 > 1024 - 8 and current_chunk:
+                table_chunks.append('```\n' + '\n'.join(current_chunk) + '\n```')
+                current_chunk = [line]
+                current_length = len(line)
             else:
-                line = f'`{i+1:>2}.` **{m["name"]}**'
-            line += f'\n     War: {m["war_hits"]} | Outside: {m["outside_hits"]} | Hit: {m["incoming"]}x'
-            member_lines.append(line)
+                current_chunk.append(line)
+                current_length += len(line) + 1
 
-        # Chunk member lines into fields (1024 char Discord limit)
-        chunks = self._chunk_text(member_lines, max_length=1024)
+        if current_chunk:
+            table_chunks.append('```\n' + '\n'.join(current_chunk) + '\n```')
 
-        for idx, chunk in enumerate(chunks):
+        for idx, chunk in enumerate(table_chunks):
             if idx == 0:
-                # First chunk goes in the main embed
                 embed.add_field(
                     name=f'All Members ({len(sorted_members)})',
                     value=chunk,
                     inline=False
                 )
             else:
-                # Check if current embed is getting too large (Discord limit: 6000 chars, 25 fields)
                 if len(embed.fields) >= 24 or len(embed) > 5000:
                     embeds.append(embed)
                     embed = create_embed(
@@ -564,7 +583,7 @@ class WarTracker:
                         color=color
                     )
                 embed.add_field(
-                    name=f'Members (cont. {idx + 1})',
+                    name=f'Members (cont.)',
                     value=chunk,
                     inline=False
                 )
