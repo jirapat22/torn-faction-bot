@@ -290,53 +290,67 @@ class WarTracker:
 
         return embed
 
-    async def _get_non_war_attacks(self, enemy_faction_id, war_start):
+    async def _get_war_attack_stats(self, enemy_faction_id, war_start):
         """
-        Fetch faction attacks and count non-war attacks per member.
-        Non-war attacks = attacks on players NOT in the enemy faction during war.
+        Compute per-member war statistics from the faction attacks log.
+        This is the primary source of warboard data since the war API
+        doesn't return per-member breakdowns.
 
         Args:
             enemy_faction_id: The enemy faction ID in the ranked war
             war_start: War start timestamp to filter attacks
 
         Returns:
-            Dict of {user_id: non_war_attack_count}
+            Dict of {user_id: {'war_hits': N, 'outside_hits': N, 'incoming': N}}
         """
-        non_war_counts = {}
+        stats = {}
 
         try:
             data = await fetch_faction_data('attacks')
             if not data:
-                return non_war_counts
+                return stats
 
             attacks = data.get('attacks', {})
-            now = get_current_timestamp()
+            our_faction = str(TORN_FACTION_ID)
+            enemy_faction = str(enemy_faction_id)
 
             for attack_id, attack in attacks.items():
                 if not isinstance(attack, dict):
                     continue
 
                 timestamp = attack.get('timestamp_started', 0)
-                attacker_id = str(attack.get('attacker_id', 0))
-                defender_faction = str(attack.get('defender_faction', 0))
-                result = attack.get('result', '')
-
-                # Only count attacks during the war period
                 if timestamp < war_start:
                     continue
 
-                # Only count successful attacks (not losses/escapes)
-                if result not in ('Attacked', 'Mugged', 'Hospitalized', 'Special'):
-                    continue
+                attacker_id = str(attack.get('attacker_id', 0))
+                attacker_faction = str(attack.get('attacker_faction', 0))
+                defender_id = str(attack.get('defender_id', 0))
+                defender_faction = str(attack.get('defender_faction', 0))
+                result = attack.get('result', '')
 
-                # If defender is NOT in the enemy faction, it's a non-war attack
-                if defender_faction != str(enemy_faction_id):
-                    non_war_counts[attacker_id] = non_war_counts.get(attacker_id, 0) + 1
+                # Our member attacked someone (successful attacks only)
+                if attacker_faction == our_faction:
+                    if result not in ('Attacked', 'Mugged', 'Hospitalized', 'Special'):
+                        continue
+
+                    if attacker_id not in stats:
+                        stats[attacker_id] = {'war_hits': 0, 'outside_hits': 0, 'incoming': 0}
+
+                    if defender_faction == enemy_faction:
+                        stats[attacker_id]['war_hits'] += 1
+                    else:
+                        stats[attacker_id]['outside_hits'] += 1
+
+                # Enemy attacked our member (any result counts as incoming)
+                elif attacker_faction == enemy_faction and defender_faction == our_faction:
+                    if defender_id not in stats:
+                        stats[defender_id] = {'war_hits': 0, 'outside_hits': 0, 'incoming': 0}
+                    stats[defender_id]['incoming'] += 1
 
         except Exception as e:
-            print(f'War: Error fetching non-war attacks: {e}')
+            print(f'War: Error computing attack stats: {e}')
 
-        return non_war_counts
+        return stats
 
     def _chunk_text(self, lines, max_length=1024):
         """Split lines into chunks that fit within Discord's field limit"""
@@ -361,7 +375,7 @@ class WarTracker:
     async def format_warboard_embed(self, war_info):
         """
         Create Discord embeds for war participation leaderboard.
-        Shows ALL members with 3 metrics each.
+        Shows ALL faction members with 3 metrics each, computed from the attacks log.
         Returns a list of embeds if content is too large for one.
 
         Args:
@@ -383,87 +397,60 @@ class WarTracker:
         war_start = war.get('start', 0)
         is_active = war_info.get('is_active', True)
 
-        # Find our faction and enemy faction by matching TORN_FACTION_ID
-        our_members = None
+        # Find our faction and enemy faction from rankedwars data
         our_faction_data = None
         enemy_faction_id = None
         enemy_faction_data = None
         for faction_id, faction_data in factions.items():
             if str(faction_id) == str(TORN_FACTION_ID):
-                our_members = faction_data.get('members', {})
                 our_faction_data = faction_data
             else:
                 enemy_faction_id = faction_id
                 enemy_faction_data = faction_data
 
-        # rankedwars (v1) may not include per-member stats
-        # Fall back to v2 wars API which includes member data for our own faction
-        if not our_members:
-            print('War: No member data in rankedwars, fetching v2 wars data...')
-            v2_factions = await self._fetch_war_members()
-            if v2_factions:
-                for fid, fdata in v2_factions.items():
-                    if str(fid) == str(TORN_FACTION_ID):
-                        our_members = fdata.get('members', {})
-                        # Keep rankedwars faction data for scores if available, otherwise use v2
-                        if not our_faction_data:
-                            our_faction_data = fdata
-                    else:
-                        if not enemy_faction_id:
-                            enemy_faction_id = fid
-                        if not enemy_faction_data:
-                            enemy_faction_data = fdata
-                if our_members:
-                    print(f'War: Got {len(our_members)} members from v2 wars API')
-
-        if not our_members:
+        if not enemy_faction_id:
             return create_embed(
                 title='No War Data',
-                description='No member participation data available for this war.',
+                description='Could not identify war factions.',
                 color=EMBED_COLOR_WARNING
             )
 
-        # Fetch faction members to get names
+        # Fetch faction members (for names + full roster)
         from utils.torn_api import fetch_faction_members
         faction_members = await fetch_faction_members()
 
-        # Get non-war attacks (attacks on non-opponent targets during war)
-        non_war_attacks = {}
-        if enemy_faction_id and war_start:
-            non_war_attacks = await self._get_non_war_attacks(enemy_faction_id, war_start)
+        if not faction_members:
+            return create_embed(
+                title='API Error',
+                description='Could not fetch faction member data.',
+                color=EMBED_COLOR_CRITICAL
+            )
 
-        # Build member list with all 3 metrics
+        # Compute per-member war stats from attacks log
+        attack_stats = await self._get_war_attack_stats(enemy_faction_id, war_start)
+        print(f'War: Computed attack stats for {len(attack_stats)} members from attacks log')
+
+        # Build member list - include ALL faction members
         member_list = []
-        for user_id, stats in our_members.items():
-            member_name = 'Unknown'
-            if faction_members and user_id in faction_members:
-                member_name = faction_members[user_id].get('name', f'ID:{user_id}')
-            else:
-                member_name = f'ID:{user_id}'
-
-            war_hits = stats.get('attacks', 0)
-            incoming = stats.get('defends', 0)
-            score = stats.get('score', 0)
-            outside_hits = non_war_attacks.get(user_id, 0)
+        for user_id, member_data in faction_members.items():
+            member_name = member_data.get('name', f'ID:{user_id}')
+            stats = attack_stats.get(user_id, {})
 
             member_list.append({
                 'name': member_name,
-                'war_hits': war_hits,
-                'outside_hits': outside_hits,
-                'incoming': incoming,
-                'score': score
+                'war_hits': stats.get('war_hits', 0),
+                'outside_hits': stats.get('outside_hits', 0),
+                'incoming': stats.get('incoming', 0),
             })
 
-        # Sort by score (highest first)
-        sorted_members = sorted(member_list, key=lambda x: x['score'], reverse=True)
+        # Sort by war hits (highest first)
+        sorted_members = sorted(member_list, key=lambda x: x['war_hits'], reverse=True)
 
         # Calculate totals
         total_war_hits = sum(m['war_hits'] for m in member_list)
         total_outside = sum(m['outside_hits'] for m in member_list)
         total_incoming = sum(m['incoming'] for m in member_list)
-        total_score = sum(m['score'] for m in member_list)
         participants = len([m for m in member_list if m['war_hits'] > 0])
-        non_participants = [m for m in member_list if m['war_hits'] == 0 and m['score'] == 0]
 
         # War status header
         enemy_name = enemy_faction_data.get('name', 'Unknown') if enemy_faction_data else 'Unknown'
@@ -492,7 +479,6 @@ class WarTracker:
                 {'name': 'War Attacks', 'value': str(total_war_hits), 'inline': True},
                 {'name': 'Outside Hits', 'value': str(total_outside), 'inline': True},
                 {'name': 'Times Hit', 'value': str(total_incoming), 'inline': True},
-                {'name': 'Total Score', 'value': str(total_score), 'inline': True},
                 {'name': 'Participated', 'value': f'{participants}/{len(member_list)}', 'inline': True},
             ]
         )
@@ -500,7 +486,7 @@ class WarTracker:
         # Build ALL member lines (compact format)
         member_lines = []
         for i, m in enumerate(sorted_members):
-            line = f'`{i+1:>2}.` **{m["name"]}** — {m["score"]} pts'
+            line = f'`{i+1:>2}.` **{m["name"]}**'
             line += f'\n     War: {m["war_hits"]} | Outside: {m["outside_hits"]} | Hit: {m["incoming"]}x'
             member_lines.append(line)
 
@@ -793,27 +779,10 @@ class WarTracker:
             self.current_war_id = war_id
             print(f'War detected: {war_id}')
 
-        # Save war data to history (with full faction data for final report)
-        # rankedwars may not include member data, so enrich with v2 wars data
-        factions_data = war_info['data'].get('factions', {})
-
-        # Check if factions have member data, if not fetch from v2 wars
-        has_members = any(
-            fd.get('members') for fd in factions_data.values() if isinstance(fd, dict)
-        )
-        if not has_members:
-            v2_factions = await self._fetch_war_members()
-            if v2_factions:
-                # Merge v2 member data into rankedwars faction data
-                for fid, fdata in v2_factions.items():
-                    if fid in factions_data and isinstance(factions_data[fid], dict):
-                        factions_data[fid]['members'] = fdata.get('members', {})
-                    else:
-                        factions_data[fid] = fdata
-
+        # Save war data to history (faction-level scores for final report)
         self.war_history[war_id] = {
             'timestamp': get_current_timestamp(),
-            'factions': factions_data
+            'factions': war_info['data'].get('factions', {})
         }
 
         # Prune old war entries (keep last 20)
