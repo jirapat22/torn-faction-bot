@@ -326,9 +326,9 @@ class ChainTracker:
                     else:
                         print(f'Chain #{chain_id} already reported, skipping duplicate')
 
-            # Reset state
+            # Reset state - keep last_chain_count so if chain comes back
+            # after an API glitch, we don't re-announce old milestones
             self.was_chain_active = False
-            self.last_chain_count = 0
             self.chain_end_checks = 0
             return
 
@@ -347,7 +347,16 @@ class ChainTracker:
         # Mark chain as active if this is first detection with 10+ hits
         if not self.was_chain_active:
             self.was_chain_active = True
-            print(f'Chain detected with {current_count} hits')
+
+            # Check if this is a genuinely new chain or a continuation after API glitch
+            if current_count < self.last_chain_count:
+                # New chain (count is lower than before) - reset tracking
+                self.last_chain_count = 0
+                print(f'New chain detected with {current_count} hits')
+            else:
+                # Continuation after API glitch - keep last_chain_count
+                # to avoid re-announcing old milestones (10, 25, 50, etc.)
+                print(f'Chain resumed at {current_count} hits (was tracking at {self.last_chain_count})')
 
         # Only post updates if chain event is active
         if not chain_event_active:

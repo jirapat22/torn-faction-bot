@@ -242,17 +242,29 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
             embed = await war_tracker.format_war_embed(war_info)
             await interaction.followup.send(embed=embed)
 
-        @bot.tree.command(name='warboard', description='Show war participation leaderboard')
+        @bot.tree.command(name='warboard', description='Show war participation leaderboard (Management only)')
         async def warboard(interaction: discord.Interaction):
-            """Show war participation leaderboard"""
+            """Show war participation leaderboard - management only"""
+            # Check management permissions
+            if not is_management(interaction):
+                await interaction.response.send_message(
+                    'You need Management permissions to use this command.',
+                    ephemeral=True
+                )
+                return
+
             await interaction.response.defer()
 
-            # Get current war data
-            war_info = await war_tracker.get_current_war()
+            # Get latest war data (active or most recent completed)
+            war_info = await war_tracker.get_latest_war()
 
-            # Create and send embed
-            embed = await war_tracker.format_warboard_embed(war_info)
-            await interaction.followup.send(embed=embed)
+            # Create and send embeds (may be multiple for large rosters)
+            embeds = await war_tracker.format_warboard_embed(war_info)
+            if isinstance(embeds, list):
+                for embed in embeds:
+                    await interaction.followup.send(embed=embed)
+            else:
+                await interaction.followup.send(embed=embeds)
 
         print('War commands registered (/war, /warboard)')
     else:

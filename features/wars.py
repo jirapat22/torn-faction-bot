@@ -53,26 +53,29 @@ class WarTracker:
         """Save war history to JSON file"""
         save_json(self.war_data_file, self.war_history)
 
+    async def _fetch_rankedwars(self):
+        """Fetch ranked wars data from Torn API"""
+        data = await fetch_faction_data('rankedwars')
+        if not data:
+            return None
+        rankedwars = data.get('rankedwars', {})
+        if not rankedwars:
+            return None
+        return rankedwars
+
     async def get_current_war(self):
         """
-        Get current war status from Torn API
+        Get current ACTIVE war status from Torn API
 
         Returns:
             Dict with war data or None if error/no war
         """
-        data = await fetch_faction_data('rankedwars')
-
-        if not data:
-            return None
-
-        rankedwars = data.get('rankedwars', {})
-
-        # Check if there's an active war
+        rankedwars = await self._fetch_rankedwars()
         if not rankedwars:
             print('War: No ranked wars data found')
             return None
 
-        # Get the first (current) war - must have started and not ended
+        # Find active war - must have started and not ended
         now = get_current_timestamp()
         for war_id, war_data in rankedwars.items():
             war = war_data.get('war', {})
@@ -91,6 +94,48 @@ class WarTracker:
                 }
 
         return None
+
+    async def get_latest_war(self):
+        """
+        Get the latest war (active or most recently completed).
+        Used by /warboard to allow post-war review.
+
+        Returns:
+            Dict with war data and is_active flag, or None
+        """
+        rankedwars = await self._fetch_rankedwars()
+        if not rankedwars:
+            return None
+
+        now = get_current_timestamp()
+
+        # First try to find an active war
+        for war_id, war_data in rankedwars.items():
+            war = war_data.get('war', {})
+            start = war.get('start', 0)
+            end = war.get('end', 0)
+            if start > 0 and start <= now and (not end or end > now):
+                return {
+                    'war_id': war_id,
+                    'data': war_data,
+                    'is_active': True
+                }
+
+        # No active war - find the most recently started one (for post-war review)
+        latest_war = None
+        latest_start = 0
+        for war_id, war_data in rankedwars.items():
+            war = war_data.get('war', {})
+            start = war.get('start', 0)
+            if start > latest_start:
+                latest_start = start
+                latest_war = {
+                    'war_id': war_id,
+                    'data': war_data,
+                    'is_active': False
+                }
+
+        return latest_war
 
     async def format_war_embed(self, war_info):
         """
@@ -171,32 +216,111 @@ class WarTracker:
 
         return embed
 
-    async def format_warboard_embed(self, war_info):
+    async def _get_non_war_attacks(self, enemy_faction_id, war_start):
         """
-        Create a Discord embed for war participation leaderboard
+        Fetch faction attacks and count non-war attacks per member.
+        Non-war attacks = attacks on players NOT in the enemy faction during war.
 
         Args:
-            war_info: War data from Torn API
+            enemy_faction_id: The enemy faction ID in the ranked war
+            war_start: War start timestamp to filter attacks
 
         Returns:
-            discord.Embed
+            Dict of {user_id: non_war_attack_count}
+        """
+        non_war_counts = {}
+
+        try:
+            data = await fetch_faction_data('attacks')
+            if not data:
+                return non_war_counts
+
+            attacks = data.get('attacks', {})
+            now = get_current_timestamp()
+
+            for attack_id, attack in attacks.items():
+                if not isinstance(attack, dict):
+                    continue
+
+                timestamp = attack.get('timestamp_started', 0)
+                attacker_id = str(attack.get('attacker_id', 0))
+                defender_faction = str(attack.get('defender_faction', 0))
+                result = attack.get('result', '')
+
+                # Only count attacks during the war period
+                if timestamp < war_start:
+                    continue
+
+                # Only count successful attacks (not losses/escapes)
+                if result not in ('Attacked', 'Mugged', 'Hospitalized', 'Special'):
+                    continue
+
+                # If defender is NOT in the enemy faction, it's a non-war attack
+                if defender_faction != str(enemy_faction_id):
+                    non_war_counts[attacker_id] = non_war_counts.get(attacker_id, 0) + 1
+
+        except Exception as e:
+            print(f'War: Error fetching non-war attacks: {e}')
+
+        return non_war_counts
+
+    def _chunk_text(self, lines, max_length=1024):
+        """Split lines into chunks that fit within Discord's field limit"""
+        chunks = []
+        current_chunk = []
+        current_length = 0
+
+        for line in lines:
+            if current_length + len(line) + 1 > max_length and current_chunk:
+                chunks.append('\n'.join(current_chunk))
+                current_chunk = [line]
+                current_length = len(line)
+            else:
+                current_chunk.append(line)
+                current_length += len(line) + 1
+
+        if current_chunk:
+            chunks.append('\n'.join(current_chunk))
+
+        return chunks
+
+    async def format_warboard_embed(self, war_info):
+        """
+        Create Discord embeds for war participation leaderboard.
+        Shows ALL members with 3 metrics each.
+        Returns a list of embeds if content is too large for one.
+
+        Args:
+            war_info: War data from get_latest_war()
+
+        Returns:
+            discord.Embed or list of discord.Embed
         """
         if not war_info:
             return create_embed(
-                title='No Active War',
-                description='There is no active ranked war to show leaderboard for.',
+                title='No War Data',
+                description='No ranked war data available.',
                 color=EMBED_COLOR_INFO
             )
 
         war_data = war_info['data']
         factions = war_data.get('factions', {})
+        war = war_data.get('war', {})
+        war_start = war.get('start', 0)
+        is_active = war_info.get('is_active', True)
 
-        # Find our faction's members by matching TORN_FACTION_ID
+        # Find our faction and enemy faction by matching TORN_FACTION_ID
         our_members = None
+        our_faction_data = None
+        enemy_faction_id = None
+        enemy_faction_data = None
         for faction_id, faction_data in factions.items():
             if str(faction_id) == str(TORN_FACTION_ID):
                 our_members = faction_data.get('members', {})
-                break
+                our_faction_data = faction_data
+            else:
+                enemy_faction_id = faction_id
+                enemy_faction_data = faction_data
 
         # Fallback: use first faction with members if ID match failed
         if not our_members:
@@ -217,62 +341,112 @@ class WarTracker:
         from utils.torn_api import fetch_faction_members
         faction_members = await fetch_faction_members()
 
-        # Build member list with stats
+        # Get non-war attacks (attacks on non-opponent targets during war)
+        non_war_attacks = {}
+        if enemy_faction_id and war_start:
+            non_war_attacks = await self._get_non_war_attacks(enemy_faction_id, war_start)
+
+        # Build member list with all 3 metrics
         member_list = []
         for user_id, stats in our_members.items():
-            # Get member name
             member_name = 'Unknown'
             if faction_members and user_id in faction_members:
                 member_name = faction_members[user_id].get('name', f'ID:{user_id}')
             else:
                 member_name = f'ID:{user_id}'
 
-            # Get war stats (NO ASSISTS - only hits and score)
-            hits = stats.get('attacks', 0)  # Outgoing attacks
+            war_hits = stats.get('attacks', 0)
+            incoming = stats.get('defends', 0)
             score = stats.get('score', 0)
+            outside_hits = non_war_attacks.get(user_id, 0)
 
             member_list.append({
                 'name': member_name,
-                'hits': hits,
+                'war_hits': war_hits,
+                'outside_hits': outside_hits,
+                'incoming': incoming,
                 'score': score
             })
 
         # Sort by score (highest first)
-        sorted_members = sorted(
-            member_list,
-            key=lambda x: x['score'],
-            reverse=True
-        )
+        sorted_members = sorted(member_list, key=lambda x: x['score'], reverse=True)
 
         # Calculate totals
-        total_hits = sum(m['hits'] for m in member_list)
+        total_war_hits = sum(m['war_hits'] for m in member_list)
+        total_outside = sum(m['outside_hits'] for m in member_list)
+        total_incoming = sum(m['incoming'] for m in member_list)
         total_score = sum(m['score'] for m in member_list)
+        participants = len([m for m in member_list if m['war_hits'] > 0])
+        non_participants = [m for m in member_list if m['war_hits'] == 0 and m['score'] == 0]
 
-        # Build embed
+        # War status header
+        enemy_name = enemy_faction_data.get('name', 'Unknown') if enemy_faction_data else 'Unknown'
+        our_score = our_faction_data.get('score', 0) if our_faction_data else 0
+        enemy_score = enemy_faction_data.get('score', 0) if enemy_faction_data else 0
+
+        if is_active:
+            status_text = 'In Progress'
+            color = EMBED_COLOR_INFO
+        else:
+            status_text = 'VICTORY' if our_score > enemy_score else 'DEFEAT'
+            color = EMBED_COLOR_SUCCESS if our_score > enemy_score else EMBED_COLOR_CRITICAL
+
+        description = (
+            f'**vs {enemy_name}** | Score: {our_score} - {enemy_score} | {status_text}\n'
+            f'War ID: {war_info["war_id"]}'
+        )
+
+        # Build first embed with summary
+        embeds = []
         embed = create_embed(
-            title=f'War Participation Leaderboard',
-            description=f'War ID: {war_info["war_id"]}',
-            color=EMBED_COLOR_INFO,
+            title='War Participation Report',
+            description=description,
+            color=color,
             fields=[
-                {'name': 'Total Attacks', 'value': str(total_hits), 'inline': True},
+                {'name': 'War Attacks', 'value': str(total_war_hits), 'inline': True},
+                {'name': 'Outside Hits', 'value': str(total_outside), 'inline': True},
+                {'name': 'Times Hit', 'value': str(total_incoming), 'inline': True},
                 {'name': 'Total Score', 'value': str(total_score), 'inline': True},
-                {'name': 'Participants', 'value': str(len(member_list)), 'inline': True}
+                {'name': 'Participated', 'value': f'{participants}/{len(member_list)}', 'inline': True},
             ]
         )
 
-        # Add top contributors (max 10)
-        if sorted_members:
-            top_contributors = '\n'.join([
-                f'{i+1}. **{m["name"]}**: {m["score"]} pts ({m["hits"]} attacks)'
-                for i, m in enumerate(sorted_members[:10])
-            ])
-            embed.add_field(
-                name='Top Contributors',
-                value=top_contributors,
-                inline=False
-            )
+        # Build ALL member lines (compact format)
+        member_lines = []
+        for i, m in enumerate(sorted_members):
+            line = f'`{i+1:>2}.` **{m["name"]}** — {m["score"]} pts'
+            line += f'\n     War: {m["war_hits"]} | Outside: {m["outside_hits"]} | Hit: {m["incoming"]}x'
+            member_lines.append(line)
 
-        return embed
+        # Chunk member lines into fields (1024 char Discord limit)
+        chunks = self._chunk_text(member_lines, max_length=1024)
+
+        for idx, chunk in enumerate(chunks):
+            if idx == 0:
+                # First chunk goes in the main embed
+                embed.add_field(
+                    name=f'All Members ({len(sorted_members)})',
+                    value=chunk,
+                    inline=False
+                )
+            else:
+                # Check if current embed is getting too large (Discord limit: 6000 chars, 25 fields)
+                if len(embed.fields) >= 24 or len(embed) > 5000:
+                    embeds.append(embed)
+                    embed = create_embed(
+                        title=f'War Participation Report (cont.)',
+                        color=color
+                    )
+                embed.add_field(
+                    name=f'Members (cont. {idx + 1})',
+                    value=chunk,
+                    inline=False
+                )
+
+        embeds.append(embed)
+
+        # Return single embed or list
+        return embeds[0] if len(embeds) == 1 else embeds
 
     async def format_war_management_report(self, war_info, final_data=None):
         """
