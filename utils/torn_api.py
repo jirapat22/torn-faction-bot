@@ -232,6 +232,38 @@ async def get_member_last_action(torn_id):
     return member.get('last_action', {}).get('timestamp')
 
 
+async def fetch_faction_attacks(from_ts=None, to_ts=None, sort=None):
+    """
+    Fetch faction attacks with optional time range and sort order.
+    Used for paginating through large numbers of attacks.
+
+    Args:
+        from_ts: Unix timestamp to start from (inclusive)
+        to_ts: Unix timestamp to end at (inclusive)
+        sort: Sort order - 'asc' or 'desc' (default API behavior is desc)
+
+    Returns:
+        Dict of {attack_id: attack_data} or empty dict if error
+    """
+    params = {'selections': 'attacks'}
+    if from_ts is not None:
+        params['from'] = int(from_ts)
+    if to_ts is not None:
+        params['to'] = int(to_ts)
+    if sort is not None:
+        params['sort'] = sort
+
+    data = await _make_api_request(
+        f'faction/{TORN_FACTION_ID}',
+        params
+    )
+
+    if not data:
+        return {}
+
+    return data.get('attacks', {})
+
+
 async def fetch_player_data(torn_id, selections='profile', use_personal_key=True):
     """
     Fetch player data for any Torn player (for verification, stakeout, etc.)

@@ -13,7 +13,7 @@ Features:
 import discord
 from datetime import datetime
 from utils.helpers import load_json, save_json, create_embed, format_timestamp, get_current_timestamp
-from utils.torn_api import fetch_faction_data, fetch_faction_data_v2
+from utils.torn_api import fetch_faction_data, fetch_faction_data_v2, fetch_faction_attacks
 from config import (
     WAR_CHANNEL_ID,
     WAR_MANAGEMENT_CHANNEL_ID,
@@ -248,11 +248,64 @@ class WarTracker:
 
         return embed
 
+    async def _fetch_all_attacks_since(self, war_start):
+        """
+        Fetch ALL faction attacks since war_start by paginating through the API.
+        The Torn attacks API returns ~100 attacks per call, so we page through
+        using ascending sort and shifting the 'from' timestamp.
+
+        Args:
+            war_start: Unix timestamp to start fetching from
+
+        Returns:
+            Dict of {attack_id: attack_data} with all attacks since war_start
+        """
+        all_attacks = {}
+        current_from = int(war_start)
+        max_pages = 50  # Safety limit to prevent infinite loops
+
+        for page in range(max_pages):
+            attacks = await fetch_faction_attacks(from_ts=current_from, sort='asc')
+
+            if not attacks:
+                break
+
+            # Count new attacks (not already seen)
+            new_count = 0
+            latest_timestamp = current_from
+
+            for attack_id, attack in attacks.items():
+                if attack_id not in all_attacks:
+                    all_attacks[attack_id] = attack
+                    new_count += 1
+
+                # Track the latest timestamp to use as next page's 'from'
+                ts = attack.get('timestamp_started', 0) if isinstance(attack, dict) else 0
+                if ts > latest_timestamp:
+                    latest_timestamp = ts
+
+            print(f'War attacks page {page + 1}: got {len(attacks)} attacks, {new_count} new (total: {len(all_attacks)})')
+
+            # If we got fewer than 90 attacks, we've likely reached the end
+            # (API returns ~100, using 90 as threshold to account for variation)
+            if len(attacks) < 90:
+                break
+
+            # If no new attacks were found, we're done
+            if new_count == 0:
+                break
+
+            # Move to next page (start from latest timestamp to get next batch)
+            # Add 1 second to avoid re-fetching the same last attack
+            current_from = latest_timestamp + 1
+
+        print(f'War: Fetched {len(all_attacks)} total attacks since war start')
+        return all_attacks
+
     async def _get_war_attack_stats(self, enemy_faction_id, war_start):
         """
         Compute per-member war statistics from the faction attacks log.
-        This is the primary source of warboard data since the war API
-        doesn't return per-member breakdowns.
+        Paginates through ALL attacks since war start for accurate data.
 
         Args:
             enemy_faction_id: The enemy faction ID in the ranked war
@@ -264,20 +317,12 @@ class WarTracker:
         stats = {}
 
         try:
-            data = await fetch_faction_data('attacks')
-            if not data:
-                return stats
-
-            attacks = data.get('attacks', {})
+            attacks = await self._fetch_all_attacks_since(war_start)
             our_faction = str(TORN_FACTION_ID)
             enemy_faction = str(enemy_faction_id)
 
             for attack_id, attack in attacks.items():
                 if not isinstance(attack, dict):
-                    continue
-
-                timestamp = attack.get('timestamp_started', 0)
-                if timestamp < war_start:
                     continue
 
                 attacker_id = str(attack.get('attacker_id', 0))
@@ -431,7 +476,7 @@ class WarTracker:
         else:
             print('War: rankedwarreport not available, falling back to attacks log')
             data_source = 'attacks'
-            # Fall back to attacks log (limited to recent attacks)
+            # Fall back to attacks log (paginated to fetch all war attacks)
             attack_stats = await self._get_war_attack_stats(enemy_faction_id, war_start)
 
             for user_id, member_data in faction_members.items():
