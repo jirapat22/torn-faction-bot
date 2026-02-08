@@ -64,10 +64,6 @@ Show last completed chain report.
 Show current ranked war status.
 - Score, enemy faction, time remaining
 
-### `/warboard`
-Show war participation leaderboard.
-- Top attackers, scores, participation
-
 ### `/enemy list`
 View all tracked enemies with their status.
 - Shows online/offline/hospital/jail status
@@ -108,6 +104,15 @@ Configure automatic role sync with Torn positions.
 - `remove` - Remove a position mapping
 - `sync` - Force sync all members now
 - `toggle` - Enable/disable auto sync
+
+### `/warboard`
+Full war participation report. *(Management only)*
+- Works during active war AND after war ends (reviews last completed war)
+- Shows **all members** sorted by score with 3 metrics each:
+  - **War Attacks** — Hits on the war opponent
+  - **Outside Hits** — Hits on non-war targets (wasted attacks)
+  - **Incoming Hits** — Times our member got hit by opponent
+- Summary: total attacks, outside hits, times hit, participation count
 
 ### `/enemy <action>`
 Manage enemy watchlist during war.
@@ -206,9 +211,10 @@ Show the current Torn City Time (UTC).
 - Critical: 5+ days inactive
 
 ### Chain Updates
-- Posts milestone updates during chain events (10, 25, 50, 100...)
-- Pings @chainwatcher + subscribers when chain completes
+- Posts milestone updates during chain events (10, 25, 50, 100, 250, 500, 1000...)
+- Pings chain subscribers when chain completes
 - Only active during Discord Chain/War events
+- Requires 3 consecutive checks before declaring chain ended (prevents false reports from API glitches)
 
 ### War Updates
 - Posts war completion report
@@ -261,6 +267,7 @@ Show the current Torn City Time (UTC).
 | `/subscribe` | Everyone | Get notification pings |
 | `/chain` | Everyone | Check chain status |
 | `/war` | Everyone | Check war status |
+| `/warboard` | Management | Full war participation report |
 | `/enemy list` | Everyone | View enemy watchlist |
 | `/announce` | Management | Post announcements |
 | `/verify` | Management | Manage verification |
@@ -280,5 +287,5 @@ Show the current Torn City Time (UTC).
 
 ---
 
-*Last updated: February 7, 2026*
+*Last updated: February 8, 2026*
 *Bot by Ascended Punks*
