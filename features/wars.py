@@ -63,79 +63,37 @@ class WarTracker:
             return None
         return rankedwars
 
-    async def _fetch_war_members(self):
+    async def _fetch_rankedwarreport(self):
         """
-        Fetch war member data using v2 wars API (includes per-member stats).
-        v2 wars returns our own faction's wars, which is what we need for warboard.
+        Fetch ranked war report with complete per-member stats.
+        Uses v1 'rankedwarreport' selection which includes attacks, defends,
+        and score for every member in both factions.
 
         Returns:
-            Dict of {faction_id_str: faction_data} with members, or None
+            Dict with {factions: {fid: {name, score, members: {uid: stats}}}} or None
         """
-        data = await fetch_faction_data_v2('wars')
+        data = await fetch_faction_data('rankedwarreport')
         if not data:
-            print('War v2: No data returned from v2 API')
+            print('War report: No data from rankedwarreport')
             return None
 
-        print(f'War v2: Response keys: {list(data.keys())}')
+        report = data.get('rankedwarreport', {})
+        if not report:
+            print(f'War report: No rankedwarreport key. Response keys: {list(data.keys())}')
+            return None
 
-        # v2 may return wars at top level or nested
-        # Try multiple possible structures
-        wars = data.get('wars', data)
+        factions = report.get('factions', {})
+        if not factions:
+            print(f'War report: No factions data. Report keys: {list(report.keys())}')
+            return None
 
-        # If wars is a dict, check for ranked war data
-        if isinstance(wars, dict):
-            print(f'War v2: wars keys: {list(wars.keys())}')
+        # Log what we got
+        for fid, fdata in factions.items():
+            if isinstance(fdata, dict):
+                members = fdata.get('members', {})
+                print(f'War report: Faction {fid} ({fdata.get("name", "?")}) - {len(members)} members')
 
-            # Try wars.ranked first
-            ranked = wars.get('ranked', None)
-
-            # If no ranked key, wars itself might be the war data
-            if ranked is None:
-                # Maybe it's keyed by war ID directly
-                for key, value in wars.items():
-                    if isinstance(value, dict) and 'factions' in value:
-                        ranked = value
-                        print(f'War v2: Found war data under key "{key}"')
-                        break
-
-            if not ranked:
-                print(f'War v2: No ranked war data found in response')
-                return None
-
-            print(f'War v2: ranked keys: {list(ranked.keys()) if isinstance(ranked, dict) else type(ranked)}')
-
-            factions = ranked.get('factions', [])
-
-            # Handle both list and dict formats
-            if isinstance(factions, dict):
-                print(f'War v2: factions is dict with keys: {list(factions.keys())}')
-                # Already a dict keyed by faction id
-                result = {}
-                for fid, fdata in factions.items():
-                    if isinstance(fdata, dict):
-                        result[str(fid)] = fdata
-                        members = fdata.get('members', {})
-                        print(f'War v2: Faction {fid} has {len(members)} members')
-                return result if result else None
-
-            elif isinstance(factions, list) and factions:
-                print(f'War v2: factions is list with {len(factions)} entries')
-                # Convert list format to dict keyed by faction id
-                result = {}
-                for faction in factions:
-                    if isinstance(faction, dict):
-                        fid = str(faction.get('id', faction.get('faction_id', 0)))
-                        result[fid] = faction
-                        members = faction.get('members', {})
-                        print(f'War v2: Faction {fid} has {len(members)} members')
-                return result if result else None
-
-            else:
-                print(f'War v2: factions type: {type(factions)}, value: {factions}')
-                return None
-
-        print(f'War v2: Unexpected wars type: {type(wars)}')
-        return None
+        return report
 
     async def get_current_war(self):
         """
@@ -375,7 +333,8 @@ class WarTracker:
     async def format_warboard_embed(self, war_info):
         """
         Create Discord embeds for war participation leaderboard.
-        Shows ALL faction members with 3 metrics each, computed from the attacks log.
+        Shows ALL faction members with 3 metrics each.
+        Uses rankedwarreport for accurate data, falls back to attacks log.
         Returns a list of embeds if content is too large for one.
 
         Args:
@@ -426,25 +385,72 @@ class WarTracker:
                 color=EMBED_COLOR_CRITICAL
             )
 
-        # Compute per-member war stats from attacks log
-        attack_stats = await self._get_war_attack_stats(enemy_faction_id, war_start)
-        print(f'War: Computed attack stats for {len(attack_stats)} members from attacks log')
+        # Try rankedwarreport first (complete and accurate per-member data)
+        our_war_members = None
+        enemy_war_members = None
+        report = await self._fetch_rankedwarreport()
+        if report:
+            report_factions = report.get('factions', {})
+            for fid, fdata in report_factions.items():
+                if str(fid) == str(TORN_FACTION_ID):
+                    our_war_members = fdata.get('members', {})
+                    # Update faction scores from report (more current)
+                    if fdata.get('score') is not None:
+                        our_faction_data = fdata
+                else:
+                    enemy_war_members = fdata.get('members', {})
+                    if fdata.get('score') is not None:
+                        enemy_faction_data = fdata
 
-        # Build member list - include ALL faction members
+        # Build member list with stats
         member_list = []
-        for user_id, member_data in faction_members.items():
-            member_name = member_data.get('name', f'ID:{user_id}')
-            stats = attack_stats.get(user_id, {})
+        data_source = 'report'
 
-            member_list.append({
-                'name': member_name,
-                'war_hits': stats.get('war_hits', 0),
-                'outside_hits': stats.get('outside_hits', 0),
-                'incoming': stats.get('incoming', 0),
-            })
+        if our_war_members:
+            print(f'War: Using rankedwarreport data ({len(our_war_members)} members)')
+            # Use rankedwarreport data (accurate and complete)
+            for user_id, member_data in faction_members.items():
+                member_name = member_data.get('name', f'ID:{user_id}')
+                war_stats = our_war_members.get(user_id, {})
 
-        # Sort by war hits (highest first)
-        sorted_members = sorted(member_list, key=lambda x: x['war_hits'], reverse=True)
+                member_list.append({
+                    'name': member_name,
+                    'war_hits': war_stats.get('attacks', 0),
+                    'outside_hits': 0,  # Not available from war report
+                    'incoming': war_stats.get('defends', 0),
+                    'score': war_stats.get('score', 0),
+                })
+
+            # Get outside hits from attacks log to supplement
+            attack_stats = await self._get_war_attack_stats(enemy_faction_id, war_start)
+            for m in member_list:
+                for uid, stats in attack_stats.items():
+                    if faction_members.get(uid, {}).get('name') == m['name']:
+                        m['outside_hits'] = stats.get('outside_hits', 0)
+                        break
+        else:
+            print('War: rankedwarreport not available, falling back to attacks log')
+            data_source = 'attacks'
+            # Fall back to attacks log (limited to recent attacks)
+            attack_stats = await self._get_war_attack_stats(enemy_faction_id, war_start)
+
+            for user_id, member_data in faction_members.items():
+                member_name = member_data.get('name', f'ID:{user_id}')
+                stats = attack_stats.get(user_id, {})
+
+                member_list.append({
+                    'name': member_name,
+                    'war_hits': stats.get('war_hits', 0),
+                    'outside_hits': stats.get('outside_hits', 0),
+                    'incoming': stats.get('incoming', 0),
+                    'score': 0,
+                })
+
+        # Sort by score if available, otherwise by war hits
+        if data_source == 'report':
+            sorted_members = sorted(member_list, key=lambda x: x['score'], reverse=True)
+        else:
+            sorted_members = sorted(member_list, key=lambda x: x['war_hits'], reverse=True)
 
         # Calculate totals
         total_war_hits = sum(m['war_hits'] for m in member_list)
@@ -486,7 +492,10 @@ class WarTracker:
         # Build ALL member lines (compact format)
         member_lines = []
         for i, m in enumerate(sorted_members):
-            line = f'`{i+1:>2}.` **{m["name"]}**'
+            if data_source == 'report' and m['score'] > 0:
+                line = f'`{i+1:>2}.` **{m["name"]}** — {m["score"]:.2f} pts'
+            else:
+                line = f'`{i+1:>2}.` **{m["name"]}**'
             line += f'\n     War: {m["war_hits"]} | Outside: {m["outside_hits"]} | Hit: {m["incoming"]}x'
             member_lines.append(line)
 
