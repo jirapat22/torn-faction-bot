@@ -320,13 +320,13 @@ class WarTracker:
             war_start: War start timestamp to filter attacks
 
         Returns:
-            Dict of {user_id: {'war_hits': N, 'outside_hits': N, 'war_incoming': N, 'total_incoming': N}}
+            Dict of {user_id: {'war_hits': N, 'outside_hits': N, 'outside_incoming': N}}
         """
         stats = {}
 
         def _ensure(uid):
             if uid not in stats:
-                stats[uid] = {'war_hits': 0, 'outside_hits': 0, 'war_incoming': 0, 'total_incoming': 0}
+                stats[uid] = {'war_hits': 0, 'outside_hits': 0, 'outside_incoming': 0}
 
         try:
             attacks = await self._fetch_all_attacks_since(war_start)
@@ -359,10 +359,11 @@ class WarTracker:
                     if result not in ('Attacked', 'Mugged', 'Hospitalized', 'Special'):
                         continue
 
-                    _ensure(defender_id)
-                    stats[defender_id]['total_incoming'] += 1
-                    if attacker_faction == enemy_faction:
-                        stats[defender_id]['war_incoming'] += 1
+                    # Only count as outside if attacker is identified and NOT the war enemy
+                    # Anonymous attackers (faction 0) are likely war hits, skip them
+                    if attacker_faction != '0' and attacker_faction != enemy_faction:
+                        _ensure(defender_id)
+                        stats[defender_id]['outside_incoming'] += 1
 
         except Exception as e:
             print(f'War: Error computing attack stats: {e}')
@@ -476,18 +477,12 @@ class WarTracker:
                 war_stats = our_war_members.get(user_id, {})
                 log_stats = attack_stats.get(user_id, {})
 
-                war_inc = war_stats.get('defends', 0)
-                total_inc = log_stats.get('total_incoming', 0)
-                # Outside = total from log minus war incoming from report
-                # Use max(0) in case log missed some attacks the report counted
-                outside_inc = max(0, total_inc - war_inc)
-
                 member_list.append({
                     'name': member_name,
                     'war_hits': war_stats.get('attacks', 0),
                     'outside_hits': log_stats.get('outside_hits', 0),
-                    'war_incoming': war_inc,
-                    'outside_incoming': outside_inc,
+                    'war_incoming': war_stats.get('defends', 0),
+                    'outside_incoming': log_stats.get('outside_incoming', 0),
                     'score': war_stats.get('score', 0),
                 })
         else:
@@ -498,15 +493,12 @@ class WarTracker:
                 member_name = member_data.get('name', f'ID:{user_id}')
                 stats = attack_stats.get(user_id, {})
 
-                war_inc = stats.get('war_incoming', 0)
-                total_inc = stats.get('total_incoming', 0)
-
                 member_list.append({
                     'name': member_name,
                     'war_hits': stats.get('war_hits', 0),
                     'outside_hits': stats.get('outside_hits', 0),
-                    'war_incoming': war_inc,
-                    'outside_incoming': max(0, total_inc - war_inc),
+                    'war_incoming': 0,
+                    'outside_incoming': stats.get('outside_incoming', 0),
                     'score': 0,
                 })
 
