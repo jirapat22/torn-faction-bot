@@ -22,7 +22,8 @@ from config import (
     EMBED_COLOR_WARNING,
     EMBED_COLOR_CRITICAL,
     MANAGEMENT_PING_ROLE_ID,
-    TORN_FACTION_ID
+    TORN_FACTION_ID,
+    VERIFIED_ROLE_NAME
 )
 
 
@@ -797,18 +798,48 @@ class WarTracker:
             # Get final war stats from history
             if self.current_war_id and self.current_war_id in self.war_history:
                 final_war_data = self.war_history[self.current_war_id]
+                factions = final_war_data.get('factions', {})
 
-                # Create final war report embed for public channel
+                # Determine win/loss and opponent
+                our_score = 0
+                enemy_score = 0
+                enemy_name = 'Unknown'
+                for fid, fdata in factions.items():
+                    if str(fid) == str(TORN_FACTION_ID):
+                        our_score = fdata.get('score', 0)
+                    else:
+                        enemy_score = fdata.get('score', 0)
+                        enemy_name = fdata.get('name', 'Unknown')
+
+                we_won = our_score > enemy_score
+
+                if we_won:
+                    title = '🏆 War Complete!'
+                    description = f'We have won against **{enemy_name}**!\n\nGreat job everyone!'
+                    color = EMBED_COLOR_SUCCESS
+                else:
+                    title = '💀 War Complete!'
+                    description = f'We have lost against **{enemy_name}**.\n\nWe will get them next time!'
+                    color = EMBED_COLOR_CRITICAL
+
                 public_embed = create_embed(
-                    title=f'🏁 War Complete!',
-                    description=f'War #{self.current_war_id} has ended\n\nUse `/warboard` to see final standings',
-                    color=EMBED_COLOR_SUCCESS
+                    title=title,
+                    description=description,
+                    color=color,
+                    fields=[
+                        {'name': 'Final Score', 'value': f'**{our_score}** - {enemy_score}' if we_won else f'{our_score} - **{enemy_score}**', 'inline': True}
+                    ]
                 )
 
-                # Post public war result with pings (important event)
+                # Ping the faction role (Ascended punks)
                 ping_text = ''
-                if MANAGEMENT_PING_ROLE_ID:
-                    ping_text = f'<@&{MANAGEMENT_PING_ROLE_ID}> '
+                guild = channel.guild
+                faction_role = discord.utils.find(
+                    lambda r: r.name.lower() == VERIFIED_ROLE_NAME.lower(),
+                    guild.roles
+                )
+                if faction_role:
+                    ping_text = f'{faction_role.mention} '
 
                 await channel.send(f'{ping_text}🏁 **War Complete!**', embed=public_embed)
                 print('Posted war completion report to public channel')
