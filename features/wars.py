@@ -320,9 +320,13 @@ class WarTracker:
             war_start: War start timestamp to filter attacks
 
         Returns:
-            Dict of {user_id: {'war_hits': N, 'outside_hits': N, 'incoming': N}}
+            Dict of {user_id: {'war_hits': N, 'outside_hits': N, 'war_incoming': N, 'outside_incoming': N}}
         """
         stats = {}
+
+        def _ensure(uid):
+            if uid not in stats:
+                stats[uid] = {'war_hits': 0, 'outside_hits': 0, 'war_incoming': 0, 'outside_incoming': 0}
 
         try:
             attacks = await self._fetch_all_attacks_since(war_start)
@@ -344,19 +348,19 @@ class WarTracker:
                     if result not in ('Attacked', 'Mugged', 'Hospitalized', 'Special'):
                         continue
 
-                    if attacker_id not in stats:
-                        stats[attacker_id] = {'war_hits': 0, 'outside_hits': 0, 'incoming': 0}
-
+                    _ensure(attacker_id)
                     if defender_faction == enemy_faction:
                         stats[attacker_id]['war_hits'] += 1
                     else:
                         stats[attacker_id]['outside_hits'] += 1
 
-                # Enemy attacked our member (any result counts as incoming)
-                elif attacker_faction == enemy_faction and defender_faction == our_faction:
-                    if defender_id not in stats:
-                        stats[defender_id] = {'war_hits': 0, 'outside_hits': 0, 'incoming': 0}
-                    stats[defender_id]['incoming'] += 1
+                # Someone attacked our member (any result counts as incoming)
+                elif defender_faction == our_faction:
+                    _ensure(defender_id)
+                    if attacker_faction == enemy_faction:
+                        stats[defender_id]['war_incoming'] += 1
+                    elif attacker_faction != our_faction:
+                        stats[defender_id]['outside_incoming'] += 1
 
         except Exception as e:
             print(f'War: Error computing attack stats: {e}')
@@ -459,34 +463,29 @@ class WarTracker:
         member_list = []
         data_source = 'report'
 
+        # Always fetch attacks log for outside hits and incoming split
+        attack_stats = await self._get_war_attack_stats(enemy_faction_id, war_start)
+
         if our_war_members:
             print(f'War: Using rankedwarreport data ({len(our_war_members)} members)')
             # Use rankedwarreport data (accurate and complete)
             for user_id, member_data in faction_members.items():
                 member_name = member_data.get('name', f'ID:{user_id}')
                 war_stats = our_war_members.get(user_id, {})
+                log_stats = attack_stats.get(user_id, {})
 
                 member_list.append({
                     'name': member_name,
                     'war_hits': war_stats.get('attacks', 0),
-                    'outside_hits': 0,  # Not available from war report
-                    'incoming': war_stats.get('defends', 0),
+                    'outside_hits': log_stats.get('outside_hits', 0),
+                    'war_incoming': war_stats.get('defends', 0),
+                    'outside_incoming': log_stats.get('outside_incoming', 0),
                     'score': war_stats.get('score', 0),
                 })
-
-            # Get outside hits from attacks log to supplement
-            attack_stats = await self._get_war_attack_stats(enemy_faction_id, war_start)
-            for m in member_list:
-                for uid, stats in attack_stats.items():
-                    if faction_members.get(uid, {}).get('name') == m['name']:
-                        m['outside_hits'] = stats.get('outside_hits', 0)
-                        break
         else:
             print('War: rankedwarreport not available, falling back to attacks log')
             data_source = 'attacks'
             # Fall back to attacks log (paginated to fetch all war attacks)
-            attack_stats = await self._get_war_attack_stats(enemy_faction_id, war_start)
-
             for user_id, member_data in faction_members.items():
                 member_name = member_data.get('name', f'ID:{user_id}')
                 stats = attack_stats.get(user_id, {})
@@ -495,7 +494,8 @@ class WarTracker:
                     'name': member_name,
                     'war_hits': stats.get('war_hits', 0),
                     'outside_hits': stats.get('outside_hits', 0),
-                    'incoming': stats.get('incoming', 0),
+                    'war_incoming': stats.get('war_incoming', 0),
+                    'outside_incoming': stats.get('outside_incoming', 0),
                     'score': 0,
                 })
 
@@ -508,7 +508,8 @@ class WarTracker:
         # Calculate totals
         total_war_hits = sum(m['war_hits'] for m in member_list)
         total_outside = sum(m['outside_hits'] for m in member_list)
-        total_incoming = sum(m['incoming'] for m in member_list)
+        total_war_incoming = sum(m['war_incoming'] for m in member_list)
+        total_outside_incoming = sum(m['outside_incoming'] for m in member_list)
         participants = len([m for m in member_list if m['war_hits'] > 0])
 
         # War status header
@@ -537,7 +538,8 @@ class WarTracker:
             fields=[
                 {'name': 'War Attacks', 'value': str(total_war_hits), 'inline': True},
                 {'name': 'Outside Hits', 'value': str(total_outside), 'inline': True},
-                {'name': 'Times Hit', 'value': str(total_incoming), 'inline': True},
+                {'name': 'War Incoming', 'value': str(total_war_incoming), 'inline': True},
+                {'name': 'Outside Incoming', 'value': str(total_outside_incoming), 'inline': True},
                 {'name': 'Participated', 'value': f'{participants}/{len(member_list)}', 'inline': True},
             ]
         )
@@ -548,13 +550,13 @@ class WarTracker:
         max_name = min(max_name, 15)  # Cap at 15 chars to fit mobile
 
         # Build table lines
-        header = f'{"#":>2}  {"Name":<{max_name}}  War  Out  Hit'
+        header = f'{"#":>2}  {"Name":<{max_name}}  War  Out  WHt  OHt'
         separator = '-' * len(header)
         table_lines = [header, separator]
 
         for i, m in enumerate(sorted_members):
             name = m['name'][:max_name]
-            line = f'{i+1:>2}  {name:<{max_name}}  {m["war_hits"]:>3}  {m["outside_hits"]:>3}  {m["incoming"]:>3}'
+            line = f'{i+1:>2}  {name:<{max_name}}  {m["war_hits"]:>3}  {m["outside_hits"]:>3}  {m["war_incoming"]:>3}  {m["outside_incoming"]:>3}'
             table_lines.append(line)
 
         # Split table into code block chunks that fit Discord's 1024 char field limit
