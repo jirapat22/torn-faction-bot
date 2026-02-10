@@ -354,8 +354,11 @@ class WarTracker:
                     else:
                         stats[attacker_id]['outside_hits'] += 1
 
-                # Someone attacked our member (count ALL incoming hits)
+                # Someone attacked our member (successful attacks only)
                 elif defender_faction == our_faction and attacker_faction != our_faction:
+                    if result not in ('Attacked', 'Mugged', 'Hospitalized', 'Special'):
+                        continue
+
                     _ensure(defender_id)
                     stats[defender_id]['total_incoming'] += 1
                     if attacker_faction == enemy_faction:
