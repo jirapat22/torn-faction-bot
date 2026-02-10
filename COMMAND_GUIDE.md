@@ -30,22 +30,6 @@ Unlink your Torn ID from Discord.
 
 ---
 
-## Subscription Commands (Everyone)
-
-### `/subscribe <type>`
-Opt-in to receive pings for notifications.
-- **chain** - Chain start/end notifications
-- **enemy** - Enemy watchlist alerts (when enemies come online)
-- **war** - War start/end notifications
-
-### `/unsubscribe <type>`
-Stop receiving pings for a notification type.
-
-### `/mysubs`
-View your current notification subscriptions.
-
----
-
 ## Chain Commands (Everyone)
 
 ### `/chain`
@@ -212,18 +196,18 @@ Show the current Torn City Time (UTC).
 
 ### Chain Updates
 - Posts milestone updates during chain events (10, 25, 50, 100, 250, 500, 1000...)
-- Pings chain subscribers when chain completes
+- Posts completion message when chain ends
 - Only active during Discord Chain/War events
 - Requires 3 consecutive checks before declaring chain ended (prevents false reports from API glitches)
 
 ### War Updates
 - Posts war completion report
-- Pings @Management + war subscribers when war ends
+- Pings @Management when war ends
 - Auto-clears enemy watchlist when war ends
 
 ### Enemy Status Checks
 - Runs every 15 minutes when enemies are tracked
-- Pings enemy subscribers when enemies come online or leave hospital
+- Posts alerts when enemies come online or leave hospital
 
 ### Role Sync
 - Runs every hour
@@ -264,7 +248,6 @@ Show the current Torn City Time (UTC).
 | Command | Who Can Use | Purpose |
 |---------|-------------|---------|
 | `/register` | Everyone | Link Torn account |
-| `/subscribe` | Everyone | Get notification pings |
 | `/chain` | Everyone | Check chain status |
 | `/war` | Everyone | Check war status |
 | `/warboard` | Management | Full war participation report |

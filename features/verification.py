@@ -14,7 +14,7 @@ import asyncio
 from discord import app_commands
 from discord.ext import tasks
 from datetime import datetime, timezone
-from utils.helpers import load_json, save_json, create_embed
+from utils.helpers import load_json, save_json, create_embed, is_management
 from utils.torn_api import fetch_player_data
 from config import (
     GUILD_ID,
@@ -22,8 +22,7 @@ from config import (
     EMBED_COLOR_SUCCESS,
     EMBED_COLOR_WARNING,
     EMBED_COLOR_CRITICAL,
-    EMBED_COLOR_INFO,
-    MANAGEMENT_ROLE_IDS
+    EMBED_COLOR_INFO
 )
 
 
@@ -341,20 +340,7 @@ async def setup_verification_commands(bot, verification_system: VerificationSyst
         value: bool = None
     ):
         """Verification admin command"""
-        # Check if user has management role OR admin permission
-        has_permission = False
-
-        # Check Discord admin permission
-        if interaction.user.guild_permissions.manage_guild or interaction.user.guild_permissions.administrator:
-            has_permission = True
-
-        # Check management roles
-        if MANAGEMENT_ROLE_IDS:
-            user_role_ids = [r.id for r in interaction.user.roles]
-            if any(role_id in MANAGEMENT_ROLE_IDS for role_id in user_role_ids):
-                has_permission = True
-
-        if not has_permission:
+        if not is_management(interaction):
             await interaction.response.send_message(
                 'You do not have permission to use this command.',
                 ephemeral=True

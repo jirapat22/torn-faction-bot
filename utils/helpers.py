@@ -5,10 +5,15 @@ Includes JSON file handling, embed creation, etc.
 
 import json
 import os
+import tempfile
+import threading
 import time as _time
 from datetime import datetime, timezone
 import discord
-from config import EMBED_COLOR_INFO, EMBED_COLOR_WARNING, EMBED_COLOR_CRITICAL, EMBED_COLOR_SUCCESS
+from config import EMBED_COLOR_INFO, EMBED_COLOR_WARNING, EMBED_COLOR_CRITICAL, EMBED_COLOR_SUCCESS, MANAGEMENT_ROLE_IDS
+
+# File lock to prevent concurrent JSON writes from corrupting data
+_json_lock = threading.Lock()
 
 
 def ensure_data_directories():
@@ -47,15 +52,32 @@ def load_json(file_path, default=None):
 
 def save_json(file_path, data):
     """
-    Save data to a JSON file
-    Creates the file if it doesn't exist
+    Save data to a JSON file atomically.
+    Writes to a temp file first, then renames to prevent corruption
+    if the process is interrupted mid-write.
+    Thread-safe via lock to prevent concurrent writes.
     """
     try:
         # Ensure parent directory exists
-        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        dir_name = os.path.dirname(file_path)
+        os.makedirs(dir_name, exist_ok=True)
 
-        with open(file_path, 'w') as f:
-            json.dump(data, f, indent=2)
+        with _json_lock:
+            # Write to temp file in same directory, then rename (atomic on same filesystem)
+            fd, tmp_path = tempfile.mkstemp(dir=dir_name, suffix='.tmp')
+            try:
+                with os.fdopen(fd, 'w') as f:
+                    json.dump(data, f, indent=2)
+                # On Windows, os.rename fails if dest exists; use os.replace instead
+                os.replace(tmp_path, file_path)
+            except BaseException:
+                # Clean up temp file on any failure
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
+
         return True
     except Exception as e:
         print(f'Error saving {file_path}: {e}')
@@ -162,3 +184,19 @@ def get_current_timestamp():
         Current timestamp as integer
     """
     return int(datetime.now().timestamp())
+
+
+def is_management(interaction: discord.Interaction) -> bool:
+    """
+    Check if a user has management permissions.
+
+    Returns True if the user has the Manage Server permission
+    or holds any of the configured MANAGEMENT_ROLE_IDS.
+    """
+    if interaction.user.guild_permissions.manage_guild:
+        return True
+    if MANAGEMENT_ROLE_IDS:
+        user_role_ids = [role.id for role in interaction.user.roles]
+        if any(role_id in MANAGEMENT_ROLE_IDS for role_id in user_role_ids):
+            return True
+    return False

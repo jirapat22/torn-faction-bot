@@ -16,24 +16,22 @@ import discord
 from discord import app_commands
 from discord.ext import tasks
 from datetime import datetime, timezone
-from utils.helpers import load_json, save_json, create_embed, format_timestamp, get_current_timestamp
+from utils.helpers import load_json, save_json, create_embed, format_timestamp, get_current_timestamp, is_management
 from utils.torn_api import fetch_player_data
 from config import (
     WAR_CHANNEL_ID,
     EMBED_COLOR_INFO,
     EMBED_COLOR_SUCCESS,
     EMBED_COLOR_WARNING,
-    EMBED_COLOR_CRITICAL,
-    MANAGEMENT_ROLE_IDS
+    EMBED_COLOR_CRITICAL
 )
 
 
 class EnemyWatchlist:
     """Manages enemy player tracking during war"""
 
-    def __init__(self, bot, subscription_manager=None):
+    def __init__(self, bot):
         self.bot = bot
-        self.subscription_manager = subscription_manager
         self.watchlist_file = 'data/enemy_watchlist.json'
         self.watchlist = {}  # {torn_id: {name, last_status, last_check, added_by}}
         self.previous_statuses = {}  # Track previous status to detect changes
@@ -254,11 +252,6 @@ class EnemyWatchlist:
 
         # Post important status changes
         if status_changes and post_updates and channel:
-            # Ping subscribers for enemy alerts
-            ping_text = ''
-            if self.subscription_manager:
-                ping_text = self.subscription_manager.get_subscriber_mentions('enemy')
-
             for change in status_changes:
                 embed = create_embed(
                     title=f'Enemy Alert: {change["name"]}',
@@ -270,10 +263,7 @@ class EnemyWatchlist:
                         {'name': 'Profile', 'value': f'[Attack](https://www.torn.com/loader.php?sid=attack&user2ID={change["torn_id"]})', 'inline': True}
                     ]
                 )
-                if ping_text:
-                    await channel.send(ping_text, embed=embed)
-                else:
-                    await channel.send(embed=embed)
+                await channel.send(embed=embed)
 
             print(f'Posted {len(status_changes)} enemy status changes')
 
@@ -346,16 +336,6 @@ class EnemyWatchlist:
 
 async def setup_enemy_commands(bot, enemy_watchlist: EnemyWatchlist):
     """Set up enemy watchlist slash commands"""
-
-    def is_management(interaction: discord.Interaction) -> bool:
-        """Check if user has management permissions"""
-        if interaction.user.guild_permissions.manage_guild:
-            return True
-        if MANAGEMENT_ROLE_IDS:
-            user_role_ids = [role.id for role in interaction.user.roles]
-            if any(role_id in MANAGEMENT_ROLE_IDS for role_id in user_role_ids):
-                return True
-        return False
 
     @bot.tree.command(
         name='enemy',

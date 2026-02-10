@@ -35,7 +35,6 @@ class WarTracker:
         self.current_war_id = None
         self.war_data_file = 'data/war_history.json'
         self.war_history = {}
-        self.subscription_manager = None  # Set by bot.py
         self.enemy_watchlist = None  # Set by bot.py for auto-clear
         # Track attacks during active war
         self.current_war_attacks = {
@@ -799,14 +798,9 @@ class WarTracker:
                 )
 
                 # Post public war result with pings (important event)
-                pings = []
+                ping_text = ''
                 if MANAGEMENT_PING_ROLE_ID:
-                    pings.append(f'<@&{MANAGEMENT_PING_ROLE_ID}>')
-                if self.subscription_manager:
-                    sub_pings = self.subscription_manager.get_subscriber_mentions('war')
-                    if sub_pings:
-                        pings.append(sub_pings)
-                ping_text = ' '.join(pings) + ' ' if pings else ''
+                    ping_text = f'<@&{MANAGEMENT_PING_ROLE_ID}> '
 
                 await channel.send(f'{ping_text}🏁 **War Complete!**', embed=public_embed)
                 print('Posted war completion report to public channel')

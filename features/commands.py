@@ -6,15 +6,14 @@ Defines all slash commands for the bot
 import discord
 from discord import app_commands
 from datetime import datetime, timezone
-from utils.helpers import create_embed, format_timestamp, format_timestamp_with_tct, get_days_since
+from utils.helpers import create_embed, format_timestamp, format_timestamp_with_tct, get_days_since, is_management
 from utils.torn_api import fetch_faction_members
 from config import (
     EMBED_COLOR_INFO,
     EMBED_COLOR_SUCCESS,
     EMBED_COLOR_WARNING,
     EMBED_COLOR_CRITICAL,
-    ANNOUNCEMENTS_CHANNEL_ID,
-    MANAGEMENT_ROLE_IDS
+    ANNOUNCEMENTS_CHANNEL_ID
 )
 
 
@@ -271,20 +270,6 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
         print('WARNING: war_tracker is None, war commands NOT registered')
 
     # ===== MANAGEMENT COMMANDS (Phase 5) =====
-
-    def is_management(interaction: discord.Interaction) -> bool:
-        """Check if user has management permissions"""
-        # Check if user has Manage Server permission
-        if interaction.user.guild_permissions.manage_guild:
-            return True
-
-        # Check if user has any management roles
-        if MANAGEMENT_ROLE_IDS:
-            user_role_ids = [role.id for role in interaction.user.roles]
-            if any(role_id in MANAGEMENT_ROLE_IDS for role_id in user_role_ids):
-                return True
-
-        return False
 
     # Create Modal for announcement (allows multi-line input)
     class AnnouncementModal(discord.ui.Modal, title='Create Announcement'):

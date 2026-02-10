@@ -264,6 +264,27 @@ async def fetch_faction_attacks(from_ts=None, to_ts=None, sort=None):
     return data.get('attacks', {})
 
 
+async def fetch_any_faction_data(faction_id, selections='basic', use_personal_key=True):
+    """
+    Fetch data for any faction (not just the bot's own faction).
+    Uses the shared session, caching, and rate-limit handling.
+
+    Args:
+        faction_id: Torn faction ID to query
+        selections: API selections (e.g. 'basic', 'basic,rankedwars')
+        use_personal_key: If True, use personal API key (default True)
+
+    Returns:
+        Dict with faction data or None if error
+    """
+    data = await _make_api_request(
+        f'faction/{faction_id}',
+        {'selections': selections},
+        use_personal_key=use_personal_key
+    )
+    return data
+
+
 async def fetch_player_data(torn_id, selections='profile', use_personal_key=True):
     """
     Fetch player data for any Torn player (for verification, stakeout, etc.)

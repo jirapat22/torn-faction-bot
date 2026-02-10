@@ -33,7 +33,6 @@ class ChainTracker:
         self.chain_state_file = 'data/chain_state.json'
         self.chain_history = {}
         self.last_reported_chain_id = None  # Track last reported chain to prevent duplicates
-        self.subscription_manager = None  # Set by bot.py
         self.chain_end_checks = 0  # Counter for consecutive "no chain" checks (prevents false completion)
 
     async def load_chain_history(self):
@@ -311,18 +310,10 @@ class ChainTracker:
 
                     # Check if we've already reported this chain
                     if chain_id != self.last_reported_chain_id:
-                        # Post chain report with subscriber pings (important event)
+                        # Post chain report
                         report_embed = await self.format_chainreport_embed(chainreport)
 
-                        # Ping chain subscribers
-                        pings = []
-                        if self.subscription_manager:
-                            sub_pings = self.subscription_manager.get_subscriber_mentions('chain')
-                            if sub_pings:
-                                pings.append(sub_pings)
-                        ping_text = ' '.join(pings) + ' ' if pings else ''
-
-                        await channel.send(f'{ping_text}🏁 **Chain Complete!**', embed=report_embed)
+                        await channel.send('🏁 **Chain Complete!**', embed=report_embed)
                         print(f'Posted chain completion report for chain #{chain_id}')
 
                         # Save this as last reported chain

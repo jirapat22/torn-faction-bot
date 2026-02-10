@@ -23,14 +23,13 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, List
 from collections import defaultdict
 
-from utils.helpers import load_json, save_json, create_embed
+from utils.helpers import load_json, save_json, create_embed, is_management
 from utils.torn_api import fetch_player_data
 from config import (
     EMBED_COLOR_INFO,
     EMBED_COLOR_SUCCESS,
     EMBED_COLOR_WARNING,
-    EMBED_COLOR_CRITICAL,
-    MANAGEMENT_ROLE_IDS
+    EMBED_COLOR_CRITICAL
 )
 
 
@@ -42,6 +41,9 @@ STATUS_HOSPITAL = 'hospital'
 STATUS_TRAVELING = 'traveling'
 STATUS_JAIL = 'jail'
 STATUS_UNKNOWN = 'unknown'
+
+# Max history records per target (48h at 15min intervals = 192, keep some buffer)
+MAX_HISTORY_RECORDS = 250
 
 # Timezone offsets for estimation (UTC offset in hours)
 TIMEZONE_NAMES = {
@@ -103,7 +105,8 @@ class StakeoutManager:
         })
 
     async def _cleanup_expired(self):
-        """Remove stakeouts that have exceeded their duration"""
+        """Remove stakeouts that have exceeded their duration
+        and purge history for targets expired more than 7 days ago."""
         now = datetime.now(timezone.utc).timestamp()
         expired = []
 
@@ -117,7 +120,24 @@ class StakeoutManager:
             # Keep history for reports even after stakeout ends
             print(f'Stakeout expired for {torn_id}')
 
-        if expired:
+        # Purge history for targets no longer active and older than 7 days
+        stale_history = []
+        seven_days = 7 * 86400
+        for torn_id, records in self.history.items():
+            if torn_id in self.stakeouts:
+                continue  # Still active
+            if not records:
+                stale_history.append(torn_id)
+                continue
+            last_ts = records[-1].get('timestamp', 0)
+            if now - last_ts > seven_days:
+                stale_history.append(torn_id)
+
+        for torn_id in stale_history:
+            del self.history[torn_id]
+            print(f'Stakeout history purged for {torn_id}')
+
+        if expired or stale_history:
             await self.save_data()
 
     async def add_stakeout(self, torn_id: str, duration_hours: int = 24, added_by: int = None) -> tuple:
@@ -355,6 +375,11 @@ class StakeoutManager:
             self.history[torn_id] = []
 
         self.history[torn_id].append(record)
+
+        # Prune oldest records if history exceeds max size
+        if len(self.history[torn_id]) > MAX_HISTORY_RECORDS:
+            self.history[torn_id] = self.history[torn_id][-MAX_HISTORY_RECORDS:]
+
         self.stakeouts[torn_id]['check_count'] = len(self.history[torn_id])
 
     async def check_all_stakeouts(self):
@@ -766,16 +791,6 @@ class StakeoutManager:
 
 async def setup_stakeout_commands(bot, manager: StakeoutManager):
     """Register stakeout slash commands"""
-
-    def is_management(interaction: discord.Interaction) -> bool:
-        """Check if user has management permissions"""
-        if interaction.user.guild_permissions.manage_guild:
-            return True
-        if MANAGEMENT_ROLE_IDS:
-            user_role_ids = [role.id for role in interaction.user.roles]
-            if any(role_id in MANAGEMENT_ROLE_IDS for role_id in user_role_ids):
-                return True
-        return False
 
     stakeout_group = app_commands.Group(name='stakeout', description='Track enemy player behavior')
 

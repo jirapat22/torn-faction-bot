@@ -21,7 +21,6 @@ from features.inactivity import InactivityTracker
 from features.chains import ChainTracker
 from features.wars import WarTracker
 from features.verification import VerificationSystem, setup_verification_commands
-from features.subscriptions import SubscriptionManager, setup_subscription_commands
 from features.roles import RoleSyncManager, setup_rolesync_commands
 from features.enemies import EnemyWatchlist, setup_enemy_commands
 from features.availability import AvailabilityManager, setup_availability_commands, restore_availability_views
@@ -45,7 +44,6 @@ inactivity_tracker = None
 chain_tracker = None
 war_tracker = None
 verification_system = None
-subscription_manager = None
 role_sync_manager = None
 enemy_watchlist = None
 availability_manager = None
@@ -59,7 +57,7 @@ _initialized = False  # Prevent re-initialization on reconnect
 async def on_ready():
     """Called when the bot successfully connects to Discord"""
     global inactivity_tracker, chain_tracker, war_tracker, verification_system
-    global subscription_manager, role_sync_manager, enemy_watchlist, availability_manager
+    global role_sync_manager, enemy_watchlist, availability_manager
     global event_reminder_manager, stakeout_manager, alliance_manager, _initialized
 
     try:
@@ -84,23 +82,16 @@ async def on_ready():
             print('WARNING: Torn API key is invalid or faction ID is wrong!')
             print('Please check TORN_API_KEY and TORN_FACTION_ID in config.py')
 
-        # Initialize subscription manager (needed by other modules)
-        subscription_manager = SubscriptionManager(bot)
-        await subscription_manager.load_subscriptions()
-        await setup_subscription_commands(bot, subscription_manager)
-
         # Initialize inactivity tracker
         inactivity_tracker = InactivityTracker(bot)
         await inactivity_tracker.load_user_mapping()
 
         # Initialize chain tracker
         chain_tracker = ChainTracker(bot)
-        chain_tracker.subscription_manager = subscription_manager
         await chain_tracker.load_chain_history()
 
         # Initialize war tracker
         war_tracker = WarTracker(bot)
-        war_tracker.subscription_manager = subscription_manager
         await war_tracker.load_war_history()
 
         # Initialize verification system
@@ -115,7 +106,7 @@ async def on_ready():
         await setup_rolesync_commands(bot, role_sync_manager)
 
         # Initialize enemy watchlist
-        enemy_watchlist = EnemyWatchlist(bot, subscription_manager)
+        enemy_watchlist = EnemyWatchlist(bot)
         await enemy_watchlist.load_watchlist()
         await setup_enemy_commands(bot, enemy_watchlist)
 

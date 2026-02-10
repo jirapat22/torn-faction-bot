@@ -20,18 +20,15 @@ from discord import app_commands
 from datetime import datetime, timezone
 from typing import Optional, Dict, List
 
-from utils.helpers import load_json, save_json, create_embed
+from utils.helpers import load_json, save_json, create_embed, is_management
+from utils.torn_api import fetch_any_faction_data
 from config import (
     EMBED_COLOR_INFO,
     EMBED_COLOR_SUCCESS,
     EMBED_COLOR_WARNING,
     EMBED_COLOR_CRITICAL,
-    MANAGEMENT_ROLE_IDS,
-    TORN_PERSONAL_API_KEY,
     GUILD_ID
 )
-
-import aiohttp
 
 
 class AllianceManager:
@@ -148,91 +145,52 @@ class AllianceManager:
         return len(self.allies)
 
     async def _fetch_faction_info(self, faction_id: str) -> Optional[Dict]:
-        """Fetch faction info from Torn API"""
-        try:
-            if not TORN_PERSONAL_API_KEY:
-                print('Alliance: TORN_PERSONAL_API_KEY not set')
-                return None
-
-            url = f'https://api.torn.com/faction/{faction_id}?selections=basic&key={TORN_PERSONAL_API_KEY}'
-
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
-                async with session.get(url) as response:
-                    if response.status != 200:
-                        return None
-
-                    data = await response.json()
-
-                    if 'error' in data:
-                        print(f'Alliance API error: {data["error"]}')
-                        return None
-
-                    return data
-
-        except Exception as e:
-            print(f'Alliance: Error fetching faction {faction_id}: {e}')
-            return None
+        """Fetch faction info from Torn API using shared API layer"""
+        data = await fetch_any_faction_data(faction_id, selections='basic')
+        if not data:
+            print(f'Alliance: Could not fetch faction {faction_id}')
+        return data
 
     async def _fetch_faction_wars(self, faction_id: str) -> Optional[Dict]:
         """Fetch faction war data from Torn API v1 using rankedwars selection.
         v1 rankedwars works for any faction, unlike v2 wars which only returns
         the API key owner's faction wars."""
-        try:
-            if not TORN_PERSONAL_API_KEY:
-                print('Alliance: TORN_PERSONAL_API_KEY not set')
-                return None
-
-            # Use API v1 with rankedwars - works for ANY faction (not just key owner's)
-            url = f'https://api.torn.com/faction/{faction_id}?selections=basic,rankedwars&key={TORN_PERSONAL_API_KEY}'
-
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
-                async with session.get(url) as response:
-                    if response.status != 200:
-                        print(f'Alliance: API returned status {response.status} for faction {faction_id}')
-                        return None
-
-                    data = await response.json()
-
-                    if 'error' in data:
-                        error_info = data['error']
-                        print(f'Alliance: API error for faction {faction_id}: {error_info}')
-                        return None
-
-                    # Convert v1 rankedwars format to the wars format we expect
-                    # v1: {rankedwars: {war_id: {war: {start, end, target}, factions: {fid: {...}}}}}
-                    # We need: {wars: {ranked: {war_id, start, end, factions: [...]}}}
-                    rankedwars = data.get('rankedwars', {})
-                    if rankedwars:
-                        # Get the most recent/active war
-                        for wid, wdata in rankedwars.items():
-                            war_info = wdata.get('war', {})
-                            factions_dict = wdata.get('factions', {})
-
-                            # Convert factions dict to list format
-                            factions_list = []
-                            for fid, fdata in factions_dict.items():
-                                if isinstance(fdata, dict):
-                                    fdata['id'] = int(fid)
-                                    factions_list.append(fdata)
-
-                            data['wars'] = {
-                                'ranked': {
-                                    'war_id': int(wid),
-                                    'start': war_info.get('start', 0),
-                                    'end': war_info.get('end', 0),
-                                    'target': war_info.get('target', 0),
-                                    'factions': factions_list
-                                }
-                            }
-                            break  # Only process first war
-                    else:
-                        data['wars'] = {}
-
-                    return data
-
-        except Exception as e:
-            print(f'Alliance: Error fetching wars for {faction_id}: {e}')
+        data = await fetch_any_faction_data(faction_id, selections='basic,rankedwars')
+        if not data:
+            print(f'Alliance: Could not fetch wars for faction {faction_id}')
             return None
+
+        # Convert v1 rankedwars format to the wars format we expect
+        # v1: {rankedwars: {war_id: {war: {start, end, target}, factions: {fid: {...}}}}}
+        # We need: {wars: {ranked: {war_id, start, end, factions: [...]}}}
+        rankedwars = data.get('rankedwars', {})
+        if rankedwars:
+            # Get the most recent/active war
+            for wid, wdata in rankedwars.items():
+                war_info = wdata.get('war', {})
+                factions_dict = wdata.get('factions', {})
+
+                # Convert factions dict to list format
+                factions_list = []
+                for fid, fdata in factions_dict.items():
+                    if isinstance(fdata, dict):
+                        fdata['id'] = int(fid)
+                        factions_list.append(fdata)
+
+                data['wars'] = {
+                    'ranked': {
+                        'war_id': int(wid),
+                        'start': war_info.get('start', 0),
+                        'end': war_info.get('end', 0),
+                        'target': war_info.get('target', 0),
+                        'factions': factions_list
+                    }
+                }
+                break  # Only process first war
+        else:
+            data['wars'] = {}
+
+        return data
 
     async def check_ally_wars(self):
         """
@@ -546,16 +504,6 @@ class AllianceManager:
 
 async def setup_alliance_commands(bot, manager: AllianceManager):
     """Register alliance slash commands"""
-
-    def is_management(interaction: discord.Interaction) -> bool:
-        """Check if user has management permissions"""
-        if interaction.user.guild_permissions.manage_guild:
-            return True
-        if MANAGEMENT_ROLE_IDS:
-            user_role_ids = [role.id for role in interaction.user.roles]
-            if any(role_id in MANAGEMENT_ROLE_IDS for role_id in user_role_ids):
-                return True
-        return False
 
     alliance_group = app_commands.Group(name='alliance', description='Track ally faction wars')
 

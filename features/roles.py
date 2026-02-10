@@ -170,19 +170,9 @@ class RoleSyncManager:
 async def setup_rolesync_commands(bot, role_sync_manager: RoleSyncManager):
     """Set up role sync slash commands"""
     from discord import app_commands
-    from utils.helpers import create_embed, load_json
+    from utils.helpers import create_embed, load_json, is_management
     from utils.torn_api import fetch_faction_members
-    from config import EMBED_COLOR_SUCCESS, EMBED_COLOR_INFO, EMBED_COLOR_CRITICAL, MANAGEMENT_ROLE_IDS
-
-    def is_management(interaction: discord.Interaction) -> bool:
-        """Check if user has management permissions"""
-        if interaction.user.guild_permissions.manage_guild:
-            return True
-        if MANAGEMENT_ROLE_IDS:
-            user_role_ids = [role.id for role in interaction.user.roles]
-            if any(role_id in MANAGEMENT_ROLE_IDS for role_id in user_role_ids):
-                return True
-        return False
+    from config import EMBED_COLOR_SUCCESS, EMBED_COLOR_INFO, EMBED_COLOR_CRITICAL
 
     @bot.tree.command(
         name='rolesync',
@@ -359,7 +349,7 @@ async def setup_rolesync_commands(bot, role_sync_manager: RoleSyncManager):
                     discord_member = guild.get_member(int(discord_id))
                     if not discord_member:
                         discord_member = await guild.fetch_member(int(discord_id))
-                except:
+                except (discord.NotFound, discord.HTTPException, ValueError):
                     not_in_server += 1
                     continue
 

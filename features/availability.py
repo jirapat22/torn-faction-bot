@@ -14,13 +14,12 @@ import discord
 from discord import app_commands
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict
-from utils.helpers import load_json, save_json, create_embed
+from utils.helpers import load_json, save_json, create_embed, is_management
 from config import (
     EMBED_COLOR_INFO,
     EMBED_COLOR_SUCCESS,
     EMBED_COLOR_WARNING,
-    EMBED_COLOR_CRITICAL,
-    MANAGEMENT_ROLE_IDS
+    EMBED_COLOR_CRITICAL
 )
 
 
@@ -66,6 +65,8 @@ class AvailabilityManager:
         self.polls = load_json(self.polls_file, default={})
         self.data = load_json(self.data_file, default={})
         print(f'Loaded {len(self.polls)} availability polls')
+        # Auto-cleanup polls older than 7 days
+        await self.cleanup_old_polls()
 
     async def save_polls(self):
         """Save poll configurations to JSON"""
@@ -74,6 +75,28 @@ class AvailabilityManager:
     async def save_data(self):
         """Save availability data to JSON"""
         save_json(self.data_file, self.data)
+
+    async def cleanup_old_polls(self, max_age_days: int = 7):
+        """Remove polls whose end date is more than max_age_days in the past"""
+        now = datetime.now(timezone.utc)
+        expired = []
+
+        for poll_id, poll in self.polls.items():
+            try:
+                end_dt = parse_date(poll['end_date'])
+                age = (now - end_dt.replace(tzinfo=timezone.utc)).days
+                if age > max_age_days:
+                    expired.append(poll_id)
+            except (ValueError, KeyError):
+                continue
+
+        if expired:
+            for poll_id in expired:
+                del self.polls[poll_id]
+                self.data.pop(poll_id, None)
+            await self.save_polls()
+            await self.save_data()
+            print(f'Availability: Cleaned up {len(expired)} poll(s) older than {max_age_days} days')
 
     def create_poll(self, start_date: str, end_date: str, channel_id: int, message_id: int,
                     start_time: str, end_time: str, block_length: int) -> tuple:
@@ -339,8 +362,11 @@ class AvailabilityButton(discord.ui.Button):
 
     async def callback(self, interaction: discord.Interaction):
         """Handle button click"""
-        # Check if user has Verified role
-        verified_role = discord.utils.get(interaction.user.roles, name=self.verified_role_name)
+        # Check if user has Verified role (case-insensitive)
+        verified_role = discord.utils.find(
+            lambda r: r.name.lower() == self.verified_role_name.lower(),
+            interaction.user.roles
+        )
         if not verified_role:
             await interaction.response.send_message(
                 f"You must have the **{self.verified_role_name}** role to set availability. "
@@ -393,16 +419,6 @@ class AvailabilityButton(discord.ui.Button):
 
 async def setup_availability_commands(bot, manager: AvailabilityManager, verified_role_name: str):
     """Register availability slash commands"""
-
-    def is_management(interaction: discord.Interaction) -> bool:
-        """Check if user has management permissions"""
-        if interaction.user.guild_permissions.manage_guild:
-            return True
-        if MANAGEMENT_ROLE_IDS:
-            user_role_ids = [role.id for role in interaction.user.roles]
-            if any(role_id in MANAGEMENT_ROLE_IDS for role_id in user_role_ids):
-                return True
-        return False
 
     # ===== /avail_setup command =====
     @bot.tree.command(
