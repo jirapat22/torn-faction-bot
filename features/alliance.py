@@ -165,8 +165,38 @@ class AllianceManager:
         # We need: {wars: {ranked: {war_id, start, end, factions: [...]}}}
         rankedwars = data.get('rankedwars', {})
         if rankedwars:
-            # Get the most recent/active war
+            now = datetime.now(timezone.utc).timestamp()
+            best_war = None
+            best_priority = -1  # 2=active, 1=scheduled, 0=recently ended
+
             for wid, wdata in rankedwars.items():
+                war_info = wdata.get('war', {})
+                factions_dict = wdata.get('factions', {})
+                start = war_info.get('start', 0)
+                end = war_info.get('end', 0)
+
+                # Check if this war involves the target faction
+                if str(faction_id) not in [str(k) for k in factions_dict.keys()]:
+                    continue
+
+                # Determine priority: active > scheduled > recently ended
+                if start <= now and (not end or end == 0 or end > now):
+                    priority = 2  # Active war
+                elif start > now:
+                    priority = 1  # Scheduled
+                elif end and end > 0 and (now - end) < 604800:
+                    priority = 0  # Ended within last 7 days
+                else:
+                    continue  # Too old, skip
+
+                # Pick the highest priority, tiebreak by most recent start
+                if priority > best_priority or (priority == best_priority and start > best_war.get('start', 0)):
+                    best_priority = priority
+                    best_war = {'wid': wid, 'wdata': wdata, 'start': start}
+
+            if best_war:
+                wid = best_war['wid']
+                wdata = best_war['wdata']
                 war_info = wdata.get('war', {})
                 factions_dict = wdata.get('factions', {})
 
@@ -186,7 +216,8 @@ class AllianceManager:
                         'factions': factions_list
                     }
                 }
-                break  # Only process first war
+            else:
+                data['wars'] = {}
         else:
             data['wars'] = {}
 

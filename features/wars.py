@@ -113,7 +113,9 @@ class WarTracker:
             start = war.get('start', 0)
             end = war.get('end', 0)
 
-            print(f'War: Checking war {war_id} - start: {start}, end: {end}, now: {now}')
+            # Skip wars that ended more than 7 days ago
+            if end and end > 0 and (now - end) > 604800:
+                continue
 
             # War is active if it has started and either:
             # - end is 0/None (hasn't ended yet - active war)
@@ -158,6 +160,12 @@ class WarTracker:
         for war_id, war_data in rankedwars.items():
             war = war_data.get('war', {})
             start = war.get('start', 0)
+            end = war.get('end', 0)
+
+            # Skip wars that ended more than 30 days ago
+            if end and end > 0 and (now - end) > 2592000:
+                continue
+
             if start > latest_start:
                 latest_start = start
                 latest_war = {
