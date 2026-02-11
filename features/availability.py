@@ -350,6 +350,44 @@ class AvailabilityManager:
 
         return '\n'.join(lines)
 
+    def generate_timetable(self, poll_id: str) -> str:
+        """
+        Generate ASCII bar chart for availability
+
+        Returns:
+            Formatted string with bar chart
+        """
+        summary = self.get_summary(poll_id)
+        if not summary:
+            return "No poll data available."
+
+        max_count = max((b['count'] for b in summary['blocks']), default=1)
+        if max_count == 0:
+            max_count = 1
+
+        lines = []
+        current_date = None
+
+        for block in summary['blocks']:
+            if block['date'] != current_date:
+                if current_date is not None:
+                    lines.append("")
+                lines.append(f"─── {block['date']} ───")
+                current_date = block['date']
+
+            time_range = f"{block['start_time']}–{block['end_time']}"
+            count = block['count']
+
+            if count == 0:
+                bar = '·'
+            else:
+                bar_length = max(1, min(10, (count * 10) // max_count + 1))
+                bar = '█' * bar_length
+
+            lines.append(f"{time_range}: {bar:<10} {count}")
+
+        return '\n'.join(lines)
+
 
 class AvailabilityView(discord.ui.View):
     """Persistent view with buttons for availability selection"""
@@ -694,11 +732,14 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
 
         embed.set_footer(text=f"Times shown: Local time / TCT (Torn City Time = UTC)")
 
-        # Generate member grid
+        # Generate bar chart + member grid
+        timetable = manager.generate_timetable(poll_id)
         grid = manager.generate_member_grid(poll_id, interaction.guild)
-        grid_text = f"```\n🕒 Availability Grid\n\n{grid}\n```"
+        chart_text = f"```\n🕒 Availability (Torn Time)\n\n{timetable}\n```"
+        grid_text = f"```\n👥 Member Grid\n\n{grid}\n```"
 
-        await interaction.followup.send(embed=embed, content=grid_text)
+        await interaction.followup.send(embed=embed, content=chart_text)
+        await interaction.followup.send(content=grid_text)
 
     # ===== /tct_now command =====
     @bot.tree.command(
