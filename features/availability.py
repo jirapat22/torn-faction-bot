@@ -388,6 +388,91 @@ class AvailabilityManager:
 
         return '\n'.join(lines)
 
+    async def check_poll_endings(self):
+        """Check if any polls have ended and auto-post results"""
+        now = int(datetime.now(timezone.utc).timestamp())
+
+        for poll_id, poll in list(self.polls.items()):
+            poll_end = poll.get('poll_end_unix', 0)
+            if not poll_end or poll.get('closed'):
+                continue
+
+            if now < poll_end:
+                continue
+
+            # Poll has ended — mark as closed
+            poll['closed'] = True
+            await self.save_polls()
+
+            channel_id = poll.get('channel_id')
+            channel = self.bot.get_channel(channel_id) if channel_id else None
+            if not channel:
+                print(f'Availability: Could not find channel {channel_id} for poll {poll_id}')
+                continue
+
+            # Generate results
+            summary = self.get_summary(poll_id)
+            if not summary:
+                continue
+
+            guild = channel.guild
+            timetable = self.generate_timetable(poll_id)
+            grid = self.generate_member_grid(poll_id, guild)
+
+            # Find best window
+            best = summary['best_windows'][0] if summary['best_windows'] else None
+
+            if best and best['count'] > 0:
+                best_text = (
+                    f"The most common time people are available together will be "
+                    f"**{best['label']}** ({best['date']} <t:{best['start_unix']}:t> / "
+                    f"{best['start_time']}–{best['end_time']} TCT) "
+                    f"with **{best['count']}** members.\n\nSee you all then!"
+                )
+            else:
+                best_text = "No members voted in this poll."
+
+            # Build results embed
+            if summary['start_date'] == summary['end_date']:
+                title = f"📊 Poll Results – {summary['start_date']}"
+            else:
+                title = f"📊 Poll Results – {summary['start_date']} to {summary['end_date']}"
+
+            embed = create_embed(
+                title=title,
+                description=best_text,
+                color=EMBED_COLOR_SUCCESS
+            )
+
+            # Combined chart + grid
+            combined = f"```\n🕒 Availability (Torn Time)\n\n{timetable}\n\n👥 Member Grid\n\n{grid}\n```"
+
+            if len(combined) <= 2000:
+                await channel.send(embed=embed, content=combined)
+            else:
+                chart_text = f"```\n🕒 Availability (Torn Time)\n\n{timetable}\n```"
+                grid_text = f"```\n👥 Member Grid\n\n{grid}\n```"
+                await channel.send(embed=embed, content=chart_text)
+                await channel.send(content=grid_text)
+
+            # Edit original poll message to mark as closed
+            message_id = poll.get('message_id')
+            if message_id:
+                try:
+                    msg = await channel.fetch_message(message_id)
+                    if msg.embeds:
+                        old_embed = msg.embeds[0]
+                        closed_embed = create_embed(
+                            title=f"🔒 {old_embed.title} (Closed)",
+                            description=old_embed.description or '',
+                            color=EMBED_COLOR_WARNING
+                        )
+                        await msg.edit(embed=closed_embed, view=None)
+                except Exception as e:
+                    print(f'Availability: Could not edit poll message: {e}')
+
+            print(f'Availability: Poll {poll_id} closed, results posted')
+
 
 class AvailabilityView(discord.ui.View):
     """Persistent view with buttons for availability selection"""
@@ -431,6 +516,16 @@ class AvailabilityButton(discord.ui.Button):
 
     async def callback(self, interaction: discord.Interaction):
         """Handle button click"""
+        # Check if poll has closed
+        poll = self.manager.polls.get(self.poll_id, {})
+        poll_end = poll.get('poll_end_unix', 0)
+        if poll.get('closed') or (poll_end and int(datetime.now(timezone.utc).timestamp()) > poll_end):
+            await interaction.response.send_message(
+                "This poll has closed.",
+                ephemeral=True
+            )
+            return
+
         # Check if user has Verified role (case-insensitive)
         verified_role = discord.utils.find(
             lambda r: r.name.lower() == self.verified_role_name.lower(),
@@ -499,7 +594,8 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
         start_time='Start time in TCT/UTC (HH:MM, e.g., 00:00)',
         end_time='End time in TCT/UTC (HH:MM, e.g., 24:00)',
         end_date='End date if different from start (DD-MM-YYYY) - leave empty for same day',
-        block_length='Hours per time block (1-6, default: 2)'
+        block_length='Hours per time block (1-6, default: 2)',
+        poll_duration='Hours until poll closes (default: 24)'
     )
     async def avail_setup(
         interaction: discord.Interaction,
@@ -507,7 +603,8 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
         start_time: str,
         end_time: str,
         end_date: Optional[str] = None,
-        block_length: int = 2
+        block_length: int = 2,
+        poll_duration: int = 24
     ):
         """Create an availability poll"""
         # Check permissions
@@ -601,6 +698,11 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
             await interaction.followup.send(embed=embed, ephemeral=True)
             return
 
+        # Store poll end time
+        poll_end_unix = int(datetime.now(timezone.utc).timestamp()) + poll_duration * 3600
+        manager.polls[poll_id]['poll_end_unix'] = poll_end_unix
+        manager.polls[poll_id]['closed'] = False
+
         # Build block list with both local and TCT times
         block_list = []
         current_date = None
@@ -628,6 +730,7 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
         first_block = blocks[0]
         event_start_unix = first_block['start_unix']
         countdown_text = f"\n\n⏳ **Event starts:** <t:{event_start_unix}:R> (<t:{event_start_unix}:F>)"
+        countdown_text += f"\n📊 **Poll closes:** <t:{poll_end_unix}:R> (<t:{poll_end_unix}:f>)"
 
         # Create embed
         embed = create_embed(

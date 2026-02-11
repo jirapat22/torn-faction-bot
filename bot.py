@@ -180,6 +180,9 @@ async def on_ready():
         if not alliance_war_check.is_running():
             alliance_war_check.start()
 
+        if not poll_end_check.is_running():
+            poll_end_check.start()
+
         _initialized = True
         print('Bot is ready!')
 
@@ -331,6 +334,23 @@ async def before_alliance_war_check():
     """Wait until bot is ready before starting alliance war check"""
     await bot.wait_until_ready()
     print('Alliance war checker started (checks every 5 minutes)')
+
+
+@tasks.loop(minutes=1)
+async def poll_end_check():
+    """Background task to check if any availability polls have ended"""
+    try:
+        if availability_manager:
+            await availability_manager.check_poll_endings()
+    except Exception as e:
+        print(f'Error in poll end check: {e}')
+
+
+@poll_end_check.before_loop
+async def before_poll_end_check():
+    """Wait until bot is ready before starting poll end check"""
+    await bot.wait_until_ready()
+    print('Poll end checker started (checks every minute)')
 
 
 @bot.event
