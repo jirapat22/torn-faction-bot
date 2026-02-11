@@ -68,32 +68,36 @@ class WarTracker:
         Fetch ranked war report with complete per-member stats.
         Uses v1 'rankedwarreport' selection which includes attacks, defends,
         and score for every member in both factions.
+        Caches the report so it remains available after the war ends.
 
         Returns:
             Dict with {factions: {fid: {name, score, members: {uid: stats}}}} or None
         """
+        cache_file = 'data/warreport_cache.json'
+
         data = await fetch_faction_data('rankedwarreport')
-        if not data:
-            print('War report: No data from rankedwarreport')
-            return None
+        if data:
+            report = data.get('rankedwarreport', {})
+            if report:
+                factions = report.get('factions', {})
+                if factions:
+                    # Log what we got
+                    for fid, fdata in factions.items():
+                        if isinstance(fdata, dict):
+                            members = fdata.get('members', {})
+                            print(f'War report: Faction {fid} ({fdata.get("name", "?")}) - {len(members)} members')
+                    # Cache the report for after war ends
+                    save_json(cache_file, report)
+                    return report
 
-        report = data.get('rankedwarreport', {})
-        if not report:
-            print(f'War report: No rankedwarreport key. Response keys: {list(data.keys())}')
-            return None
+        # API didn't return report — try loading from cache
+        cached = load_json(cache_file, default=None)
+        if cached:
+            print('War report: Using cached report (API no longer returning data)')
+            return cached
 
-        factions = report.get('factions', {})
-        if not factions:
-            print(f'War report: No factions data. Report keys: {list(report.keys())}')
-            return None
-
-        # Log what we got
-        for fid, fdata in factions.items():
-            if isinstance(fdata, dict):
-                members = fdata.get('members', {})
-                print(f'War report: Faction {fid} ({fdata.get("name", "?")}) - {len(members)} members')
-
-        return report
+        print('War report: No data from API and no cache available')
+        return None
 
     async def get_current_war(self):
         """
@@ -360,12 +364,12 @@ class WarTracker:
                         continue
 
                     _ensure(defender_id)
-                    if attacker_faction == enemy_faction:
-                        # Identified war enemy hit
+                    # Use war modifier to determine if it was a ranked war hit
+                    modifiers = attack.get('modifiers', {})
+                    war_modifier = modifiers.get('war', 1.0) if isinstance(modifiers, dict) else 1.0
+                    if war_modifier > 1.0:
                         stats[defender_id]['war_incoming'] += 1
-                    elif attacker_faction != '0':
-                        # Identified non-war attacker (outside hit)
-                        # Anonymous attackers (faction 0) are skipped — likely war hits
+                    else:
                         stats[defender_id]['outside_incoming'] += 1
 
         except Exception as e:
@@ -891,6 +895,8 @@ class WarTracker:
         if not self.was_war_active:
             self.was_war_active = True
             self.current_war_id = war_id
+            # Clear old war report cache so fresh data is used
+            save_json('data/warreport_cache.json', {})
             print(f'War detected: {war_id}')
 
         # Save war data to history (faction-level scores for final report)
