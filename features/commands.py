@@ -242,7 +242,12 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
             await interaction.followup.send(embed=embed)
 
         @bot.tree.command(name='warboard', description='Show war participation leaderboard (Management only)')
-        async def warboard(interaction: discord.Interaction):
+        @app_commands.describe(view='View type: leave empty for stats, "xan" for Xanax calculation')
+        @app_commands.choices(view=[
+            app_commands.Choice(name='Stats', value='stats'),
+            app_commands.Choice(name='Xan', value='xan'),
+        ])
+        async def warboard(interaction: discord.Interaction, view: app_commands.Choice[str] = None):
             """Show war participation leaderboard - management only"""
             # Check management permissions
             if not is_management(interaction):
@@ -257,8 +262,12 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
             # Get latest war data (active or most recent completed)
             war_info = await war_tracker.get_latest_war()
 
-            # Create and send embeds (may be multiple for large rosters)
-            embeds = await war_tracker.format_warboard_embed(war_info)
+            # Choose view based on parameter
+            if view and view.value == 'xan':
+                embeds = await war_tracker.format_xan_embed(war_info)
+            else:
+                embeds = await war_tracker.format_warboard_embed(war_info)
+
             if isinstance(embeds, list):
                 for embed in embeds:
                     await interaction.followup.send(embed=embed)

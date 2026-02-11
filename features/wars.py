@@ -330,7 +330,7 @@ class WarTracker:
 
         def _ensure(uid):
             if uid not in stats:
-                stats[uid] = {'war_hits': 0, 'outside_hits': 0, 'total_incoming': 0, 'war_incoming': 0, 'outside_incoming': 0}
+                stats[uid] = {'war_hits': 0, 'outside_hits': 0, 'chain_outside_hits': 0, 'total_incoming': 0, 'war_incoming': 0, 'outside_incoming': 0}
 
         try:
             attacks = await self._fetch_all_attacks_since(war_start)
@@ -357,6 +357,8 @@ class WarTracker:
                         stats[attacker_id]['war_hits'] += 1
                     else:
                         stats[attacker_id]['outside_hits'] += 1
+                        if attack.get('chain', 0) > 10:
+                            stats[attacker_id]['chain_outside_hits'] += 1
 
                 # Someone attacked our member (successful attacks only)
                 elif defender_faction == our_faction and attacker_faction != our_faction:
@@ -616,6 +618,188 @@ class WarTracker:
         embeds.append(embed)
 
         # Return single embed or list
+        return embeds[0] if len(embeds) == 1 else embeds
+
+    async def format_xan_embed(self, war_info):
+        """
+        Create Discord embed for Xanax reimbursement calculation.
+        Shows war hits + chain outside hits per member.
+
+        Args:
+            war_info: War data from get_latest_war()
+
+        Returns:
+            discord.Embed or list of discord.Embed
+        """
+        if not war_info:
+            return create_embed(
+                title='No War Data',
+                description='No ranked war data available.',
+                color=EMBED_COLOR_INFO
+            )
+
+        war_data = war_info['data']
+        factions = war_data.get('factions', {})
+        war = war_data.get('war', {})
+        war_start = war.get('start', 0)
+        is_active = war_info.get('is_active', True)
+
+        # Find our faction and enemy faction
+        our_faction_data = None
+        enemy_faction_id = None
+        enemy_faction_data = None
+        for faction_id, faction_data in factions.items():
+            if str(faction_id) == str(TORN_FACTION_ID):
+                our_faction_data = faction_data
+            else:
+                enemy_faction_id = faction_id
+                enemy_faction_data = faction_data
+
+        if not enemy_faction_id:
+            return create_embed(
+                title='No War Data',
+                description='Could not identify war factions.',
+                color=EMBED_COLOR_WARNING
+            )
+
+        # Fetch faction members for names
+        from utils.torn_api import fetch_faction_members
+        faction_members = await fetch_faction_members()
+
+        if not faction_members:
+            return create_embed(
+                title='API Error',
+                description='Could not fetch faction member data.',
+                color=EMBED_COLOR_CRITICAL
+            )
+
+        # Try rankedwarreport for accurate war hits
+        our_war_members = None
+        report = await self._fetch_rankedwarreport()
+        if report:
+            report_factions = report.get('factions', {})
+            for fid, fdata in report_factions.items():
+                if str(fid) == str(TORN_FACTION_ID):
+                    our_war_members = fdata.get('members', {})
+                    if fdata.get('score') is not None:
+                        our_faction_data = fdata
+                else:
+                    if fdata.get('score') is not None:
+                        enemy_faction_data = fdata
+
+        # Fetch attacks log for chain outside hits
+        attack_stats = await self._get_war_attack_stats(enemy_faction_id, war_start)
+
+        # Build member list
+        member_list = []
+        for user_id, member_data in faction_members.items():
+            member_name = member_data.get('name', f'ID:{user_id}')
+            log_stats = attack_stats.get(user_id, {})
+            chain_outside = log_stats.get('chain_outside_hits', 0)
+
+            if our_war_members:
+                war_stats = our_war_members.get(user_id, {})
+                war_hits = war_stats.get('attacks', 0)
+            else:
+                war_hits = log_stats.get('war_hits', 0)
+
+            total = war_hits + chain_outside
+            if total > 0:
+                member_list.append({
+                    'name': member_name,
+                    'war_hits': war_hits,
+                    'chain_outside': chain_outside,
+                    'total': total,
+                })
+
+        # Sort by total descending
+        sorted_members = sorted(member_list, key=lambda x: x['total'], reverse=True)
+
+        # Totals
+        total_war = sum(m['war_hits'] for m in member_list)
+        total_chain = sum(m['chain_outside'] for m in member_list)
+        total_all = total_war + total_chain
+
+        # War status header
+        enemy_name = enemy_faction_data.get('name', 'Unknown') if enemy_faction_data else 'Unknown'
+        our_score = our_faction_data.get('score', 0) if our_faction_data else 0
+        enemy_score = enemy_faction_data.get('score', 0) if enemy_faction_data else 0
+
+        if is_active:
+            status_text = 'In Progress'
+            color = EMBED_COLOR_INFO
+        else:
+            status_text = 'VICTORY' if our_score > enemy_score else 'DEFEAT'
+            color = EMBED_COLOR_SUCCESS if our_score > enemy_score else EMBED_COLOR_CRITICAL
+
+        description = (
+            f'**vs {enemy_name}** | Score: {our_score} - {enemy_score} | {status_text}\n'
+            f'War ID: {war_info["war_id"]}'
+        )
+
+        embeds = []
+        embed = create_embed(
+            title='Xanax Reimbursement Report',
+            description=description,
+            color=color,
+            fields=[
+                {'name': 'War Hits', 'value': str(total_war), 'inline': True},
+                {'name': 'Chain Outside', 'value': str(total_chain), 'inline': True},
+                {'name': 'Total', 'value': str(total_all), 'inline': True},
+            ]
+        )
+
+        # Build monospace table
+        max_name = max((len(m['name']) for m in sorted_members), default=10)
+        max_name = min(max_name, 15)
+
+        header = f'{"#":>2}  {"Name":<{max_name}}  War  Chn  Tot'
+        separator = '-' * len(header)
+        table_lines = [header, separator]
+
+        for i, m in enumerate(sorted_members):
+            name = m['name'][:max_name]
+            line = f'{i+1:>2}  {name:<{max_name}}  {m["war_hits"]:>3}  {m["chain_outside"]:>3}  {m["total"]:>3}'
+            table_lines.append(line)
+
+        # Split into chunks for Discord field limits
+        table_chunks = []
+        current_chunk = []
+        current_length = 0
+
+        for line in table_lines:
+            if current_length + len(line) + 1 > 1024 - 8 and current_chunk:
+                table_chunks.append('```\n' + '\n'.join(current_chunk) + '\n```')
+                current_chunk = [line]
+                current_length = len(line)
+            else:
+                current_chunk.append(line)
+                current_length += len(line) + 1
+
+        if current_chunk:
+            table_chunks.append('```\n' + '\n'.join(current_chunk) + '\n```')
+
+        for idx, chunk in enumerate(table_chunks):
+            if idx == 0:
+                embed.add_field(
+                    name=f'Members ({len(sorted_members)})',
+                    value=chunk,
+                    inline=False
+                )
+            else:
+                if len(embed.fields) >= 24 or len(embed) > 5000:
+                    embeds.append(embed)
+                    embed = create_embed(
+                        title='Xanax Reimbursement Report (cont.)',
+                        color=color
+                    )
+                embed.add_field(
+                    name='Members (cont.)',
+                    value=chunk,
+                    inline=False
+                )
+
+        embeds.append(embed)
         return embeds[0] if len(embeds) == 1 else embeds
 
     async def format_war_management_report(self, war_info, final_data=None):
