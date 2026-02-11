@@ -592,7 +592,7 @@ class WarTracker:
 
         # Build monospace table for clean alignment
         # Find the longest name to set column width
-        max_name = max(len(m['name']) for m in sorted_members)
+        max_name = max((len(m['name']) for m in sorted_members), default=10)
         max_name = min(max_name, 15)  # Cap at 15 chars to fit mobile
 
         # Build table lines
