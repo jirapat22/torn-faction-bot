@@ -337,6 +337,41 @@ class WarTracker:
             our_faction = str(TORN_FACTION_ID)
             enemy_faction = str(enemy_faction_id)
 
+            # Pre-pass: identify attack IDs that belong to chains > 10
+            # Group our outgoing attacks into chains by detecting chain counter resets
+            our_attacks = []
+            for attack_id, attack in attacks.items():
+                if not isinstance(attack, dict):
+                    continue
+                if str(attack.get('attacker_faction', 0)) == our_faction:
+                    our_attacks.append((attack_id, attack))
+
+            # Sort by timestamp to detect chain boundaries
+            our_attacks.sort(key=lambda x: x[1].get('timestamp_started', 0))
+
+            # Group into chains: chain resets when value drops
+            valid_chain_ids = set()
+            current_chain = []  # list of (attack_id, chain_value)
+            prev_chain_val = 0
+
+            for attack_id, attack in our_attacks:
+                chain_val = attack.get('chain', 0)
+                if chain_val <= prev_chain_val and current_chain:
+                    # Chain reset — check if previous chain was > 10
+                    max_val = max(cv for _, cv in current_chain)
+                    if max_val > 10:
+                        valid_chain_ids.update(aid for aid, _ in current_chain)
+                    current_chain = []
+                current_chain.append((attack_id, chain_val))
+                prev_chain_val = chain_val
+
+            # Handle last chain group
+            if current_chain:
+                max_val = max(cv for _, cv in current_chain)
+                if max_val > 10:
+                    valid_chain_ids.update(aid for aid, _ in current_chain)
+
+            # Main pass: compute all stats
             for attack_id, attack in attacks.items():
                 if not isinstance(attack, dict):
                     continue
@@ -357,7 +392,8 @@ class WarTracker:
                         stats[attacker_id]['war_hits'] += 1
                     else:
                         stats[attacker_id]['outside_hits'] += 1
-                        if attack.get('chain', 0) > 10:
+                        # Count chain outside hit if this attack was in a chain > 10
+                        if attack_id in valid_chain_ids:
                             stats[attacker_id]['chain_outside_hits'] += 1
 
                 # Someone attacked our member (successful attacks only)
