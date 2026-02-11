@@ -337,39 +337,27 @@ class WarTracker:
             our_faction = str(TORN_FACTION_ID)
             enemy_faction = str(enemy_faction_id)
 
-            # Pre-pass: identify attack IDs that belong to chains > 10
-            # Group our outgoing attacks into chains by detecting chain counter resets
-            our_attacks = []
-            for attack_id, attack in attacks.items():
-                if not isinstance(attack, dict):
-                    continue
-                if str(attack.get('attacker_faction', 0)) == our_faction:
-                    our_attacks.append((attack_id, attack))
+            # Fetch completed chains from API and build time windows for chains >= 10
+            chain_windows = []
+            chains_data = await fetch_faction_data('chains')
+            if chains_data:
+                chains = chains_data.get('chains', {})
+                for chain_id, chain_info in chains.items():
+                    if not isinstance(chain_info, dict):
+                        continue
+                    chain_count = chain_info.get('chain', 0)
+                    chain_start = chain_info.get('start', 0)
+                    chain_end = chain_info.get('end', 0)
+                    # Only include chains >= 10 that overlap with war period
+                    if chain_count >= 10 and chain_end >= war_start:
+                        chain_windows.append((chain_start, chain_end))
 
-            # Sort by timestamp to detect chain boundaries
-            our_attacks.sort(key=lambda x: x[1].get('timestamp_started', 0))
-
-            # Group into chains: chain resets when value drops
-            valid_chain_ids = set()
-            current_chain = []  # list of (attack_id, chain_value)
-            prev_chain_val = 0
-
-            for attack_id, attack in our_attacks:
-                chain_val = attack.get('chain', 0)
-                if chain_val <= prev_chain_val and current_chain:
-                    # Chain reset — check if previous chain was > 10
-                    max_val = max(cv for _, cv in current_chain)
-                    if max_val > 10:
-                        valid_chain_ids.update(aid for aid, _ in current_chain)
-                    current_chain = []
-                current_chain.append((attack_id, chain_val))
-                prev_chain_val = chain_val
-
-            # Handle last chain group
-            if current_chain:
-                max_val = max(cv for _, cv in current_chain)
-                if max_val > 10:
-                    valid_chain_ids.update(aid for aid, _ in current_chain)
+            def _in_chain(timestamp):
+                """Check if a timestamp falls within any valid chain window"""
+                for c_start, c_end in chain_windows:
+                    if c_start <= timestamp <= c_end:
+                        return True
+                return False
 
             # Main pass: compute all stats
             for attack_id, attack in attacks.items():
@@ -392,8 +380,9 @@ class WarTracker:
                         stats[attacker_id]['war_hits'] += 1
                     else:
                         stats[attacker_id]['outside_hits'] += 1
-                        # Count chain outside hit if this attack was in a chain > 10
-                        if attack_id in valid_chain_ids:
+                        # Count chain outside hit if this attack fell within a chain >= 10
+                        ts = attack.get('timestamp_started', 0)
+                        if _in_chain(ts):
                             stats[attacker_id]['chain_outside_hits'] += 1
 
                 # Someone attacked our member (successful attacks only)
