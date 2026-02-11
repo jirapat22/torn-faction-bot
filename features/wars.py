@@ -573,9 +573,13 @@ class WarTracker:
 
         # Build first embed with summary
         embeds = []
+        legend = (
+            '\n\n**War** = Hits on war opponent | **Out** = Hits outside war\n'
+            '**WHt** = Times hit by war opponent | **OHt** = Times hit by outsiders'
+        )
         embed = create_embed(
             title='War Participation Report',
-            description=description,
+            description=description + legend,
             color=color,
             fields=[
                 {'name': 'War Attacks', 'value': str(total_war_hits), 'inline': True},
@@ -763,9 +767,13 @@ class WarTracker:
         )
 
         embeds = []
+        legend = (
+            '\n\n**War** = Hits on war opponent | **Chn** = Outside hits during chain\n'
+            '**Tot** = War + Chn combined'
+        )
         embed = create_embed(
             title='Xanax Reimbursement Report',
-            description=description,
+            description=description + legend,
             color=color,
             fields=[
                 {'name': 'War Hits', 'value': str(total_war), 'inline': True},
