@@ -278,44 +278,75 @@ class AvailabilityManager:
             'block_length': poll['block_length']
         }
 
-    def generate_timetable(self, poll_id: str) -> str:
+    def generate_member_grid(self, poll_id: str, guild) -> str:
         """
-        Generate ASCII timetable for availability
+        Generate member × time slot grid for availability
+
+        Args:
+            poll_id: The poll ID
+            guild: Discord guild to resolve user names
 
         Returns:
-            Formatted string with bar chart
+            Formatted string with member grid
         """
         summary = self.get_summary(poll_id)
         if not summary:
             return "No poll data available."
 
-        # Find max count for scaling
-        max_count = max((b['count'] for b in summary['blocks']), default=1)
-        if max_count == 0:
-            max_count = 1
+        poll_data = self.data.get(poll_id, {})
+        blocks = summary['blocks']
 
-        lines = []
-        current_date = None
+        # Collect all unique voters and resolve names
+        all_voter_ids = set()
+        for block_key, user_ids in poll_data.items():
+            all_voter_ids.update(user_ids)
 
-        for block in summary['blocks']:
-            # Add date header if date changed
-            if block['date'] != current_date:
-                if current_date is not None:
-                    lines.append("")  # Blank line between days
-                lines.append(f"─── {block['date']} ───")
-                current_date = block['date']
+        if not all_voter_ids:
+            return "No votes yet."
 
-            time_range = f"{block['start_time']}–{block['end_time']}"
-            count = block['count']
-
-            # Scale bars
-            if count == 0:
-                bar = '·'
+        # Resolve user IDs to display names
+        voters = {}  # {user_id_str: display_name}
+        for uid_str in all_voter_ids:
+            member = guild.get_member(int(uid_str)) if guild else None
+            if member:
+                voters[uid_str] = member.display_name
             else:
-                bar_length = max(1, min(10, (count * 10) // max_count + 1))
-                bar = '█' * bar_length
+                voters[uid_str] = f'ID:{uid_str}'
 
-            lines.append(f"{time_range}: {bar:<10} {count}")
+        # Build grid: rows = voters, columns = time blocks
+        labels = [b['label'] for b in blocks]
+        max_name = max(len(name) for name in voters.values())
+        max_name = min(max_name, 12)  # Cap name width
+
+        # Header row with slot labels
+        header = f'{"Name":<{max_name}}  ' + ' '.join(f'{l:>2}' for l in labels)
+        separator = '-' * len(header)
+
+        lines = [header, separator]
+
+        # Sort voters by number of slots selected (most first)
+        sorted_voters = sorted(
+            voters.items(),
+            key=lambda v: sum(1 for bk, uids in poll_data.items() if v[0] in uids),
+            reverse=True
+        )
+
+        for uid_str, name in sorted_voters:
+            name_display = name[:max_name]
+            marks = []
+            for block in blocks:
+                block_key = str(block['id'])
+                users = poll_data.get(block_key, [])
+                marks.append(' ✓' if uid_str in users else ' ·')
+            line = f'{name_display:<{max_name}}  ' + ''.join(marks)
+            lines.append(line)
+
+        # Add count row at bottom
+        lines.append(separator)
+        count_line = f'{"Total":<{max_name}}  ' + ' '.join(
+            f'{b["count"]:>2}' for b in blocks
+        )
+        lines.append(count_line)
 
         return '\n'.join(lines)
 
@@ -663,11 +694,11 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
 
         embed.set_footer(text=f"Times shown: Local time / TCT (Torn City Time = UTC)")
 
-        # Generate ASCII timetable
-        timetable = manager.generate_timetable(poll_id)
-        timetable_text = f"```\n🕒 Availability (Torn Time)\n\n{timetable}\n```"
+        # Generate member grid
+        grid = manager.generate_member_grid(poll_id, interaction.guild)
+        grid_text = f"```\n🕒 Availability Grid\n\n{grid}\n```"
 
-        await interaction.followup.send(embed=embed, content=timetable_text)
+        await interaction.followup.send(embed=embed, content=grid_text)
 
     # ===== /tct_now command =====
     @bot.tree.command(
