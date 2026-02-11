@@ -732,14 +732,19 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
 
         embed.set_footer(text=f"Times shown: Local time / TCT (Torn City Time = UTC)")
 
-        # Generate bar chart + member grid
+        # Generate bar chart + member grid combined
         timetable = manager.generate_timetable(poll_id)
         grid = manager.generate_member_grid(poll_id, interaction.guild)
-        chart_text = f"```\n🕒 Availability (Torn Time)\n\n{timetable}\n```"
-        grid_text = f"```\n👥 Member Grid\n\n{grid}\n```"
+        combined = f"```\n🕒 Availability (Torn Time)\n\n{timetable}\n\n👥 Member Grid\n\n{grid}\n```"
 
-        await interaction.followup.send(embed=embed, content=chart_text)
-        await interaction.followup.send(content=grid_text)
+        # Split into two messages if too long for Discord (2000 char limit)
+        if len(combined) <= 2000:
+            await interaction.followup.send(embed=embed, content=combined)
+        else:
+            chart_text = f"```\n🕒 Availability (Torn Time)\n\n{timetable}\n```"
+            grid_text = f"```\n👥 Member Grid\n\n{grid}\n```"
+            await interaction.followup.send(embed=embed, content=chart_text)
+            await interaction.followup.send(content=grid_text)
 
     # ===== /tct_now command =====
     @bot.tree.command(
