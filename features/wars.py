@@ -324,13 +324,13 @@ class WarTracker:
             war_start: War start timestamp to filter attacks
 
         Returns:
-            Dict of {user_id: {'war_hits': N, 'outside_hits': N, 'war_incoming': N, 'outside_incoming': N}}
+            Dict of {user_id: {'war_hits': N, 'outside_hits': N, 'total_incoming': N, 'war_incoming': N, 'outside_incoming': N}}
         """
         stats = {}
 
         def _ensure(uid):
             if uid not in stats:
-                stats[uid] = {'war_hits': 0, 'outside_hits': 0, 'war_incoming': 0, 'outside_incoming': 0}
+                stats[uid] = {'war_hits': 0, 'outside_hits': 0, 'total_incoming': 0, 'war_incoming': 0, 'outside_incoming': 0}
 
         try:
             attacks = await self._fetch_all_attacks_since(war_start)
@@ -364,7 +364,8 @@ class WarTracker:
                         continue
 
                     _ensure(defender_id)
-                    # Use war modifier to determine if it was a ranked war hit
+                    stats[defender_id]['total_incoming'] += 1
+                    # Use war modifier as fallback classification
                     modifiers = attack.get('modifiers', {})
                     war_modifier = modifiers.get('war', 1.0) if isinstance(modifiers, dict) else 1.0
                     if war_modifier > 1.0:
@@ -484,12 +485,16 @@ class WarTracker:
                 war_stats = our_war_members.get(user_id, {})
                 log_stats = attack_stats.get(user_id, {})
 
+                war_inc = war_stats.get('defends', 0)
+                total_inc = log_stats.get('total_incoming', 0)
+                outside_inc = max(0, total_inc - war_inc)
+
                 member_list.append({
                     'name': member_name,
                     'war_hits': war_stats.get('attacks', 0),
                     'outside_hits': log_stats.get('outside_hits', 0),
-                    'war_incoming': war_stats.get('defends', 0),
-                    'outside_incoming': log_stats.get('outside_incoming', 0),
+                    'war_incoming': war_inc,
+                    'outside_incoming': outside_inc,
                     'score': war_stats.get('score', 0),
                 })
         else:
