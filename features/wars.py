@@ -320,13 +320,13 @@ class WarTracker:
             war_start: War start timestamp to filter attacks
 
         Returns:
-            Dict of {user_id: {'war_hits': N, 'outside_hits': N, 'outside_incoming': N}}
+            Dict of {user_id: {'war_hits': N, 'outside_hits': N, 'war_incoming': N, 'outside_incoming': N}}
         """
         stats = {}
 
         def _ensure(uid):
             if uid not in stats:
-                stats[uid] = {'war_hits': 0, 'outside_hits': 0, 'outside_incoming': 0}
+                stats[uid] = {'war_hits': 0, 'outside_hits': 0, 'war_incoming': 0, 'outside_incoming': 0}
 
         try:
             attacks = await self._fetch_all_attacks_since(war_start)
@@ -359,10 +359,13 @@ class WarTracker:
                     if result not in ('Attacked', 'Mugged', 'Hospitalized', 'Special'):
                         continue
 
-                    # Only count as outside if attacker is identified and NOT the war enemy
-                    # Anonymous attackers (faction 0) are likely war hits, skip them
-                    if attacker_faction != '0' and attacker_faction != enemy_faction:
-                        _ensure(defender_id)
+                    _ensure(defender_id)
+                    if attacker_faction == enemy_faction:
+                        # Identified war enemy hit
+                        stats[defender_id]['war_incoming'] += 1
+                    elif attacker_faction != '0':
+                        # Identified non-war attacker (outside hit)
+                        # Anonymous attackers (faction 0) are skipped — likely war hits
                         stats[defender_id]['outside_incoming'] += 1
 
         except Exception as e:
@@ -497,7 +500,7 @@ class WarTracker:
                     'name': member_name,
                     'war_hits': stats.get('war_hits', 0),
                     'outside_hits': stats.get('outside_hits', 0),
-                    'war_incoming': 0,
+                    'war_incoming': stats.get('war_incoming', 0),
                     'outside_incoming': stats.get('outside_incoming', 0),
                     'score': 0,
                 })
