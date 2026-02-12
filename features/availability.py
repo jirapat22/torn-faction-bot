@@ -230,7 +230,10 @@ class AvailabilityManager:
 
     def find_poll_by_date(self, date: str) -> Optional[str]:
         """Find a poll that includes the given date (DD-MM-YYYY)"""
-        target_dt = parse_date(date)
+        try:
+            target_dt = parse_date(date)
+        except ValueError:
+            return None
         for poll_id, poll in self.polls.items():
             start_dt = parse_date(poll['start_date'])
             end_dt = parse_date(poll['end_date'])
@@ -337,7 +340,7 @@ class AvailabilityManager:
             for block in blocks:
                 block_key = str(block['id'])
                 users = poll_data.get(block_key, [])
-                marks.append(' ✓' if uid_str in users else ' ·')
+                marks.append(' X' if uid_str in users else ' -')
             line = f'{name_display:<{max_name}}  ' + ''.join(marks)
             lines.append(line)
 
@@ -400,78 +403,101 @@ class AvailabilityManager:
             if now < poll_end:
                 continue
 
-            # Poll has ended — mark as closed
-            poll['closed'] = True
-            await self.save_polls()
+            # Poll has ended — try to post results first, then mark as closed
+            try:
+                channel_id = poll.get('channel_id')
+                channel = self.bot.get_channel(channel_id) if channel_id else None
+                if not channel:
+                    print(f'Availability: Could not find channel {channel_id} for poll {poll_id}')
+                    # Mark closed so we don't retry forever for a missing channel
+                    poll['closed'] = True
+                    await self.save_polls()
+                    continue
 
-            channel_id = poll.get('channel_id')
-            channel = self.bot.get_channel(channel_id) if channel_id else None
-            if not channel:
-                print(f'Availability: Could not find channel {channel_id} for poll {poll_id}')
-                continue
+                # Generate results
+                summary = self.get_summary(poll_id)
+                if not summary:
+                    poll['closed'] = True
+                    await self.save_polls()
+                    continue
 
-            # Generate results
-            summary = self.get_summary(poll_id)
-            if not summary:
-                continue
+                guild = channel.guild
+                timetable = self.generate_timetable(poll_id)
+                grid = self.generate_member_grid(poll_id, guild)
 
-            guild = channel.guild
-            timetable = self.generate_timetable(poll_id)
-            grid = self.generate_member_grid(poll_id, guild)
+                # Find best window
+                best = summary['best_windows'][0] if summary['best_windows'] else None
 
-            # Find best window
-            best = summary['best_windows'][0] if summary['best_windows'] else None
+                if best and best['count'] > 0:
+                    best_text = (
+                        f"The most common time people are available together will be "
+                        f"**{best['label']}** ({best['date']} <t:{best['start_unix']}:t> / "
+                        f"{best['start_time']}–{best['end_time']} TCT) "
+                        f"with **{best['count']}** members.\n\nSee you all then!"
+                    )
+                else:
+                    best_text = "No members voted in this poll."
 
-            if best and best['count'] > 0:
-                best_text = (
-                    f"The most common time people are available together will be "
-                    f"**{best['label']}** ({best['date']} <t:{best['start_unix']}:t> / "
-                    f"{best['start_time']}–{best['end_time']} TCT) "
-                    f"with **{best['count']}** members.\n\nSee you all then!"
+                # Build results embed
+                if summary['start_date'] == summary['end_date']:
+                    title = f"📊 Poll Results – {summary['start_date']}"
+                else:
+                    title = f"📊 Poll Results – {summary['start_date']} to {summary['end_date']}"
+
+                embed = create_embed(
+                    title=title,
+                    description=best_text,
+                    color=EMBED_COLOR_SUCCESS
                 )
-            else:
-                best_text = "No members voted in this poll."
 
-            # Build results embed
-            if summary['start_date'] == summary['end_date']:
-                title = f"📊 Poll Results – {summary['start_date']}"
-            else:
-                title = f"📊 Poll Results – {summary['start_date']} to {summary['end_date']}"
+                # Combined chart + grid
+                combined = f"```\nAvailability (Torn Time)\n\n{timetable}\n\nMember Grid\n\n{grid}\n```"
 
-            embed = create_embed(
-                title=title,
-                description=best_text,
-                color=EMBED_COLOR_SUCCESS
-            )
+                if len(combined) <= 2000:
+                    await channel.send(embed=embed, content=combined)
+                else:
+                    chart_text = f"```\nAvailability (Torn Time)\n\n{timetable}\n```"
+                    grid_text = f"```\nMember Grid\n\n{grid}\n```"
+                    await channel.send(embed=embed, content=chart_text)
+                    # Paginate grid if too long
+                    if len(grid_text) <= 2000:
+                        await channel.send(content=grid_text)
+                    else:
+                        grid_lines = grid.split('\n')
+                        chunk = "```\nMember Grid\n\n"
+                        for line in grid_lines:
+                            if len(chunk) + len(line) + 5 > 2000:  # 5 for \n + closing ```
+                                chunk += "```"
+                                await channel.send(content=chunk)
+                                chunk = "```\n"
+                            chunk += line + '\n'
+                        if chunk.strip('`\n '):
+                            chunk += "```"
+                            await channel.send(content=chunk)
 
-            # Combined chart + grid
-            combined = f"```\n🕒 Availability (Torn Time)\n\n{timetable}\n\n👥 Member Grid\n\n{grid}\n```"
+                # Edit original poll message to mark as closed
+                message_id = poll.get('message_id')
+                if message_id:
+                    try:
+                        msg = await channel.fetch_message(message_id)
+                        if msg.embeds:
+                            old_embed = msg.embeds[0]
+                            closed_embed = create_embed(
+                                title=f"🔒 {old_embed.title} (Closed)",
+                                description=old_embed.description or '',
+                                color=EMBED_COLOR_WARNING
+                            )
+                            await msg.edit(embed=closed_embed, view=None)
+                    except Exception as e:
+                        print(f'Availability: Could not edit poll message: {e}')
 
-            if len(combined) <= 2000:
-                await channel.send(embed=embed, content=combined)
-            else:
-                chart_text = f"```\n🕒 Availability (Torn Time)\n\n{timetable}\n```"
-                grid_text = f"```\n👥 Member Grid\n\n{grid}\n```"
-                await channel.send(embed=embed, content=chart_text)
-                await channel.send(content=grid_text)
+                # Mark closed AFTER results are successfully posted
+                poll['closed'] = True
+                await self.save_polls()
+                print(f'Availability: Poll {poll_id} closed, results posted')
 
-            # Edit original poll message to mark as closed
-            message_id = poll.get('message_id')
-            if message_id:
-                try:
-                    msg = await channel.fetch_message(message_id)
-                    if msg.embeds:
-                        old_embed = msg.embeds[0]
-                        closed_embed = create_embed(
-                            title=f"🔒 {old_embed.title} (Closed)",
-                            description=old_embed.description or '',
-                            color=EMBED_COLOR_WARNING
-                        )
-                        await msg.edit(embed=closed_embed, view=None)
-                except Exception as e:
-                    print(f'Availability: Could not edit poll message: {e}')
-
-            print(f'Availability: Poll {poll_id} closed, results posted')
+            except Exception as e:
+                print(f'Availability: Error closing poll {poll_id}: {e}')
 
 
 class AvailabilityView(discord.ui.View):
@@ -617,6 +643,16 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
             await interaction.response.send_message(embed=embed, ephemeral=True)
             return
 
+        # Validate poll duration
+        if poll_duration < 1:
+            embed = create_embed(
+                title='Invalid Poll Duration',
+                description='Poll duration must be at least 1 hour.',
+                color=EMBED_COLOR_CRITICAL
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
         # Validate block length
         if block_length < 1 or block_length > 6:
             embed = create_embed(
@@ -690,6 +726,11 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
         )
 
         if not blocks:
+            # Clean up the orphaned poll entry
+            if poll_id in manager.polls:
+                del manager.polls[poll_id]
+            if poll_id in manager.data:
+                del manager.data[poll_id]
             embed = create_embed(
                 title='Error',
                 description='Failed to create time blocks. Check your time range.',
@@ -838,16 +879,30 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
         # Generate bar chart + member grid combined
         timetable = manager.generate_timetable(poll_id)
         grid = manager.generate_member_grid(poll_id, interaction.guild)
-        combined = f"```\n🕒 Availability (Torn Time)\n\n{timetable}\n\n👥 Member Grid\n\n{grid}\n```"
+        combined = f"```\nAvailability (Torn Time)\n\n{timetable}\n\nMember Grid\n\n{grid}\n```"
 
         # Split into two messages if too long for Discord (2000 char limit)
         if len(combined) <= 2000:
             await interaction.followup.send(embed=embed, content=combined)
         else:
-            chart_text = f"```\n🕒 Availability (Torn Time)\n\n{timetable}\n```"
-            grid_text = f"```\n👥 Member Grid\n\n{grid}\n```"
+            chart_text = f"```\nAvailability (Torn Time)\n\n{timetable}\n```"
+            grid_text = f"```\nMember Grid\n\n{grid}\n```"
             await interaction.followup.send(embed=embed, content=chart_text)
-            await interaction.followup.send(content=grid_text)
+            # Paginate grid if too long
+            if len(grid_text) <= 2000:
+                await interaction.followup.send(content=grid_text)
+            else:
+                grid_lines = grid.split('\n')
+                chunk = "```\nMember Grid\n\n"
+                for line in grid_lines:
+                    if len(chunk) + len(line) + 5 > 2000:
+                        chunk += "```"
+                        await interaction.followup.send(content=chunk)
+                        chunk = "```\n"
+                    chunk += line + '\n'
+                if chunk.strip('`\n '):
+                    chunk += "```"
+                    await interaction.followup.send(content=chunk)
 
     # ===== /tct_now command =====
     @bot.tree.command(
@@ -1017,6 +1072,9 @@ async def restore_availability_views(bot, manager: AvailabilityManager, verified
     Call this in on_ready after loading data.
     """
     for poll_id, poll in manager.polls.items():
+        if poll.get('closed'):
+            continue
+
         channel_id = poll.get('channel_id')
         message_id = poll.get('message_id')
         blocks = poll.get('blocks', [])

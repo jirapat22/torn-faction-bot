@@ -63,12 +63,15 @@ class WarTracker:
             return None
         return rankedwars
 
-    async def _fetch_rankedwarreport(self):
+    async def _fetch_rankedwarreport(self, war_id=None):
         """
         Fetch ranked war report with complete per-member stats.
         Uses v1 'rankedwarreport' selection which includes attacks, defends,
         and score for every member in both factions.
         Caches the report so it remains available after the war ends.
+
+        Args:
+            war_id: Current war ID to validate cache against (prevents stale data from old wars)
 
         Returns:
             Dict with {factions: {fid: {name, score, members: {uid: stats}}}} or None
@@ -86,15 +89,22 @@ class WarTracker:
                         if isinstance(fdata, dict):
                             members = fdata.get('members', {})
                             print(f'War report: Faction {fid} ({fdata.get("name", "?")}) - {len(members)} members')
-                    # Cache the report for after war ends
-                    save_json(cache_file, report)
+                    # Cache the report with war_id for validation
+                    cache_data = {'war_id': str(war_id) if war_id else None, 'report': report}
+                    save_json(cache_file, cache_data)
                     return report
 
         # API didn't return report — try loading from cache
-        cached = load_json(cache_file, default=None)
-        if cached:
-            print('War report: Using cached report (API no longer returning data)')
-            return cached
+        cached = load_json(cache_file, default={})
+        if cached and cached.get('report'):
+            cached_war_id = cached.get('war_id')
+            # Only use cache if it matches the current war (or no war_id to check)
+            if war_id is None or cached_war_id is None or str(cached_war_id) == str(war_id):
+                print('War report: Using cached report (API no longer returning data)')
+                return cached['report']
+            else:
+                print(f'War report: Cache is for war {cached_war_id}, current war is {war_id} — ignoring stale cache')
+                return None
 
         print('War report: No data from API and no cache available')
         return None
@@ -483,7 +493,7 @@ class WarTracker:
         # Try rankedwarreport first (complete and accurate per-member data)
         our_war_members = None
         enemy_war_members = None
-        report = await self._fetch_rankedwarreport()
+        report = await self._fetch_rankedwarreport(war_id=war_info.get('war_id'))
         if report:
             report_factions = report.get('factions', {})
             for fid, fdata in report_factions.items():
@@ -502,7 +512,10 @@ class WarTracker:
         data_source = 'report'
 
         # Always fetch attacks log for outside hits and incoming split
-        attack_stats = await self._get_war_attack_stats(enemy_faction_id, war_start)
+        if not war_start:
+            attack_stats = {}
+        else:
+            attack_stats = await self._get_war_attack_stats(enemy_faction_id, war_start)
 
         if our_war_members:
             print(f'War: Using rankedwarreport data ({len(our_war_members)} members)')
@@ -704,7 +717,7 @@ class WarTracker:
 
         # Try rankedwarreport for accurate war hits
         our_war_members = None
-        report = await self._fetch_rankedwarreport()
+        report = await self._fetch_rankedwarreport(war_id=war_info.get('war_id'))
         if report:
             report_factions = report.get('factions', {})
             for fid, fdata in report_factions.items():
@@ -717,7 +730,10 @@ class WarTracker:
                         enemy_faction_data = fdata
 
         # Fetch attacks log for chain outside hits
-        attack_stats = await self._get_war_attack_stats(enemy_faction_id, war_start)
+        if not war_start:
+            attack_stats = {}
+        else:
+            attack_stats = await self._get_war_attack_stats(enemy_faction_id, war_start)
 
         # Build member list
         member_list = []
@@ -946,7 +962,7 @@ class WarTracker:
             )
 
         # Join all member details
-        full_details = '\n'.join(member_details)
+        full_details = '\n'.join(member_details) if member_details else 'No member data available'
 
         # Split into multiple fields if too long
         if len(full_details) > 1024:
@@ -995,18 +1011,26 @@ class WarTracker:
                     inline=False
                 )
 
-        # Add members who didn't participate
+        # Add members who didn't participate (chunked for Discord 1024-char limit)
         non_participants = [m for m in member_stats if m['outgoing'] == 0]
         if non_participants:
-            non_participant_text = '\n'.join([
-                f'• {m["name"]}'
-                for m in non_participants
-            ])
-            embed.add_field(
-                name='❌ No Participation',
-                value=non_participant_text,
-                inline=False
-            )
+            non_participant_lines = [f'• {m["name"]}' for m in non_participants]
+            chunks = []
+            current_chunk = []
+            current_length = 0
+            for line in non_participant_lines:
+                if current_length + len(line) + 1 > 1024:
+                    chunks.append('\n'.join(current_chunk))
+                    current_chunk = [line]
+                    current_length = len(line)
+                else:
+                    current_chunk.append(line)
+                    current_length += len(line) + 1
+            if current_chunk:
+                chunks.append('\n'.join(current_chunk))
+            for idx, chunk in enumerate(chunks):
+                label = '❌ No Participation' if len(chunks) == 1 else f'❌ No Participation ({idx + 1})'
+                embed.add_field(name=label, value=chunk, inline=False)
 
         return embed
 
@@ -1085,13 +1109,17 @@ class WarTracker:
                     if cleared > 0:
                         print(f'Auto-cleared {cleared} enemies from watchlist')
 
-                # Post detailed management report
+                # Post detailed management report (use rankedwarreport for per-member stats)
                 if management_channel:
+                    report = await self._fetch_rankedwarreport(war_id=self.current_war_id)
+                    report_factions = report.get('factions', {}) if report else {}
+                    # Fall back to rankedwars data if report unavailable (no member data though)
+                    mgmt_factions = report_factions if report_factions else final_war_data.get('factions', {})
                     management_embed = await self.format_war_management_report(
                         None,
                         final_data={
                             'war_id': self.current_war_id,
-                            'factions': final_war_data.get('factions', {})
+                            'factions': mgmt_factions
                         }
                     )
                     if management_embed:
@@ -1117,8 +1145,6 @@ class WarTracker:
         if not self.was_war_active:
             self.was_war_active = True
             self.current_war_id = war_id
-            # Clear old war report cache so fresh data is used
-            save_json('data/warreport_cache.json', {})
             print(f'War detected: {war_id}')
 
         # Save war data to history (faction-level scores for final report)
