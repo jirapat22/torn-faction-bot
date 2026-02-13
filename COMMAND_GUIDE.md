@@ -89,14 +89,20 @@ Configure automatic role sync with Torn positions.
 - `sync` - Force sync all members now
 - `toggle` - Enable/disable auto sync
 
-### `/warboard`
+### `/warboard [view]`
 Full war participation report. *(Management only)*
-- Works during active war AND after war ends (reviews last completed war)
-- Shows **all members** sorted by score with 3 metrics each:
-  - **War Attacks** — Hits on the war opponent
-  - **Outside Hits** — Hits on non-war targets (wasted attacks)
-  - **Incoming Hits** — Times our member got hit by opponent
-- Summary: total attacks, outside hits, times hit, participation count
+- Works during active war AND after war ends (data persists until next war starts)
+- **Stats** view (default):
+  - **War** — Hits on the war opponent
+  - **Out** — Hits on non-war targets
+  - **WHt** — Times hit by war opponent (incoming)
+  - **OHt** — Times hit by outsiders (incoming)
+  - Summary: total attacks, outside hits, incoming breakdown, participation count
+- **Xan** view (`/warboard view:Xan`):
+  - **War** — War hits (for xanax reimbursement)
+  - **Chn** — Chain outside hits (hits during faction chains of 10+ on non-war targets)
+  - **Tot** — Total reimbursable hits (War + Chn)
+  - Only shows members with hits
 
 ### `/enemy <action>`
 Manage enemy watchlist during war.
@@ -137,20 +143,24 @@ Track ally faction wars and get announcements.
 
 ## Availability Commands
 
-### `/avail_setup <start_date> <start_time> <end_time> [end_date] [block_length]`
+### `/avail_setup <start_date> <start_time> <end_time> [end_date] [block_length] [poll_duration]`
 Create an availability poll for war/chain planning. *(Requires Management role)*
 - **start_date**: Start date in DD-MM-YYYY format
 - **start_time**: Start time in TCT/UTC (HH:MM, e.g. 00:00)
 - **end_time**: End time in TCT/UTC (HH:MM, e.g. 24:00)
 - **end_date**: Optional end date for multi-day events (DD-MM-YYYY)
 - **block_length**: Hours per time block (1-6, default: 2)
+- **poll_duration**: Hours until poll auto-closes (default: 24)
 - Creates buttons for each time block (labeled A-X)
 - Members click buttons to toggle availability *(Requires Verified role)*
-- Shows both TCT and local time
+- Shows both TCT and local time, event countdown, and poll close countdown
+- Auto-posts results (bar chart + member grid + best window) when poll closes
 
 ### `/avail_summary <date>`
-View an ASCII timetable of who is available when.
+View availability results with bar chart and member grid.
 - **date**: Any date within the poll range (DD-MM-YYYY)
+- Shows bar chart (availability by time slot) + member grid (who's available where)
+- Highlights best time windows with most members available
 
 ### `/avail_delete <date>`
 Delete an availability poll. *(Requires Management role)*
@@ -250,7 +260,7 @@ Show the current Torn City Time (UTC).
 | `/register` | Everyone | Link Torn account |
 | `/chain` | Everyone | Check chain status |
 | `/war` | Everyone | Check war status |
-| `/warboard` | Management | Full war participation report |
+| `/warboard` | Management | War participation report (Stats/Xan views) |
 | `/enemy list` | Everyone | View enemy watchlist |
 | `/announce` | Management | Post announcements |
 | `/verify` | Management | Manage verification |
@@ -270,5 +280,5 @@ Show the current Torn City Time (UTC).
 
 ---
 
-*Last updated: February 8, 2026*
+*Last updated: February 12, 2026*
 *Bot by Ascended Punks*

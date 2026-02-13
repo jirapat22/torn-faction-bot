@@ -193,10 +193,15 @@ def is_management(interaction: discord.Interaction) -> bool:
     Returns True if the user has the Manage Server permission
     or holds any of the configured MANAGEMENT_ROLE_IDS.
     """
-    if interaction.user.guild_permissions.manage_guild:
+    if not interaction.guild:
+        return False
+    member = interaction.guild.get_member(interaction.user.id)
+    if not member:
+        return False
+    if member.guild_permissions.manage_guild:
         return True
     if MANAGEMENT_ROLE_IDS:
-        user_role_ids = [role.id for role in interaction.user.roles]
+        user_role_ids = [role.id for role in member.roles]
         if any(role_id in MANAGEMENT_ROLE_IDS for role_id in user_role_ids):
             return True
     return False

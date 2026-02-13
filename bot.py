@@ -71,6 +71,9 @@ async def on_ready():
             print('Reconnected - skipping re-initialization')
             return
 
+        # Mark initialized early to prevent duplicate command registration on reconnect
+        _initialized = True
+
         # Ensure data directories exist
         ensure_data_directories()
 
@@ -183,7 +186,6 @@ async def on_ready():
         if not poll_end_check.is_running():
             poll_end_check.start()
 
-        _initialized = True
         print('Bot is ready!')
 
     except Exception as e:

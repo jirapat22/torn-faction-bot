@@ -1049,12 +1049,7 @@ async def setup_stakeout_commands(bot, manager: StakeoutManager):
             await interaction.response.send_message(embed=embed, ephemeral=True)
             return
 
-        embed = create_embed(
-            title=f'Active Stakeouts ({len(stakeouts)})',
-            description='Currently watching:',
-            color=EMBED_COLOR_INFO
-        )
-
+        lines = []
         for s in stakeouts:
             remaining = s['remaining_hours']
             if remaining <= 0:
@@ -1063,13 +1058,18 @@ async def setup_stakeout_commands(bot, manager: StakeoutManager):
                 hours_str = f'{remaining:.1f}h remaining'
             else:
                 hours_str = f'{max(1, int(remaining * 60))}m remaining'
+            lines.append(f"**{s['name']}** [{s['torn_id']}] — {s['record_count']} records | {hours_str}")
 
-            embed.add_field(
-                name=f"{s['name']} [{s['torn_id']}]",
-                value=f"Records: {s['record_count']} | {hours_str}",
-                inline=False
-            )
+        description = 'Currently watching:\n\n' + '\n'.join(lines)
+        # Chunk if exceeding embed description limit
+        if len(description) > 4000:
+            description = description[:4000] + '\n\n... (list truncated)'
 
+        embed = create_embed(
+            title=f'Active Stakeouts ({len(stakeouts)})',
+            description=description,
+            color=EMBED_COLOR_INFO
+        )
         embed.set_footer(text='Use /stakeout report <torn_id> to see behavior analysis')
         await interaction.response.send_message(embed=embed, ephemeral=True)
 

@@ -934,7 +934,9 @@ class WarTracker:
         result = '🏆 VICTORY' if our_score > enemy_score else '❌ DEFEAT'
         color = EMBED_COLOR_SUCCESS if our_score > enemy_score else EMBED_COLOR_CRITICAL
 
-        # Build management embed
+        # Build management embeds (may need multiple to stay under Discord limits)
+        embeds = []
+
         embed = create_embed(
             title=f'⚔️ War Management Report - {result}',
             description=f'**War #{war_id}** vs {enemy_name}\n**Final Score:** {our_score} - {enemy_score}',
@@ -953,49 +955,22 @@ class WarTracker:
         )
 
         # Add detailed member breakdown (show all members)
-        # Split into chunks if needed (Discord limit is 1024 chars per field)
         member_details = []
         for i, m in enumerate(sorted_stats):
             member_details.append(
-                f'{i+1}. **{m["name"]}**\n'
-                f'   └ Attacks: {m["outgoing"]} | Defended: {m["incoming"]}x | Score: {m["score"]}'
+                f'{i+1}. **{m["name"]}** — Attacks: {m["outgoing"]} | Hit: {m["incoming"]}x | Score: {m["score"]}'
             )
 
-        # Join all member details
-        full_details = '\n'.join(member_details) if member_details else 'No member data available'
+        detail_text = '\n'.join(member_details) if member_details else 'No member data available'
 
-        # Split into multiple fields if too long
-        if len(full_details) > 1024:
-            # Split into chunks
-            chunks = []
-            current_chunk = []
-            current_length = 0
-
-            for detail in member_details:
-                if current_length + len(detail) + 1 > 1024:
-                    chunks.append('\n'.join(current_chunk))
-                    current_chunk = [detail]
-                    current_length = len(detail)
-                else:
-                    current_chunk.append(detail)
-                    current_length += len(detail) + 1
-
-            if current_chunk:
-                chunks.append('\n'.join(current_chunk))
-
-            # Add chunks as separate fields
-            for idx, chunk in enumerate(chunks):
-                embed.add_field(
-                    name=f'👥 Member Performance (Part {idx + 1})',
-                    value=chunk,
-                    inline=False
-                )
-        else:
-            embed.add_field(
-                name='👥 Member Performance',
-                value=full_details,
-                inline=False
-            )
+        # Chunk into 1024-char pieces and add as fields, splitting to new embed if needed
+        detail_chunks = self._chunk_text(detail_text, 1024)
+        for idx, chunk in enumerate(detail_chunks):
+            if len(embed.fields) >= 20:
+                embeds.append(embed)
+                embed = create_embed(title='⚔️ Report (continued)', color=color)
+            label = '👥 Member Performance' if len(detail_chunks) == 1 else f'👥 Members (Part {idx + 1})'
+            embed.add_field(name=label, value=chunk, inline=False)
 
         # Add members who got hit the most (potential weak links)
         most_hit = sorted(member_stats, key=lambda x: x['incoming'], reverse=True)[:5]
@@ -1005,34 +980,25 @@ class WarTracker:
                 for i, m in enumerate(most_hit) if m["incoming"] > 0
             ])
             if most_hit_text:
-                embed.add_field(
-                    name='⚠️ Most Targeted (Review Defense)',
-                    value=most_hit_text,
-                    inline=False
-                )
+                if len(embed.fields) >= 24:
+                    embeds.append(embed)
+                    embed = create_embed(title='⚔️ Report (continued)', color=color)
+                embed.add_field(name='⚠️ Most Targeted', value=most_hit_text, inline=False)
 
-        # Add members who didn't participate (chunked for Discord 1024-char limit)
+        # Add members who didn't participate
         non_participants = [m for m in member_stats if m['outgoing'] == 0]
         if non_participants:
-            non_participant_lines = [f'• {m["name"]}' for m in non_participants]
-            chunks = []
-            current_chunk = []
-            current_length = 0
-            for line in non_participant_lines:
-                if current_length + len(line) + 1 > 1024:
-                    chunks.append('\n'.join(current_chunk))
-                    current_chunk = [line]
-                    current_length = len(line)
-                else:
-                    current_chunk.append(line)
-                    current_length += len(line) + 1
-            if current_chunk:
-                chunks.append('\n'.join(current_chunk))
-            for idx, chunk in enumerate(chunks):
-                label = '❌ No Participation' if len(chunks) == 1 else f'❌ No Participation ({idx + 1})'
+            non_text = '\n'.join([f'• {m["name"]}' for m in non_participants])
+            np_chunks = self._chunk_text(non_text, 1024)
+            for idx, chunk in enumerate(np_chunks):
+                if len(embed.fields) >= 24:
+                    embeds.append(embed)
+                    embed = create_embed(title='⚔️ Report (continued)', color=color)
+                label = '❌ No Participation' if len(np_chunks) == 1 else f'❌ No Participation ({idx + 1})'
                 embed.add_field(name=label, value=chunk, inline=False)
 
-        return embed
+        embeds.append(embed)
+        return embeds
 
     async def check_war_update(self):
         """
@@ -1115,15 +1081,17 @@ class WarTracker:
                     report_factions = report.get('factions', {}) if report else {}
                     # Fall back to rankedwars data if report unavailable (no member data though)
                     mgmt_factions = report_factions if report_factions else final_war_data.get('factions', {})
-                    management_embed = await self.format_war_management_report(
+                    management_embeds = await self.format_war_management_report(
                         None,
                         final_data={
                             'war_id': self.current_war_id,
                             'factions': mgmt_factions
                         }
                     )
-                    if management_embed:
-                        await management_channel.send('📊 **War Management Report**', embed=management_embed)
+                    if management_embeds:
+                        for i, mgmt_embed in enumerate(management_embeds):
+                            content = '📊 **War Management Report**' if i == 0 else None
+                            await management_channel.send(content=content, embed=mgmt_embed)
                         print('Posted detailed war report to management channel')
                 else:
                     print('Warning: War management channel not configured')

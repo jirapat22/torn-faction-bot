@@ -241,12 +241,7 @@ class InactivityTracker:
 
         # Send critical alerts
         if critical_members:
-            critical_embed = create_embed(
-                title='🔴 Critical Inactivity Alert (Torn)',
-                description=f'**{len(critical_members)} faction member(s)** have been inactive on Torn for {INACTIVITY_CRITICAL_DAYS}+ days:',
-                color=EMBED_COLOR_CRITICAL
-            )
-
+            lines = []
             for data in critical_members:
                 discord_member = data['discord_member']
                 torn_name = data['torn_name']
@@ -254,30 +249,33 @@ class InactivityTracker:
                 torn_level = data['torn_level']
                 days = data['days']
                 last_seen = data['last_seen']
-
-                # Show Torn name (no @mention to avoid pinging)
-                field_name = f'{torn_name} [Lvl {torn_level}]'
-
-                # Add Discord name if registered (without pinging)
-                discord_note = f'\nDiscord: {discord_member.display_name}' if discord_member else ''
-
-                critical_embed.add_field(
-                    name=field_name,
-                    value=f'**{days} days** inactive on Torn\nLast action: {format_timestamp(last_seen, "R")}{discord_note}\nProfile: https://www.torn.com/profiles.php?XID={torn_id}',
-                    inline=False
+                discord_note = f' (Discord: {discord_member.display_name})' if discord_member else ''
+                lines.append(
+                    f'**{torn_name}** [Lvl {torn_level}]{discord_note}\n'
+                    f'  {days} days inactive · Last action: {format_timestamp(last_seen, "R")}'
                 )
 
-            await channel.send(embed=critical_embed)
+            # Chunk into multiple embeds if needed (4096 char description limit)
+            header = f'**{len(critical_members)} faction member(s)** have been inactive on Torn for {INACTIVITY_CRITICAL_DAYS}+ days:\n\n'
+            chunks = []
+            current = header
+            for line in lines:
+                if len(current) + len(line) + 2 > 4000:
+                    chunks.append(current)
+                    current = ''
+                current += line + '\n\n'
+            if current:
+                chunks.append(current)
+
+            for i, chunk in enumerate(chunks):
+                title = '🔴 Critical Inactivity Alert (Torn)' if i == 0 else '🔴 Critical (continued)'
+                embed = create_embed(title=title, description=chunk.strip(), color=EMBED_COLOR_CRITICAL)
+                await channel.send(embed=embed)
             print(f'Sent critical alert for {len(critical_members)} members')
 
         # Send warning alerts
         if warning_members:
-            warning_embed = create_embed(
-                title='⚠️ Inactivity Warning (Torn)',
-                description=f'**{len(warning_members)} faction member(s)** have been inactive on Torn for {INACTIVITY_WARNING_DAYS}+ days:',
-                color=EMBED_COLOR_WARNING
-            )
-
+            lines = []
             for data in warning_members:
                 discord_member = data['discord_member']
                 torn_name = data['torn_name']
@@ -285,20 +283,27 @@ class InactivityTracker:
                 torn_level = data['torn_level']
                 days = data['days']
                 last_seen = data['last_seen']
-
-                # Show Torn name (no @mention to avoid pinging)
-                field_name = f'{torn_name} [Lvl {torn_level}]'
-
-                # Add Discord name if registered (without pinging)
-                discord_note = f'\nDiscord: {discord_member.display_name}' if discord_member else ''
-
-                warning_embed.add_field(
-                    name=field_name,
-                    value=f'**{days} days** inactive on Torn\nLast action: {format_timestamp(last_seen, "R")}{discord_note}\nProfile: https://www.torn.com/profiles.php?XID={torn_id}',
-                    inline=False
+                discord_note = f' (Discord: {discord_member.display_name})' if discord_member else ''
+                lines.append(
+                    f'**{torn_name}** [Lvl {torn_level}]{discord_note}\n'
+                    f'  {days} days inactive · Last action: {format_timestamp(last_seen, "R")}'
                 )
 
-            await channel.send(embed=warning_embed)
+            header = f'**{len(warning_members)} faction member(s)** have been inactive on Torn for {INACTIVITY_WARNING_DAYS}+ days:\n\n'
+            chunks = []
+            current = header
+            for line in lines:
+                if len(current) + len(line) + 2 > 4000:
+                    chunks.append(current)
+                    current = ''
+                current += line + '\n\n'
+            if current:
+                chunks.append(current)
+
+            for i, chunk in enumerate(chunks):
+                title = '⚠️ Inactivity Warning (Torn)' if i == 0 else '⚠️ Warning (continued)'
+                embed = create_embed(title=title, description=chunk.strip(), color=EMBED_COLOR_WARNING)
+                await channel.send(embed=embed)
             print(f'Sent warning alert for {len(warning_members)} members')
 
     def get_all_mappings(self):
