@@ -70,31 +70,28 @@ class RoleSyncManager:
         Returns:
             True if role was changed, False otherwise
         """
-        if not torn_position:
-            return False
+        all_position_role_ids = set(self.position_roles.values())
 
-        # Get the role ID for this position
-        role_id = self.get_role_for_position(torn_position)
-        if not role_id:
-            return False  # No mapping for this position
+        # Get the role ID for this position (may be None if no mapping)
+        role_id = self.get_role_for_position(torn_position) if torn_position else None
+        role = guild.get_role(role_id) if role_id else None
 
-        role = guild.get_role(role_id)
-        if not role:
-            return False  # Role doesn't exist
-
-        # Check if member already has this role
-        if role in discord_member.roles:
+        # Check if member already has the correct role
+        if role and role in discord_member.roles:
             return False  # Already has the role
 
-        # Get all position-based roles to manage
-        all_position_role_ids = set(self.position_roles.values())
+        # Find old position roles to remove
         roles_to_remove = [r for r in discord_member.roles if r.id in all_position_role_ids and r.id != role_id]
 
+        # Nothing to change
+        if not roles_to_remove and not role:
+            return False
+
         try:
-            # Remove old position roles and add new one
             if roles_to_remove:
                 await discord_member.remove_roles(*roles_to_remove, reason='Role sync: position changed')
-            await discord_member.add_roles(role, reason=f'Role sync: Torn position is {torn_position}')
+            if role:
+                await discord_member.add_roles(role, reason=f'Role sync: Torn position is {torn_position}')
             return True
         except discord.Forbidden:
             return False  # Can't modify this member's roles
@@ -354,27 +351,26 @@ async def setup_rolesync_commands(bot, role_sync_manager: RoleSyncManager):
                     continue
 
                 position = mdata.get('position', '')
-                role_id = role_sync_manager.get_role_for_position(position)
-                if not role_id:
-                    no_mapping += 1
-                    continue
+                role_id = role_sync_manager.get_role_for_position(position) if position else None
+                role = guild.get_role(role_id) if role_id else None
 
-                role = guild.get_role(role_id)
-                if not role:
-                    errors += 1
-                    continue
+                all_position_role_ids = set(role_sync_manager.position_roles.values())
+                roles_to_remove = [r for r in discord_member.roles if r.id in all_position_role_ids and (not role_id or r.id != role_id)]
 
-                if role in discord_member.roles:
+                if role and role in discord_member.roles and not roles_to_remove:
                     already_correct += 1
                     continue
 
-                # Actually assign the role
+                if not role and not roles_to_remove:
+                    no_mapping += 1
+                    continue
+
+                # Actually assign/remove roles
                 try:
-                    all_position_role_ids = set(role_sync_manager.position_roles.values())
-                    roles_to_remove = [r for r in discord_member.roles if r.id in all_position_role_ids and r.id != role_id]
                     if roles_to_remove:
                         await discord_member.remove_roles(*roles_to_remove, reason='Role sync')
-                    await discord_member.add_roles(role, reason=f'Role sync: Torn position is {position}')
+                    if role:
+                        await discord_member.add_roles(role, reason=f'Role sync: Torn position is {position}')
                     role_changed += 1
                 except discord.Forbidden:
                     errors += 1
