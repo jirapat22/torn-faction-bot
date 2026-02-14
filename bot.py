@@ -36,6 +36,7 @@ intents = discord.Intents.default()
 intents.members = True  # Required to see member info
 intents.guilds = True  # Required to see server info
 intents.message_content = True  # Required by commands.Bot
+intents.guild_scheduled_events = True  # Required to see scheduled events
 
 # Create bot instance
 bot = commands.Bot(command_prefix=COMMAND_PREFIX, intents=intents)
