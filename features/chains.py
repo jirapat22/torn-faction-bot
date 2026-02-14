@@ -408,9 +408,6 @@ class ChainTracker:
             print(f'Warning: Could not find #chaining channel (ID: {CHAINING_CHANNEL_ID})')
             return
 
-        # Check if there's an active chain event
-        chain_event_active = await self.has_active_chain_event()
-
         # Detect chain END (was active, now not)
         # Require 3 consecutive "no chain" checks to prevent false completion from API glitches
         if self.was_chain_active and not chain:
@@ -423,29 +420,27 @@ class ChainTracker:
 
             print('Chain confirmed ended after 3 checks. Posting report...')
 
-            # Only post chain report if chain event is active
-            if chain_event_active:
-                # Get chain report
-                chainreport = await self.get_chain_report()
-                if chainreport:
-                    chain_id = chainreport.get('chain', 0)
+            # Get chain report
+            chainreport = await self.get_chain_report()
+            if chainreport:
+                chain_id = chainreport.get('chain', 0)
 
-                    # Check if we've already reported this chain
-                    if chain_id != self.last_reported_chain_id:
-                        # Post chain report
-                        report_embed = await self.format_chainreport_embed(chainreport)
+                # Check if we've already reported this chain
+                if chain_id != self.last_reported_chain_id:
+                    # Post chain report
+                    report_embed = await self.format_chainreport_embed(chainreport)
 
-                        await channel.send('🏁 **Chain Complete!**', embed=report_embed)
-                        print(f'Posted chain completion report for chain #{chain_id}')
+                    await channel.send('🏁 **Chain Complete!**', embed=report_embed)
+                    print(f'Posted chain completion report for chain #{chain_id}')
 
-                        # Save this as last reported chain
-                        self.last_reported_chain_id = chain_id
-                        save_json(self.chain_state_file, {
-                            'last_reported_chain_id': chain_id,
-                            'last_chain_count': self.last_chain_count
-                        })
-                    else:
-                        print(f'Chain #{chain_id} already reported, skipping duplicate')
+                    # Save this as last reported chain
+                    self.last_reported_chain_id = chain_id
+                    save_json(self.chain_state_file, {
+                        'last_reported_chain_id': chain_id,
+                        'last_chain_count': self.last_chain_count
+                    })
+                else:
+                    print(f'Chain #{chain_id} already reported, skipping duplicate')
 
             # Reset state - keep last_chain_count so if chain comes back
             # after an API glitch, we don't re-announce old milestones
@@ -478,12 +473,6 @@ class ChainTracker:
                 # Continuation after API glitch - keep last_chain_count
                 # to avoid re-announcing old milestones (10, 25, 50, etc.)
                 print(f'Chain resumed at {current_count} hits (was tracking at {self.last_chain_count})')
-
-        # Only post updates if chain event is active
-        if not chain_event_active:
-            # Still track internally but don't post
-            self.last_chain_count = current_count
-            return
 
         # Only post at bonus milestones
         should_post = False
