@@ -195,7 +195,7 @@ class ChainTracker:
 
             member_list.append({
                 'name': member_name,
-                'hits': stats.get('hits', 0),
+                'hits': stats.get('attacks', 0),
                 'respect': stats.get('respect', 0)
             })
 
@@ -277,7 +277,7 @@ class ChainTracker:
             chain_data = chain_members.get(user_id, {})
             member_list.append({
                 'name': member_name,
-                'hits': chain_data.get('hits', 0),
+                'hits': chain_data.get('attacks', 0),
                 'respect': chain_data.get('respect', 0.0),
             })
 
