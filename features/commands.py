@@ -226,6 +226,33 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
             embed = await chain_tracker.format_chainreport_embed(report_data)
             await interaction.followup.send(embed=embed)
 
+        @bot.tree.command(
+            name='chainboard',
+            description='[Management] Show full chain participation board'
+        )
+        async def chainboard(interaction: discord.Interaction):
+            """Show full chain participation for all members"""
+            if not is_management(interaction):
+                embed = create_embed(
+                    title='Permission Denied',
+                    description='You need Management permissions.',
+                    color=EMBED_COLOR_CRITICAL
+                )
+                await interaction.response.send_message(
+                    embed=embed, ephemeral=True
+                )
+                return
+
+            await interaction.response.defer()
+            report_data = await chain_tracker.get_chain_report()
+            embeds = await chain_tracker.format_chainboard_embeds(report_data)
+
+            if isinstance(embeds, list):
+                for e in embeds:
+                    await interaction.followup.send(embed=e)
+            else:
+                await interaction.followup.send(embed=embeds)
+
     # ===== WAR COMMANDS (Phase 4) =====
 
     if war_tracker:
@@ -274,7 +301,36 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
             else:
                 await interaction.followup.send(embed=embeds)
 
-        print('War commands registered (/war, /warboard)')
+        @bot.tree.command(name='warstats', description='[Management] Show war performance history across wars')
+        @app_commands.describe(member='Optional: check a specific member\'s war history')
+        async def warstats(interaction: discord.Interaction, member: discord.Member = None):
+            """Show war stats history - management only"""
+            if not is_management(interaction):
+                await interaction.response.send_message(
+                    'You need Management permissions to use this command.',
+                    ephemeral=True
+                )
+                return
+
+            await interaction.response.defer()
+
+            if member:
+                # Look up Torn ID for the specified member
+                torn_id = inactivity_tracker.get_torn_id(member.id) if inactivity_tracker else None
+                if not torn_id:
+                    await interaction.followup.send(embed=create_embed(
+                        title='Member Not Found',
+                        description=f'{member.mention} is not registered. They need to `/register` first.',
+                        color=EMBED_COLOR_WARNING
+                    ))
+                    return
+                embed = await war_tracker.format_warstats_member_embed(torn_id, member.display_name)
+            else:
+                embed = await war_tracker.format_warstats_overview_embed()
+
+            await interaction.followup.send(embed=embed)
+
+        print('War commands registered (/war, /warboard, /warstats)')
     else:
         print('WARNING: war_tracker is None, war commands NOT registered')
 

@@ -1,6 +1,6 @@
 """
 Event Reminders Module
-Posts 30-hour advance reminders for Discord scheduled events to appropriate channels.
+Posts 35-hour advance reminders for Discord scheduled events to appropriate channels.
 
 Event routing:
 - "Happy Jump" events → GENERAL_CHANNEL_ID (punk-plaza)
@@ -23,7 +23,7 @@ from config import (
 
 
 class EventReminderManager:
-    """Manages 30-hour advance event reminders"""
+    """Manages 35-hour advance event reminders"""
 
     def __init__(self, bot):
         self.bot = bot
@@ -77,7 +77,7 @@ class EventReminderManager:
 
     async def check_and_announce_events(self):
         """
-        Check all scheduled events and post reminders for those starting in ~30 hours.
+        Check all scheduled events and post reminders for those starting in ~35 hours.
 
         Called by background task.
         """
@@ -108,9 +108,9 @@ class EventReminderManager:
             time_until = event.start_time - now
             hours_until = time_until.total_seconds() / 3600
 
-            # Check if within the announcement window (28-32 hours)
+            # Check if within the announcement window (33-37 hours)
             # This gives a 4-hour window to catch events even if check runs late
-            if 28 <= hours_until <= 32:
+            if 33 <= hours_until <= 37:
                 await self._announce_event(event, hours_until)
                 self.announced_events.add(event.id)
                 await self.save_data()

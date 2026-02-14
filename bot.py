@@ -97,6 +97,7 @@ async def on_ready():
         # Initialize war tracker
         war_tracker = WarTracker(bot)
         await war_tracker.load_war_history()
+        await war_tracker.load_war_member_stats()
 
         # Initialize verification system
         verification_system = VerificationSystem(bot)
@@ -124,7 +125,7 @@ async def on_ready():
         await setup_availability_commands(bot, availability_manager, VERIFIED_ROLE_NAME)
         await restore_availability_views(bot, availability_manager, VERIFIED_ROLE_NAME)
 
-        # Initialize event reminder manager (30-hour advance reminders)
+        # Initialize event reminder manager (35-hour advance reminders)
         event_reminder_manager = EventReminderManager(bot)
         await event_reminder_manager.load_data()
 
@@ -289,7 +290,7 @@ async def before_enemy_check():
 
 @tasks.loop(hours=1)
 async def event_reminder_check():
-    """Background task that runs every hour to check for events starting in ~30 hours"""
+    """Background task that runs every hour to check for events starting in ~35 hours"""
     try:
         if event_reminder_manager:
             await event_reminder_manager.check_and_announce_events()
@@ -301,7 +302,7 @@ async def event_reminder_check():
 async def before_event_reminder_check():
     """Wait until bot is ready before starting event reminder check"""
     await bot.wait_until_ready()
-    print('Event reminder checker started (checks every hour for 30h advance reminders)')
+    print('Event reminder checker started (checks every hour for 35h advance reminders)')
 
 
 @tasks.loop(minutes=15)

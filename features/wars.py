@@ -37,6 +37,8 @@ class WarTracker:
         self.war_data_file = 'data/war_history.json'
         self.war_history = {}
         self.enemy_watchlist = None  # Set by bot.py for auto-clear
+        self.war_member_stats_file = 'data/war_member_stats.json'
+        self.war_member_stats = {'wars': []}
         # Track attacks during active war
         self.current_war_attacks = {
             'outgoing': {},  # {member_id: hit_count}
@@ -52,6 +54,60 @@ class WarTracker:
     async def save_war_history(self):
         """Save war history to JSON file"""
         save_json(self.war_data_file, self.war_history)
+
+    async def load_war_member_stats(self):
+        """Load historical per-member war stats"""
+        self.war_member_stats = load_json(self.war_member_stats_file, default={'wars': []})
+        count = len(self.war_member_stats.get('wars', []))
+        print(f'Loaded war member stats with {count} war records')
+
+    async def save_war_member_stats(self):
+        """Save historical per-member war stats"""
+        save_json(self.war_member_stats_file, self.war_member_stats)
+
+    async def _save_war_member_data(self, war_id, report_factions, our_score, enemy_score, enemy_name):
+        """Save per-member war data from rankedwarreport to persistent history. Keeps last 10 wars."""
+        our_members = {}
+        for fid, fdata in report_factions.items():
+            if str(fid) == str(TORN_FACTION_ID):
+                our_members = fdata.get('members', {})
+                break
+
+        if not our_members:
+            print('War member stats: No member data to save')
+            return
+
+        from utils.torn_api import fetch_faction_members
+        faction_members = await fetch_faction_members()
+
+        members_data = {}
+        for user_id, stats in our_members.items():
+            name = 'Unknown'
+            if faction_members and user_id in faction_members:
+                name = faction_members[user_id].get('name', f'ID:{user_id}')
+            members_data[user_id] = {
+                'name': name,
+                'attacks': stats.get('attacks', 0),
+                'defends': stats.get('defends', 0),
+                'score': stats.get('score', 0)
+            }
+
+        war_record = {
+            'war_id': str(war_id),
+            'timestamp': get_current_timestamp(),
+            'enemy_name': enemy_name,
+            'our_score': our_score,
+            'enemy_score': enemy_score,
+            'result': 'victory' if our_score > enemy_score else 'defeat',
+            'members': members_data
+        }
+
+        self.war_member_stats['wars'].append(war_record)
+        if len(self.war_member_stats['wars']) > 10:
+            self.war_member_stats['wars'] = self.war_member_stats['wars'][-10:]
+
+        await self.save_war_member_stats()
+        print(f'Saved war member stats for war {war_id} ({len(members_data)} members)')
 
     async def _fetch_rankedwars(self):
         """Fetch ranked wars data from Torn API (v1 - works for any faction)"""
@@ -1000,6 +1056,141 @@ class WarTracker:
         embeds.append(embed)
         return embeds
 
+    async def format_warstats_overview_embed(self):
+        """Faction-level overview of last 5 wars with top/bottom performers."""
+        wars = self.war_member_stats.get('wars', [])
+        if not wars:
+            return create_embed(
+                title='No War History',
+                description='No per-member war data has been recorded yet.\nData is saved automatically when a war ends.',
+                color=EMBED_COLOR_INFO
+            )
+
+        last_5 = wars[-5:]
+
+        # War summary
+        war_lines = []
+        for w in reversed(last_5):
+            icon = '✅' if w['result'] == 'victory' else '❌'
+            war_lines.append(
+                f'{icon} vs **{w["enemy_name"]}** — {w["our_score"]}-{w["enemy_score"]} '
+                f'({format_timestamp(w["timestamp"], "R")})'
+            )
+
+        # Aggregate member performance
+        member_totals = {}
+        for w in last_5:
+            for uid, mdata in w.get('members', {}).items():
+                if uid not in member_totals:
+                    member_totals[uid] = {
+                        'name': mdata['name'], 'total_attacks': 0,
+                        'total_score': 0, 'wars_played': 0
+                    }
+                member_totals[uid]['total_attacks'] += mdata.get('attacks', 0)
+                member_totals[uid]['total_score'] += mdata.get('score', 0)
+                member_totals[uid]['wars_played'] += 1
+                member_totals[uid]['name'] = mdata['name']
+
+        for data in member_totals.values():
+            data['avg_score'] = data['total_score'] / data['wars_played'] if data['wars_played'] > 0 else 0
+
+        sorted_by_score = sorted(member_totals.values(), key=lambda x: x['avg_score'], reverse=True)
+
+        top_text = '\n'.join([
+            f'{i+1}. **{m["name"]}** — Avg: {m["avg_score"]:.1f} score, '
+            f'{m["total_attacks"]} attacks ({m["wars_played"]} wars)'
+            for i, m in enumerate(sorted_by_score[:5])
+        ]) or 'No data'
+
+        # Bottom performers (at least 2 wars played)
+        eligible = [m for m in sorted_by_score if m['wars_played'] >= 2]
+        bottom_5 = eligible[-5:] if eligible else []
+        bottom_text = '\n'.join([
+            f'• **{m["name"]}** — Avg: {m["avg_score"]:.1f} score, '
+            f'{m["total_attacks"]} attacks ({m["wars_played"]} wars)'
+            for m in reversed(bottom_5)
+        ]) or 'Not enough data (need 2+ wars)'
+
+        embed = create_embed(
+            title='War Stats History',
+            description=f'**Last {len(last_5)} Wars:**\n' + '\n'.join(war_lines),
+            color=EMBED_COLOR_INFO,
+            fields=[
+                {'name': 'Top Performers (by avg score)', 'value': top_text, 'inline': False},
+                {'name': 'Lowest Performers (2+ wars)', 'value': bottom_text, 'inline': False},
+            ]
+        )
+        return embed
+
+    async def format_warstats_member_embed(self, torn_id, member_name=None):
+        """Individual member's war history for last 5 wars."""
+        wars = self.war_member_stats.get('wars', [])
+        if not wars:
+            return create_embed(
+                title='No War History',
+                description='No per-member war data has been recorded yet.',
+                color=EMBED_COLOR_INFO
+            )
+
+        # Find this member's records
+        member_wars = []
+        for w in wars:
+            members = w.get('members', {})
+            if str(torn_id) in members:
+                mdata = members[str(torn_id)]
+                member_wars.append({
+                    'enemy_name': w['enemy_name'],
+                    'result': w['result'],
+                    'timestamp': w['timestamp'],
+                    'attacks': mdata.get('attacks', 0),
+                    'defends': mdata.get('defends', 0),
+                    'score': mdata.get('score', 0),
+                    'name': mdata.get('name', 'Unknown')
+                })
+
+        if not member_wars:
+            return create_embed(
+                title='No War Data',
+                description=f'No war records found for this member.',
+                color=EMBED_COLOR_WARNING
+            )
+
+        display_name = member_name or member_wars[-1]['name']
+        last_5 = member_wars[-5:]
+
+        lines = []
+        for w in reversed(last_5):
+            icon = '✅' if w['result'] == 'victory' else '❌'
+            lines.append(
+                f'{icon} **vs {w["enemy_name"]}** ({format_timestamp(w["timestamp"], "R")})\n'
+                f'   Attacks: {w["attacks"]} | Defends: {w["defends"]} | Score: {w["score"]}'
+            )
+
+        avg_attacks = sum(w['attacks'] for w in last_5) / len(last_5)
+        avg_score = sum(w['score'] for w in last_5) / len(last_5)
+
+        embed = create_embed(
+            title=f'War Stats — {display_name}',
+            description=f'Showing last {len(last_5)} of {len(member_wars)} recorded wars',
+            color=EMBED_COLOR_INFO,
+            fields=[
+                {'name': 'Avg Attacks', 'value': f'{avg_attacks:.1f}', 'inline': True},
+                {'name': 'Avg Score', 'value': f'{avg_score:.1f}', 'inline': True},
+                {'name': 'Wars Recorded', 'value': str(len(member_wars)), 'inline': True},
+            ]
+        )
+
+        detail_text = '\n\n'.join(lines)
+        if len(detail_text) <= 1024:
+            embed.add_field(name='War History', value=detail_text, inline=False)
+        else:
+            chunks = self._chunk_text(detail_text, 1024)
+            for idx, chunk in enumerate(chunks):
+                label = 'War History' if idx == 0 else 'War History (cont.)'
+                embed.add_field(name=label, value=chunk, inline=False)
+
+        return embed
+
     async def check_war_update(self):
         """
         Check if war status changed and post update if needed
@@ -1075,10 +1266,12 @@ class WarTracker:
                     if cleared > 0:
                         print(f'Auto-cleared {cleared} enemies from watchlist')
 
+                # Fetch rankedwarreport for management report + war stats history
+                report = await self._fetch_rankedwarreport(war_id=self.current_war_id)
+                report_factions = report.get('factions', {}) if report else {}
+
                 # Post detailed management report (use rankedwarreport for per-member stats)
                 if management_channel:
-                    report = await self._fetch_rankedwarreport(war_id=self.current_war_id)
-                    report_factions = report.get('factions', {}) if report else {}
                     # Fall back to rankedwars data if report unavailable (no member data though)
                     mgmt_factions = report_factions if report_factions else final_war_data.get('factions', {})
                     management_embeds = await self.format_war_management_report(
@@ -1095,6 +1288,13 @@ class WarTracker:
                         print('Posted detailed war report to management channel')
                 else:
                     print('Warning: War management channel not configured')
+
+                # Save per-member war stats to history
+                if report_factions:
+                    await self._save_war_member_data(
+                        self.current_war_id, report_factions,
+                        our_score, enemy_score, enemy_name
+                    )
 
             # Reset state
             self.was_war_active = False

@@ -40,6 +40,12 @@ Show current faction chain status.
 Show last completed chain report.
 - Top contributors, total hits, respect earned
 
+### `/chainboard`
+Full chain participation board. *(Management only)*
+- Shows ALL faction members ranked by respect earned
+- Includes members with 0 hits for accountability
+- Monospace table with rank, name, hits, and respect columns
+
 ---
 
 ## War Commands (Everyone)
@@ -103,6 +109,13 @@ Full war participation report. *(Management only)*
   - **Chn** — Chain outside hits (hits during faction chains of 10+ on non-war targets)
   - **Tot** — Total reimbursable hits (War + Chn)
   - Only shows members with hits
+
+### `/warstats [member]`
+War performance history across multiple wars. *(Management only)*
+- No member: shows last 5 wars overview, top 5 and bottom 5 performers by avg score
+- With member: shows that member's last 5 war records with attacks, defends, score
+- Data saved automatically when each war ends (keeps last 10 wars)
+- Bottom performers require 2+ wars played to appear
 
 ### `/enemy <action>`
 Manage enemy watchlist during war.
@@ -227,9 +240,9 @@ Show the current Torn City Time (UTC).
 - Welcomes new members in #welcome-pit
 - Directs them to /register and rules
 
-### Event Reminders (30-Hour Advance)
+### Event Reminders (35-Hour Advance)
 - Checks Discord scheduled events every hour
-- Posts reminder when an event is ~30 hours away
+- Posts reminder when an event is ~35 hours away
 - Routes to appropriate channel based on event name:
   - "Happy Jump" events → #punk-plaza
   - "Chain" events → #chaining
@@ -261,6 +274,8 @@ Show the current Torn City Time (UTC).
 | `/chain` | Everyone | Check chain status |
 | `/war` | Everyone | Check war status |
 | `/warboard` | Management | War participation report (Stats/Xan views) |
+| `/warstats` | Management | War performance history across wars |
+| `/chainboard` | Management | Full chain participation board |
 | `/enemy list` | Everyone | View enemy watchlist |
 | `/announce` | Management | Post announcements |
 | `/verify` | Management | Manage verification |
@@ -280,5 +295,5 @@ Show the current Torn City Time (UTC).
 
 ---
 
-*Last updated: February 12, 2026*
+*Last updated: February 14, 2026*
 *Bot by Ascended Punks*

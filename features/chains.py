@@ -235,6 +235,120 @@ class ChainTracker:
 
         return embed
 
+    async def format_chainboard_embeds(self, chainreport):
+        """
+        Create Discord embeds for full chain participation board.
+        Shows ALL faction members including those who didn't contribute.
+
+        Args:
+            chainreport: Chain report data from Torn API
+
+        Returns:
+            discord.Embed or list of discord.Embed
+        """
+        if not chainreport:
+            return create_embed(
+                title='No Chain Report',
+                description='No completed chains found.',
+                color=EMBED_COLOR_INFO
+            )
+
+        chain_id = chainreport.get('chain', 0)
+        start_time = chainreport.get('start', 0)
+        end_time = chainreport.get('end', 0)
+        total_respect = chainreport.get('respect', 0)
+        chain_members = chainreport.get('members', {})
+
+        # Fetch full faction roster
+        from utils.torn_api import fetch_faction_members
+        faction_members = await fetch_faction_members()
+
+        if not faction_members:
+            return create_embed(
+                title='API Error',
+                description='Could not fetch faction member data.',
+                color=EMBED_COLOR_CRITICAL
+            )
+
+        # Build member list with chain stats
+        member_list = []
+        for user_id, member_data in faction_members.items():
+            member_name = member_data.get('name', f'ID:{user_id}')
+            chain_data = chain_members.get(user_id, {})
+            member_list.append({
+                'name': member_name,
+                'hits': chain_data.get('hits', 0),
+                'respect': chain_data.get('respect', 0.0),
+            })
+
+        sorted_members = sorted(member_list, key=lambda x: x['respect'], reverse=True)
+
+        total_hits = sum(m['hits'] for m in member_list)
+        participants = len([m for m in member_list if m['hits'] > 0])
+
+        # Build embeds
+        embeds = []
+        description = (
+            f'**Chain #{chain_id}**\n'
+            f'Completed {format_timestamp(end_time, "R")} | '
+            f'Started {format_timestamp(start_time, "R")}'
+        )
+
+        embed = create_embed(
+            title='Chain Participation Board',
+            description=description,
+            color=EMBED_COLOR_SUCCESS,
+            fields=[
+                {'name': 'Total Hits', 'value': str(total_hits) if total_hits > 0 else 'N/A', 'inline': True},
+                {'name': 'Total Respect', 'value': f'{total_respect:.2f}', 'inline': True},
+                {'name': 'Participated', 'value': f'{participants}/{len(member_list)}', 'inline': True},
+            ]
+        )
+
+        # Build monospace table
+        max_name = max((len(m['name']) for m in sorted_members), default=10)
+        max_name = min(max_name, 15)
+
+        header = f'{"#":>2}  {"Name":<{max_name}}  {"Hits":>4}  {"Respect":>8}'
+        separator = '-' * len(header)
+        table_lines = [header, separator]
+
+        for i, m in enumerate(sorted_members):
+            name = m['name'][:max_name]
+            respect_str = f'{m["respect"]:.1f}' if m['respect'] > 0 else '0'
+            line = f'{i+1:>2}  {name:<{max_name}}  {m["hits"]:>4}  {respect_str:>8}'
+            table_lines.append(line)
+
+        # Split into code block chunks
+        table_chunks = []
+        current_chunk = []
+        current_length = 0
+
+        for line in table_lines:
+            if current_length + len(line) + 1 > 1024 - 8 and current_chunk:
+                table_chunks.append('```\n' + '\n'.join(current_chunk) + '\n```')
+                current_chunk = [line]
+                current_length = len(line)
+            else:
+                current_chunk.append(line)
+                current_length += len(line) + 1
+
+        if current_chunk:
+            table_chunks.append('```\n' + '\n'.join(current_chunk) + '\n```')
+
+        for idx, chunk in enumerate(table_chunks):
+            if len(embed.fields) >= 24:
+                embeds.append(embed)
+                embed = create_embed(
+                    title='Chain Board (continued)',
+                    color=EMBED_COLOR_SUCCESS
+                )
+            label = f'All Members ({len(sorted_members)})' if idx == 0 else 'Members (cont.)'
+            embed.add_field(name=label, value=chunk, inline=False)
+
+        embeds.append(embed)
+        return embeds[0] if len(embeds) == 1 else embeds
+
     async def has_active_chain_event(self):
         """
         Check if there's an active Chain Event or War Event in Discord scheduled events
