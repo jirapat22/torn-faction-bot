@@ -184,7 +184,8 @@ class VerificationSystem:
 
         if role_success:
             role = guild.get_role(verified_role_id)
-            status_parts.append(f'Given role **{role.name}**')
+            role_name = role.name if role else 'Verified'
+            status_parts.append(f'Given role **{role_name}**')
         elif verified_role_id:
             status_parts.append('Could not assign role (permission issue or role not found)')
         else:

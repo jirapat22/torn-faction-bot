@@ -315,7 +315,15 @@ class ChainTracker:
 
         for i, m in enumerate(sorted_members):
             name = m['name'][:max_name]
-            respect_str = f'{m["respect"]:.1f}' if m['respect'] > 0 else '0'
+            r = m['respect']
+            if r >= 1_000_000:
+                respect_str = f'{r/1_000_000:.1f}M'
+            elif r >= 10_000:
+                respect_str = f'{r/1_000:.1f}K'
+            elif r > 0:
+                respect_str = f'{r:.1f}'
+            else:
+                respect_str = '0'
             line = f'{i+1:>2}  {name:<{max_name}}  {m["hits"]:>4}  {respect_str:>8}'
             table_lines.append(line)
 

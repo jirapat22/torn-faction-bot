@@ -50,7 +50,8 @@ async def _make_api_request(endpoint, params=None, use_personal_key=False):
         params = {}
 
     # Create cache key before adding API key (avoid key in logs/cache strings)
-    cache_key = f"{endpoint}_{str(params)}"
+    key_type = 'personal' if use_personal_key else 'faction'
+    cache_key = f"{endpoint}_{key_type}_{str(params)}"
 
     # Add API key to params (use personal key for user lookups if configured)
     if use_personal_key:
