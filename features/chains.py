@@ -109,7 +109,12 @@ class ChainTracker:
 
     async def _fetch_chainreport_by_id(self, chain_id):
         """Fetch chainreport for a specific chain ID."""
-        data = await fetch_faction_data(f'chainreport&chainId={chain_id}')
+        from utils.torn_api import _make_api_request
+        from config import TORN_FACTION_ID
+        data = await _make_api_request(
+            f'faction/{TORN_FACTION_ID}',
+            {'selections': 'chainreport', 'chainId': str(chain_id)}
+        )
         if not data:
             return None
         return data.get('chainreport', {}) or None
