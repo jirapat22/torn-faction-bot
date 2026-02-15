@@ -58,12 +58,18 @@ class ChainTracker:
 
     async def load_chain_session(self):
         """Load chain session data (per-member stats across chains). Auto-clears if older than 24h."""
-        data = load_json(self.chain_session_file, default={'chains': []})
+        data = load_json(self.chain_session_file, default={'chains': [], 'version': 2})
+        # Clear v1 data (had broken chainId fetch producing duplicate member data)
+        if data.get('version', 1) < 2:
+            print('Clearing stale chain session data (v1 format)')
+            self.chain_session = {'chains': [], 'version': 2}
+            await self.save_chain_session()
+            return
         # Auto-clear if oldest chain is older than 24 hours
         now = get_current_timestamp()
         chains = data.get('chains', [])
         chains = [c for c in chains if now - c.get('timestamp', 0) < 86400]
-        self.chain_session = {'chains': chains}
+        self.chain_session = {'chains': chains, 'version': 2}
         if chains:
             print(f'Loaded chain session with {len(chains)} chain(s) in last 24h')
 
@@ -107,85 +113,62 @@ class ChainTracker:
             return {}
         return data.get('chains', {})
 
-    async def _fetch_chainreport_by_id(self, chain_id):
-        """Fetch chainreport for a specific chain ID."""
-        from utils.torn_api import _make_api_request
-        from config import TORN_FACTION_ID
-        data = await _make_api_request(
-            f'faction/{TORN_FACTION_ID}',
-            {'selections': 'chainreport', 'chainId': str(chain_id)}
-        )
-        if not data:
-            return None
-        return data.get('chainreport', {}) or None
-
     async def get_aggregated_chain_data(self):
         """
         Aggregate per-member data across all chains in the last 24h.
-        Fetches the chains list from API, then fetches per-member reports
-        for any chains not already saved in the session.
+        Uses saved session data (auto-saved when chains end) + current chainreport.
+        Also fetches the chains list to show total respect for chains without per-member data.
 
         Returns:
-            Dict with 'members' (aggregated), 'chain_count', 'total_respect', 'chains' (list of summaries)
+            Dict with 'members' (aggregated), 'chain_count', 'total_respect',
+            'chains' (with per-member data), 'other_chains' (totals only)
         """
         now = get_current_timestamp()
 
-        # Load saved session data
+        # Load saved session data (chains with per-member stats)
         saved_chains = [
             c for c in self.chain_session.get('chains', [])
             if now - c.get('timestamp', 0) < 86400
         ]
         saved_chain_ids = {c.get('chain_id') for c in saved_chains}
 
-        # Fetch chains list from API to find all recent chains
-        chains_list = await self._fetch_chains_list()
-        recent_chain_ids = []
-        for cid, cdata in chains_list.items():
-            end_time = cdata.get('end', 0)
-            if end_time and now - end_time < 86400:
-                recent_chain_ids.append((int(cid), cdata))
-
-        # Fetch per-member reports for chains not in session yet
-        for chain_id, cdata in recent_chain_ids:
-            if chain_id not in saved_chain_ids:
-                report = await self._fetch_chainreport_by_id(chain_id)
-                if report and report.get('members'):
-                    chain_entry = {
-                        'chain_id': chain_id,
-                        'timestamp': cdata.get('end', now),
-                        'respect': float(cdata.get('respect', report.get('respect', 0))),
-                        'start': cdata.get('start', 0),
-                        'end': cdata.get('end', 0),
-                        'members': report.get('members', {})
-                    }
-                    saved_chains.append(chain_entry)
-                    saved_chain_ids.add(chain_id)
-                    # Save to session so we don't re-fetch next time
-                    self.chain_session['chains'].append(chain_entry)
-
-        # Save any newly fetched chains
-        await self.save_chain_session()
-
-        # Also try the default chainreport (most recent) as fallback
-        if not saved_chains:
-            current_report = await self.get_chain_report()
-            if current_report and current_report.get('members'):
-                report_chain_id = current_report.get('chain', 0)
+        # Include the current chainreport (most recent completed) if not already saved
+        current_report = await self.get_chain_report()
+        if current_report and current_report.get('members'):
+            report_chain_id = current_report.get('chain', 0)
+            if report_chain_id not in saved_chain_ids:
                 saved_chains.append({
                     'chain_id': report_chain_id,
                     'timestamp': current_report.get('end', now),
-                    'respect': current_report.get('respect', 0),
+                    'respect': float(current_report.get('respect', 0)),
                     'start': current_report.get('start', 0),
                     'end': current_report.get('end', 0),
                     'members': current_report.get('members', {})
                 })
+                saved_chain_ids.add(report_chain_id)
 
-        if not saved_chains:
+        # Fetch chains list to find other chains in last 24h (totals only, no per-member)
+        chains_list = await self._fetch_chains_list()
+        other_chains = []
+        for cid, cdata in chains_list.items():
+            end_time = cdata.get('end', 0)
+            chain_num = cdata.get('chain', int(cid))
+            if end_time and now - end_time < 86400:
+                # Check if we already have per-member data for this chain
+                if int(cid) not in saved_chain_ids and chain_num not in saved_chain_ids:
+                    other_chains.append({
+                        'chain_id': chain_num,
+                        'respect': float(cdata.get('respect', 0)),
+                        'start': cdata.get('start', 0),
+                        'end': cdata.get('end', 0),
+                    })
+
+        if not saved_chains and not other_chains:
             return None
 
-        # Aggregate per-member stats
+        # Aggregate per-member stats from chains we have data for
         aggregated = {}
-        total_respect = 0
+        total_respect = 0.0
         chain_summaries = []
 
         for chain_data in saved_chains:
@@ -196,6 +179,7 @@ class ChainTracker:
                 'respect': chain_respect,
                 'start': chain_data.get('start', 0),
                 'end': chain_data.get('end', 0),
+                'has_members': True,
             })
 
             for user_id, stats in chain_data.get('members', {}).items():
@@ -204,9 +188,21 @@ class ChainTracker:
                 aggregated[user_id]['attacks'] += int(stats.get('attacks', 0))
                 aggregated[user_id]['respect'] += float(stats.get('respect', 0.0))
 
+        # Add other chains to totals (no per-member data)
+        for oc in other_chains:
+            total_respect += oc['respect']
+            chain_summaries.append({
+                'chain_id': oc['chain_id'],
+                'respect': oc['respect'],
+                'start': oc['start'],
+                'end': oc['end'],
+                'has_members': False,
+            })
+
         return {
             'members': aggregated,
-            'chain_count': len(saved_chains),
+            'chain_count': len(saved_chains) + len(other_chains),
+            'chains_with_data': len(saved_chains),
             'total_respect': total_respect,
             'chains': chain_summaries
         }
@@ -443,6 +439,7 @@ class ChainTracker:
         participants = len([m for m in member_list if m['hits'] > 0])
 
         # Build description with chain summaries
+        chains_with_data = aggregated_data.get('chains_with_data', chain_count)
         if chain_count == 1:
             c = chain_summaries[0]
             desc = (
@@ -453,11 +450,15 @@ class ChainTracker:
         else:
             chain_lines = []
             for c in sorted(chain_summaries, key=lambda x: x.get('end', 0)):
+                marker = '' if c.get('has_members', True) else ' *(no member data)*'
                 chain_lines.append(
                     f'Chain #{c["chain_id"]} — {c["respect"]:.0f} respect '
-                    f'({format_timestamp(c["end"], "R")})'
+                    f'({format_timestamp(c["end"], "R")}){marker}'
                 )
-            desc = f'**{chain_count} Chains Combined (last 24h)**\n' + '\n'.join(chain_lines)
+            header = f'**{chain_count} Chains (last 24h)**'
+            if chains_with_data < chain_count:
+                header += f'\nMember breakdown from {chains_with_data} chain(s) — older chains only show totals'
+            desc = header + '\n' + '\n'.join(chain_lines)
 
         # Build embeds
         embeds = []
