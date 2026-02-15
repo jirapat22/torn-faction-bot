@@ -100,30 +100,73 @@ class ChainTracker:
         await self.save_chain_session()
         print(f'Saved chain #{chain_id} member data to session ({len(members)} members)')
 
+    async def _fetch_chains_list(self):
+        """Fetch list of completed chains from Torn API."""
+        data = await fetch_faction_data('chains')
+        if not data:
+            return {}
+        return data.get('chains', {})
+
+    async def _fetch_chainreport_by_id(self, chain_id):
+        """Fetch chainreport for a specific chain ID."""
+        data = await fetch_faction_data(f'chainreport&chainId={chain_id}')
+        if not data:
+            return None
+        return data.get('chainreport', {}) or None
+
     async def get_aggregated_chain_data(self):
         """
-        Aggregate per-member data across all chains in the session (last 24h).
-        Also includes the current chainreport if not already saved.
+        Aggregate per-member data across all chains in the last 24h.
+        Fetches the chains list from API, then fetches per-member reports
+        for any chains not already saved in the session.
 
         Returns:
             Dict with 'members' (aggregated), 'chain_count', 'total_respect', 'chains' (list of summaries)
         """
-        # Start with saved session data
         now = get_current_timestamp()
+
+        # Load saved session data
         saved_chains = [
             c for c in self.chain_session.get('chains', [])
             if now - c.get('timestamp', 0) < 86400
         ]
         saved_chain_ids = {c.get('chain_id') for c in saved_chains}
 
-        # Fetch the current chainreport (most recent completed chain)
-        current_report = await self.get_chain_report()
-        all_chains = list(saved_chains)
+        # Fetch chains list from API to find all recent chains
+        chains_list = await self._fetch_chains_list()
+        recent_chain_ids = []
+        for cid, cdata in chains_list.items():
+            end_time = cdata.get('end', 0)
+            if end_time and now - end_time < 86400:
+                recent_chain_ids.append((int(cid), cdata))
 
-        if current_report:
-            report_chain_id = current_report.get('chain', 0)
-            if report_chain_id not in saved_chain_ids:
-                all_chains.append({
+        # Fetch per-member reports for chains not in session yet
+        for chain_id, cdata in recent_chain_ids:
+            if chain_id not in saved_chain_ids:
+                report = await self._fetch_chainreport_by_id(chain_id)
+                if report and report.get('members'):
+                    chain_entry = {
+                        'chain_id': chain_id,
+                        'timestamp': cdata.get('end', now),
+                        'respect': cdata.get('respect', report.get('respect', 0)),
+                        'start': cdata.get('start', 0),
+                        'end': cdata.get('end', 0),
+                        'members': report.get('members', {})
+                    }
+                    saved_chains.append(chain_entry)
+                    saved_chain_ids.add(chain_id)
+                    # Save to session so we don't re-fetch next time
+                    self.chain_session['chains'].append(chain_entry)
+
+        # Save any newly fetched chains
+        await self.save_chain_session()
+
+        # Also try the default chainreport (most recent) as fallback
+        if not saved_chains:
+            current_report = await self.get_chain_report()
+            if current_report and current_report.get('members'):
+                report_chain_id = current_report.get('chain', 0)
+                saved_chains.append({
                     'chain_id': report_chain_id,
                     'timestamp': current_report.get('end', now),
                     'respect': current_report.get('respect', 0),
@@ -132,7 +175,7 @@ class ChainTracker:
                     'members': current_report.get('members', {})
                 })
 
-        if not all_chains:
+        if not saved_chains:
             return None
 
         # Aggregate per-member stats
@@ -140,7 +183,7 @@ class ChainTracker:
         total_respect = 0
         chain_summaries = []
 
-        for chain_data in all_chains:
+        for chain_data in saved_chains:
             chain_respect = chain_data.get('respect', 0)
             total_respect += chain_respect
             chain_summaries.append({
@@ -158,7 +201,7 @@ class ChainTracker:
 
         return {
             'members': aggregated,
-            'chain_count': len(all_chains),
+            'chain_count': len(saved_chains),
             'total_respect': total_respect,
             'chains': chain_summaries
         }
