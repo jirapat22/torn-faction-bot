@@ -153,7 +153,7 @@ class ChainTracker:
                     chain_entry = {
                         'chain_id': chain_id,
                         'timestamp': cdata.get('end', now),
-                        'respect': cdata.get('respect', report.get('respect', 0)),
+                        'respect': float(cdata.get('respect', report.get('respect', 0))),
                         'start': cdata.get('start', 0),
                         'end': cdata.get('end', 0),
                         'members': report.get('members', {})
@@ -189,7 +189,7 @@ class ChainTracker:
         chain_summaries = []
 
         for chain_data in saved_chains:
-            chain_respect = chain_data.get('respect', 0)
+            chain_respect = float(chain_data.get('respect', 0))
             total_respect += chain_respect
             chain_summaries.append({
                 'chain_id': chain_data.get('chain_id'),
@@ -201,8 +201,8 @@ class ChainTracker:
             for user_id, stats in chain_data.get('members', {}).items():
                 if user_id not in aggregated:
                     aggregated[user_id] = {'attacks': 0, 'respect': 0.0}
-                aggregated[user_id]['attacks'] += stats.get('attacks', 0)
-                aggregated[user_id]['respect'] += stats.get('respect', 0.0)
+                aggregated[user_id]['attacks'] += int(stats.get('attacks', 0))
+                aggregated[user_id]['respect'] += float(stats.get('respect', 0.0))
 
         return {
             'members': aggregated,
