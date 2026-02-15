@@ -94,6 +94,7 @@ async def on_ready():
         # Initialize chain tracker
         chain_tracker = ChainTracker(bot)
         await chain_tracker.load_chain_history()
+        await chain_tracker.load_chain_session()
 
         # Initialize war tracker
         war_tracker = WarTracker(bot)

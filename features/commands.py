@@ -244,8 +244,8 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
                 return
 
             await interaction.response.defer()
-            report_data = await chain_tracker.get_chain_report()
-            embeds = await chain_tracker.format_chainboard_embeds(report_data)
+            aggregated = await chain_tracker.get_aggregated_chain_data()
+            embeds = await chain_tracker.format_chainboard_embeds(aggregated)
 
             if isinstance(embeds, list):
                 for e in embeds:
