@@ -1017,10 +1017,10 @@ class WarTracker:
                 f'{i+1}. **{m["name"]}** — Attacks: {m["outgoing"]} | Hit: {m["incoming"]}x | Score: {m["score"]}'
             )
 
-        detail_text = '\n'.join(member_details) if member_details else 'No member data available'
+        detail_lines = member_details if member_details else ['No member data available']
 
         # Chunk into 1024-char pieces and add as fields, splitting to new embed if needed
-        detail_chunks = self._chunk_text(detail_text, 1024)
+        detail_chunks = self._chunk_text(detail_lines, 1024)
         for idx, chunk in enumerate(detail_chunks):
             if len(embed.fields) >= 20:
                 embeds.append(embed)
@@ -1044,8 +1044,8 @@ class WarTracker:
         # Add members who didn't participate
         non_participants = [m for m in member_stats if m['outgoing'] == 0]
         if non_participants:
-            non_text = '\n'.join([f'• {m["name"]}' for m in non_participants])
-            np_chunks = self._chunk_text(non_text, 1024)
+            non_lines = [f'• {m["name"]}' for m in non_participants]
+            np_chunks = self._chunk_text(non_lines, 1024)
             for idx, chunk in enumerate(np_chunks):
                 if len(embed.fields) >= 24:
                     embeds.append(embed)

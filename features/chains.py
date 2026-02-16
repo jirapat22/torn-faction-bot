@@ -267,7 +267,7 @@ class ChainTracker:
         current = chain_data.get('current', 0)
         show_count = display_count if display_count is not None else current
         timeout = chain_data.get('timeout', 0)
-        modifier = chain_data.get('modifier', 1.0)
+        modifier = float(chain_data.get('modifier', 1.0))
 
         # Determine color based on timeout
         now = get_current_timestamp()
