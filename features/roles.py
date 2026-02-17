@@ -22,7 +22,7 @@ class RoleSyncManager:
         self.bot = bot
         self.config_file = 'data/role_sync_config.json'
         self.config = {}
-        # Default position to role mapping (position_name -> role_id)
+        # Position to role mapping (position_name -> [role_id, ...])
         # Users will set these via /rolesync setrole command
         self.position_roles = {}
 
@@ -30,11 +30,18 @@ class RoleSyncManager:
         """Load role sync config from JSON file"""
         default_config = {
             'enabled': True,
-            'position_roles': {},  # {position_name: role_id}
+            'position_roles': {},  # {position_name: [role_id, ...]}
             'last_sync': 0
         }
         self.config = load_json(self.config_file, default=default_config)
-        self.position_roles = self.config.get('position_roles', {})
+        raw_roles = self.config.get('position_roles', {})
+        # Migrate old format (single int) to new format (list of ints)
+        self.position_roles = {}
+        for pos, val in raw_roles.items():
+            if isinstance(val, list):
+                self.position_roles[pos] = val
+            else:
+                self.position_roles[pos] = [val]
         print(f'Loaded role sync config with {len(self.position_roles)} position mappings')
 
     async def save_config(self):
@@ -43,20 +50,42 @@ class RoleSyncManager:
         save_json(self.config_file, self.config)
 
     def set_position_role(self, position_name: str, role_id: int):
-        """Map a Torn position to a Discord role"""
-        self.position_roles[position_name.lower()] = role_id
+        """Add a Discord role to a Torn position mapping"""
+        key = position_name.lower()
+        if key not in self.position_roles:
+            self.position_roles[key] = []
+        if role_id not in self.position_roles[key]:
+            self.position_roles[key].append(role_id)
 
-    def remove_position_role(self, position_name: str):
-        """Remove a position to role mapping"""
+    def remove_position_role(self, position_name: str, role_id: int = None):
+        """Remove a role from a position mapping, or remove the entire position"""
         position_lower = position_name.lower()
-        if position_lower in self.position_roles:
+        if position_lower not in self.position_roles:
+            return False
+        if role_id is not None:
+            # Remove specific role from this position
+            roles = self.position_roles[position_lower]
+            if role_id in roles:
+                roles.remove(role_id)
+                if not roles:
+                    del self.position_roles[position_lower]
+                return True
+            return False
+        else:
+            # Remove entire position mapping
             del self.position_roles[position_lower]
             return True
-        return False
 
-    def get_role_for_position(self, position_name: str) -> int:
-        """Get Discord role ID for a Torn position"""
-        return self.position_roles.get(position_name.lower())
+    def get_roles_for_position(self, position_name: str) -> list:
+        """Get Discord role IDs for a Torn position"""
+        return self.position_roles.get(position_name.lower(), [])
+
+    def get_all_position_role_ids(self) -> set:
+        """Get all role IDs across all position mappings"""
+        all_ids = set()
+        for role_ids in self.position_roles.values():
+            all_ids.update(role_ids)
+        return all_ids
 
     def get_all_position_roles(self) -> dict:
         """Get all position to role mappings"""
@@ -65,33 +94,35 @@ class RoleSyncManager:
     async def sync_member_role(self, guild: discord.Guild, discord_member: discord.Member,
                                 torn_position: str) -> bool:
         """
-        Sync a single member's role based on their Torn position
+        Sync a single member's roles based on their Torn position.
+        A position can map to multiple Discord roles.
 
         Returns:
-            True if role was changed, False otherwise
+            True if roles were changed, False otherwise
         """
-        all_position_role_ids = set(self.position_roles.values())
+        all_position_role_ids = self.get_all_position_role_ids()
 
-        # Get the role ID for this position (may be None if no mapping)
-        role_id = self.get_role_for_position(torn_position) if torn_position else None
-        role = guild.get_role(role_id) if role_id else None
+        # Get the role IDs for this position (may be empty if no mapping)
+        target_role_ids = set(self.get_roles_for_position(torn_position)) if torn_position else set()
+        target_roles = [guild.get_role(rid) for rid in target_role_ids]
+        target_roles = [r for r in target_roles if r is not None]
 
-        # Check if member already has the correct role
-        if role and role in discord_member.roles:
-            return False  # Already has the role
+        # Roles the member should NOT have (position-managed roles that aren't for their current position)
+        roles_to_remove = [r for r in discord_member.roles
+                          if r.id in all_position_role_ids and r.id not in target_role_ids]
 
-        # Find old position roles to remove
-        roles_to_remove = [r for r in discord_member.roles if r.id in all_position_role_ids and r.id != role_id]
+        # Roles the member should have but doesn't
+        roles_to_add = [r for r in target_roles if r not in discord_member.roles]
 
         # Nothing to change
-        if not roles_to_remove and not role:
+        if not roles_to_remove and not roles_to_add:
             return False
 
         try:
             if roles_to_remove:
                 await discord_member.remove_roles(*roles_to_remove, reason='Role sync: position changed')
-            if role:
-                await discord_member.add_roles(role, reason=f'Role sync: Torn position is {torn_position}')
+            if roles_to_add:
+                await discord_member.add_roles(*roles_to_add, reason=f'Role sync: Torn position is {torn_position}')
             return True
         except discord.Forbidden:
             return False  # Can't modify this member's roles
@@ -211,10 +242,11 @@ async def setup_rolesync_commands(bot, role_sync_manager: RoleSyncManager):
             enabled = role_sync_manager.config.get('enabled', True)
 
             if mappings:
-                mapping_text = '\n'.join([
-                    f'**{pos.title()}** -> <@&{role_id}>'
-                    for pos, role_id in mappings.items()
-                ])
+                lines = []
+                for pos, role_ids in mappings.items():
+                    role_mentions = ', '.join([f'<@&{rid}>' for rid in role_ids])
+                    lines.append(f'**{pos.title()}** -> {role_mentions}')
+                mapping_text = '\n'.join(lines)
             else:
                 mapping_text = 'No position mappings configured.\nUse `/rolesync setrole` to add mappings.'
 
@@ -234,9 +266,14 @@ async def setup_rolesync_commands(bot, role_sync_manager: RoleSyncManager):
             role_sync_manager.set_position_role(position, role.id)
             await role_sync_manager.save_config()
 
+            # Show all roles now mapped to this position
+            all_roles = role_sync_manager.get_roles_for_position(position)
+            role_mentions = ', '.join([f'<@&{rid}>' for rid in all_roles])
+
             embed = create_embed(
-                title='Position Mapping Added',
-                description=f'Torn position **{position}** will now get role {role.mention}',
+                title='Position Mapping Updated',
+                description=f'Torn position **{position}** will now get: {role_mentions}\n\n'
+                           f'*Use `/rolesync remove` with position + role to remove a specific role.*',
                 color=EMBED_COLOR_SUCCESS
             )
             await interaction.followup.send(embed=embed, ephemeral=True)
@@ -246,17 +283,28 @@ async def setup_rolesync_commands(bot, role_sync_manager: RoleSyncManager):
                 await interaction.followup.send('Please provide a position name to remove.', ephemeral=True)
                 return
 
-            if role_sync_manager.remove_position_role(position):
+            role_id = role.id if role else None
+            if role_sync_manager.remove_position_role(position, role_id):
                 await role_sync_manager.save_config()
+                if role_id:
+                    # Removed specific role - show remaining roles if any
+                    remaining = role_sync_manager.get_roles_for_position(position)
+                    if remaining:
+                        remaining_text = ', '.join([f'<@&{rid}>' for rid in remaining])
+                        desc = f'Removed {role.mention} from **{position}**\nRemaining roles: {remaining_text}'
+                    else:
+                        desc = f'Removed {role.mention} from **{position}** (no roles left, position removed)'
+                else:
+                    desc = f'Removed all role mappings for position **{position}**'
                 embed = create_embed(
-                    title='Position Mapping Removed',
-                    description=f'Removed mapping for position **{position}**',
+                    title='Position Mapping Updated',
+                    description=desc,
                     color=EMBED_COLOR_SUCCESS
                 )
             else:
                 embed = create_embed(
                     title='Not Found',
-                    description=f'No mapping found for position **{position}**',
+                    description=f'No mapping found for position **{position}**' + (f' with role {role.mention}' if role else ''),
                     color=EMBED_COLOR_INFO
                 )
             await interaction.followup.send(embed=embed, ephemeral=True)
@@ -291,8 +339,8 @@ async def setup_rolesync_commands(bot, role_sync_manager: RoleSyncManager):
             # Show current mappings vs API positions
             mappings = role_sync_manager.get_all_position_roles()
             mapping_text = '\n'.join([
-                f'`{pos}` -> <@&{rid}>'
-                for pos, rid in mappings.items()
+                f'`{pos}` -> {", ".join([f"<@&{rid}>" for rid in role_ids])}'
+                for pos, role_ids in mappings.items()
             ])
 
             # Check which API positions have mappings
@@ -351,26 +399,28 @@ async def setup_rolesync_commands(bot, role_sync_manager: RoleSyncManager):
                     continue
 
                 position = mdata.get('position', '')
-                role_id = role_sync_manager.get_role_for_position(position) if position else None
-                role = guild.get_role(role_id) if role_id else None
+                target_role_ids = set(role_sync_manager.get_roles_for_position(position)) if position else set()
+                target_roles = [guild.get_role(rid) for rid in target_role_ids]
+                target_roles = [r for r in target_roles if r is not None]
 
-                all_position_role_ids = set(role_sync_manager.position_roles.values())
-                roles_to_remove = [r for r in discord_member.roles if r.id in all_position_role_ids and (not role_id or r.id != role_id)]
+                all_managed_ids = role_sync_manager.get_all_position_role_ids()
+                roles_to_remove = [r for r in discord_member.roles
+                                  if r.id in all_managed_ids and r.id not in target_role_ids]
+                roles_to_add = [r for r in target_roles if r not in discord_member.roles]
 
-                if role and role in discord_member.roles and not roles_to_remove:
-                    already_correct += 1
-                    continue
-
-                if not role and not roles_to_remove:
-                    no_mapping += 1
+                if not roles_to_remove and not roles_to_add:
+                    if target_roles:
+                        already_correct += 1
+                    else:
+                        no_mapping += 1
                     continue
 
                 # Actually assign/remove roles
                 try:
                     if roles_to_remove:
                         await discord_member.remove_roles(*roles_to_remove, reason='Role sync')
-                    if role:
-                        await discord_member.add_roles(role, reason=f'Role sync: Torn position is {position}')
+                    if roles_to_add:
+                        await discord_member.add_roles(*roles_to_add, reason=f'Role sync: Torn position is {position}')
                     role_changed += 1
                 except discord.Forbidden:
                     errors += 1

@@ -3,8 +3,11 @@ Availability Polling Module
 Allows Verified members to indicate availability for war/chain planning using time blocks in Torn time (TCT = UTC).
 
 Features:
-- /avail_setup - Create availability poll (management only)
-- /avail_summary - View availability summary with ASCII timetable
+- /avail setup - Create availability poll (management only)
+- /avail summary - View availability summary with ASCII timetable
+- /avail mine - Check your own selections
+- /avail list - List all active polls
+- /avail delete - Delete a poll (management only)
 - /tct_now - Show current Torn time
 - Button-based time block selection for verified members
 - Multi-day support for events spanning multiple days
@@ -610,299 +613,379 @@ class AvailabilityButton(discord.ui.Button):
 async def setup_availability_commands(bot, manager: AvailabilityManager, verified_role_name: str):
     """Register availability slash commands"""
 
-    # ===== /avail_setup command =====
+    # ===== /avail command (unified) =====
     @bot.tree.command(
-        name='avail_setup',
-        description='[Management] Create an availability poll for war/chain planning'
+        name='avail',
+        description='Availability polls: create, view summary, check yours, list, or delete'
     )
     @app_commands.describe(
-        start_date='Start date (DD-MM-YYYY)',
-        start_time='Start time in TCT/UTC (HH:MM, e.g., 00:00)',
-        end_time='End time in TCT/UTC (HH:MM, e.g., 24:00)',
-        end_date='End date if different from start (DD-MM-YYYY) - leave empty for same day',
-        block_length='Hours per time block (1-6, default: 2)',
-        poll_duration='Hours until poll closes (default: 24)'
+        action='What to do',
+        date='Date for the poll (DD-MM-YYYY) — required for Setup/Summary/Mine/Delete',
+        start_time='[Setup] Start time in TCT/UTC (HH:MM, e.g., 00:00)',
+        end_time='[Setup] End time in TCT/UTC (HH:MM, e.g., 24:00)',
+        end_date='[Setup] End date if multi-day (DD-MM-YYYY) — leave empty for same day',
+        block_length='[Setup] Hours per time block (1-6, default: 2)',
+        poll_duration='[Setup] Hours until poll closes (default: 24)'
     )
-    async def avail_setup(
+    @app_commands.choices(action=[
+        app_commands.Choice(name='Setup - Create availability poll (Management)', value='setup'),
+        app_commands.Choice(name='Summary - View poll results', value='summary'),
+        app_commands.Choice(name='Mine - Check your selections', value='mine'),
+        app_commands.Choice(name='List - Show all active polls', value='list'),
+        app_commands.Choice(name='Delete - Remove a poll (Management)', value='delete'),
+    ])
+    async def avail(
         interaction: discord.Interaction,
-        start_date: str,
-        start_time: str,
-        end_time: str,
+        action: app_commands.Choice[str],
+        date: Optional[str] = None,
+        start_time: Optional[str] = None,
+        end_time: Optional[str] = None,
         end_date: Optional[str] = None,
         block_length: int = 2,
         poll_duration: int = 24
     ):
-        """Create an availability poll"""
-        # Check permissions
-        if not is_management(interaction):
-            embed = create_embed(
-                title='Permission Denied',
-                description='You do not have permission to use this command.',
-                color=EMBED_COLOR_CRITICAL
-            )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-            return
+        """Unified availability command"""
+        action_value = action.value
 
-        # Validate poll duration
-        if poll_duration < 1:
-            embed = create_embed(
-                title='Invalid Poll Duration',
-                description='Poll duration must be at least 1 hour.',
-                color=EMBED_COLOR_CRITICAL
-            )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-            return
+        # ── Setup ──
+        if action_value == 'setup':
+            if not is_management(interaction):
+                await interaction.response.send_message(
+                    embed=create_embed(title='Permission Denied',
+                                       description='You need Management permissions to create polls.',
+                                       color=EMBED_COLOR_CRITICAL),
+                    ephemeral=True)
+                return
 
-        # Validate block length
-        if block_length < 1 or block_length > 6:
-            embed = create_embed(
-                title='Invalid Block Length',
-                description='Block length must be between 1 and 6 hours.',
-                color=EMBED_COLOR_WARNING
-            )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-            return
+            # Validate required params
+            if not date or not start_time or not end_time:
+                await interaction.response.send_message(
+                    embed=create_embed(title='Missing Parameters',
+                                       description='Setup requires: `date`, `start_time`, and `end_time`.',
+                                       color=EMBED_COLOR_WARNING),
+                    ephemeral=True)
+                return
 
-        # Default end_date to start_date if not provided
-        if not end_date:
-            end_date = start_date
+            start_date = date
 
-        # Validate date format (DD-MM-YYYY)
-        try:
-            start_dt = parse_date(start_date)
-            end_dt = parse_date(end_date)
-        except ValueError:
-            embed = create_embed(
-                title='Invalid Date',
-                description='Please use DD-MM-YYYY format (e.g., 30-01-2026)',
-                color=EMBED_COLOR_WARNING
-            )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-            return
+            if poll_duration < 1:
+                await interaction.response.send_message(
+                    embed=create_embed(title='Invalid Poll Duration',
+                                       description='Poll duration must be at least 1 hour.',
+                                       color=EMBED_COLOR_CRITICAL),
+                    ephemeral=True)
+                return
 
-        # Validate end_date >= start_date
-        if end_dt < start_dt:
-            embed = create_embed(
-                title='Invalid Date Range',
-                description='End date must be on or after start date.',
-                color=EMBED_COLOR_WARNING
-            )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-            return
+            if block_length < 1 or block_length > 6:
+                await interaction.response.send_message(
+                    embed=create_embed(title='Invalid Block Length',
+                                       description='Block length must be between 1 and 6 hours.',
+                                       color=EMBED_COLOR_WARNING),
+                    ephemeral=True)
+                return
 
-        # Validate time format
-        try:
-            # Handle 24:00 as special case (means end of day = 00:00 next day)
-            check_end = end_time if end_time != '24:00' else '00:00'
-            datetime.strptime(start_time, '%H:%M')
-            datetime.strptime(check_end, '%H:%M')
-        except ValueError:
-            embed = create_embed(
-                title='Invalid Time',
-                description='Please use HH:MM format (e.g., 00:00, 14:30, 24:00)',
-                color=EMBED_COLOR_WARNING
-            )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-            return
+            # Default end_date to start_date
+            actual_end_date = end_date if end_date else start_date
 
-        # Convert 24:00 to 00:00 for processing
-        if end_time == '24:00':
-            end_time = '00:00'
-            # Also shift end_date forward by 1 day
-            end_dt = end_dt + timedelta(days=1)
-            end_date = format_date(end_dt)
+            try:
+                start_dt = parse_date(start_date)
+                end_dt = parse_date(actual_end_date)
+            except ValueError:
+                await interaction.response.send_message(
+                    embed=create_embed(title='Invalid Date',
+                                       description='Please use DD-MM-YYYY format (e.g., 30-01-2026)',
+                                       color=EMBED_COLOR_WARNING),
+                    ephemeral=True)
+                return
 
-        await interaction.response.defer()
+            if end_dt < start_dt:
+                await interaction.response.send_message(
+                    embed=create_embed(title='Invalid Date Range',
+                                       description='End date must be on or after start date.',
+                                       color=EMBED_COLOR_WARNING),
+                    ephemeral=True)
+                return
 
-        # Create poll
-        poll_id, blocks = manager.create_poll(
-            start_date=start_date,
-            end_date=end_date,
-            channel_id=interaction.channel.id,
-            message_id=0,  # Will update after sending
-            start_time=start_time,
-            end_time=end_time,
-            block_length=block_length
-        )
+            try:
+                check_end = end_time if end_time != '24:00' else '00:00'
+                datetime.strptime(start_time, '%H:%M')
+                datetime.strptime(check_end, '%H:%M')
+            except ValueError:
+                await interaction.response.send_message(
+                    embed=create_embed(title='Invalid Time',
+                                       description='Please use HH:MM format (e.g., 00:00, 14:30, 24:00)',
+                                       color=EMBED_COLOR_WARNING),
+                    ephemeral=True)
+                return
 
-        if not blocks:
-            # Clean up the orphaned poll entry
-            if poll_id in manager.polls:
-                del manager.polls[poll_id]
-            if poll_id in manager.data:
-                del manager.data[poll_id]
-            embed = create_embed(
-                title='Error',
-                description='Failed to create time blocks. Check your time range.',
-                color=EMBED_COLOR_CRITICAL
-            )
-            await interaction.followup.send(embed=embed, ephemeral=True)
-            return
+            if end_time == '24:00':
+                end_time = '00:00'
+                end_dt = end_dt + timedelta(days=1)
+                actual_end_date = format_date(end_dt)
 
-        # Store poll end time
-        poll_end_unix = int(datetime.now(timezone.utc).timestamp()) + poll_duration * 3600
-        manager.polls[poll_id]['poll_end_unix'] = poll_end_unix
-        manager.polls[poll_id]['closed'] = False
+            await interaction.response.defer()
 
-        # Build block list with both local and TCT times
-        block_list = []
-        current_date = None
-        for block in blocks:
-            # Add date header if date changed
-            if block['date'] != current_date:
-                if current_date is not None:
-                    block_list.append("")  # Blank line
-                block_list.append(f"**{block['date']}:**")
-                current_date = block['date']
-
-            # Show local time with TCT in parentheses
-            block_list.append(
-                f"  **{block['label']}**: <t:{block['start_unix']}:t> – <t:{block['end_unix']}:t> "
-                f"({block['start_time']}–{block['end_time']} TCT)"
+            poll_id, blocks = manager.create_poll(
+                start_date=start_date,
+                end_date=actual_end_date,
+                channel_id=interaction.channel.id,
+                message_id=0,
+                start_time=start_time,
+                end_time=end_time,
+                block_length=block_length
             )
 
-        # Create title based on single day or multi-day
-        if start_date == end_date or (start_dt == end_dt - timedelta(days=1) and end_time == '00:00'):
-            title = f"🕒 Availability Poll – {start_date}"
-        else:
-            title = f"🕒 Availability Poll – {start_date} to {end_date}"
+            if not blocks:
+                if poll_id in manager.polls:
+                    del manager.polls[poll_id]
+                if poll_id in manager.data:
+                    del manager.data[poll_id]
+                await interaction.followup.send(
+                    embed=create_embed(title='Error',
+                                       description='Failed to create time blocks. Check your time range.',
+                                       color=EMBED_COLOR_CRITICAL),
+                    ephemeral=True)
+                return
 
-        # Calculate countdown to event start
-        first_block = blocks[0]
-        event_start_unix = first_block['start_unix']
-        countdown_text = f"\n\n⏳ **Event starts:** <t:{event_start_unix}:R> (<t:{event_start_unix}:F>)"
-        countdown_text += f"\n📊 **Poll closes:** <t:{poll_end_unix}:R> (<t:{poll_end_unix}:f>)"
+            poll_end_unix = int(datetime.now(timezone.utc).timestamp()) + poll_duration * 3600
+            manager.polls[poll_id]['poll_end_unix'] = poll_end_unix
+            manager.polls[poll_id]['closed'] = False
 
-        # Create embed
-        embed = create_embed(
-            title=title,
-            description=(
-                f"**Select ALL time blocks when you are available.**\n\n"
-                f"Click buttons to toggle your availability.\n"
-                f"Times shown are your **local time** with TCT (Torn City Time = UTC) in parentheses."
-                f"{countdown_text}\n\n"
-                f"**Time Blocks:**\n" + '\n'.join(block_list)
-            ),
-            color=EMBED_COLOR_INFO
-        )
-        embed.set_footer(text=f"Block size: {block_length}h | Only {verified_role_name} members can vote")
-
-        # Create view with buttons
-        view = AvailabilityView(manager, poll_id, blocks, verified_role_name)
-
-        # Send message
-        message = await interaction.followup.send(embed=embed, view=view)
-
-        # Update poll with message ID
-        manager.polls[poll_id]['message_id'] = message.id
-        await manager.save_polls()
-
-        print(f'Availability poll created: {poll_id} with {len(blocks)} blocks')
-
-    # ===== /avail_summary command =====
-    @bot.tree.command(
-        name='avail_summary',
-        description='View availability summary for a poll'
-    )
-    @app_commands.describe(
-        date='Any date within the poll range (DD-MM-YYYY)'
-    )
-    async def avail_summary(interaction: discord.Interaction, date: str):
-        """Show availability summary with timetable"""
-        await interaction.response.defer()
-
-        # Find poll containing this date
-        poll_id = manager.find_poll_by_date(date)
-
-        if not poll_id:
-            embed = create_embed(
-                title='No Poll Found',
-                description=f'No availability poll exists for {date}.',
-                color=EMBED_COLOR_WARNING
-            )
-            await interaction.followup.send(embed=embed)
-            return
-
-        summary = manager.get_summary(poll_id)
-
-        # Build block summary with local and TCT times
-        block_lines = []
-        current_date = None
-        for block in summary['blocks']:
-            if block['date'] != current_date:
-                if current_date is not None:
-                    block_lines.append("")
-                block_lines.append(f"**{block['date']}:**")
-                current_date = block['date']
-
-            block_lines.append(
-                f"  **{block['label']}** (<t:{block['start_unix']}:t> / {block['start_time']}–{block['end_time']} TCT): "
-                f"**{block['count']}** available"
-            )
-
-        # Build best windows
-        best_lines = []
-        for block in summary['best_windows']:
-            if block['count'] > 0:
-                best_lines.append(
-                    f"• **{block['label']}** ({block['date']} <t:{block['start_unix']}:t> / "
-                    f"{block['start_time']}–{block['end_time']} TCT) – **{block['count']}** members"
+            block_list = []
+            current_date_str = None
+            for block in blocks:
+                if block['date'] != current_date_str:
+                    if current_date_str is not None:
+                        block_list.append("")
+                    block_list.append(f"**{block['date']}:**")
+                    current_date_str = block['date']
+                block_list.append(
+                    f"  **{block['label']}**: <t:{block['start_unix']}:t> – <t:{block['end_unix']}:t> "
+                    f"({block['start_time']}–{block['end_time']} TCT)"
                 )
 
-        # Create title
-        if summary['start_date'] == summary['end_date']:
-            title = f"🧮 Availability Summary – {summary['start_date']}"
-        else:
-            title = f"🧮 Availability Summary – {summary['start_date']} to {summary['end_date']}"
-
-        embed = create_embed(
-            title=title,
-            description='\n'.join(block_lines),
-            color=EMBED_COLOR_SUCCESS
-        )
-
-        if best_lines:
-            embed.add_field(
-                name='⭐ Best Windows',
-                value='\n'.join(best_lines),
-                inline=False
-            )
-        else:
-            embed.add_field(
-                name='⭐ Best Windows',
-                value='No members have voted yet.',
-                inline=False
-            )
-
-        embed.set_footer(text=f"Times shown: Local time / TCT (Torn City Time = UTC)")
-
-        # Generate bar chart + member grid combined
-        timetable = manager.generate_timetable(poll_id)
-        grid = manager.generate_member_grid(poll_id, interaction.guild)
-        combined = f"```\nAvailability (Torn Time)\n\n{timetable}\n\nMember Grid\n\n{grid}\n```"
-
-        # Split into two messages if too long for Discord (2000 char limit)
-        if len(combined) <= 2000:
-            await interaction.followup.send(embed=embed, content=combined)
-        else:
-            chart_text = f"```\nAvailability (Torn Time)\n\n{timetable}\n```"
-            grid_text = f"```\nMember Grid\n\n{grid}\n```"
-            await interaction.followup.send(embed=embed, content=chart_text)
-            # Paginate grid if too long
-            if len(grid_text) <= 2000:
-                await interaction.followup.send(content=grid_text)
+            if start_date == actual_end_date or (start_dt == end_dt - timedelta(days=1) and end_time == '00:00'):
+                title = f"🕒 Availability Poll – {start_date}"
             else:
-                grid_lines = grid.split('\n')
-                chunk = "```\nMember Grid\n\n"
-                for line in grid_lines:
-                    if len(chunk) + len(line) + 5 > 2000:
+                title = f"🕒 Availability Poll – {start_date} to {actual_end_date}"
+
+            first_block = blocks[0]
+            event_start_unix = first_block['start_unix']
+            countdown_text = f"\n\n⏳ **Event starts:** <t:{event_start_unix}:R> (<t:{event_start_unix}:F>)"
+            countdown_text += f"\n📊 **Poll closes:** <t:{poll_end_unix}:R> (<t:{poll_end_unix}:f>)"
+
+            embed = create_embed(
+                title=title,
+                description=(
+                    f"**Select ALL time blocks when you are available.**\n\n"
+                    f"Click buttons to toggle your availability.\n"
+                    f"Times shown are your **local time** with TCT (Torn City Time = UTC) in parentheses."
+                    f"{countdown_text}\n\n"
+                    f"**Time Blocks:**\n" + '\n'.join(block_list)
+                ),
+                color=EMBED_COLOR_INFO
+            )
+            embed.set_footer(text=f"Block size: {block_length}h | Only {verified_role_name} members can vote")
+
+            view = AvailabilityView(manager, poll_id, blocks, verified_role_name)
+            message = await interaction.followup.send(embed=embed, view=view)
+
+            manager.polls[poll_id]['message_id'] = message.id
+            await manager.save_polls()
+            print(f'Availability poll created: {poll_id} with {len(blocks)} blocks')
+
+        # ── Summary ──
+        elif action_value == 'summary':
+            if not date:
+                await interaction.response.send_message(
+                    embed=create_embed(title='Missing Date',
+                                       description='Please provide a `date` (DD-MM-YYYY) for the poll to view.',
+                                       color=EMBED_COLOR_WARNING),
+                    ephemeral=True)
+                return
+
+            await interaction.response.defer()
+
+            poll_id = manager.find_poll_by_date(date)
+            if not poll_id:
+                await interaction.followup.send(
+                    embed=create_embed(title='No Poll Found',
+                                       description=f'No availability poll exists for {date}.',
+                                       color=EMBED_COLOR_WARNING))
+                return
+
+            summary = manager.get_summary(poll_id)
+
+            block_lines = []
+            current_date_str = None
+            for block in summary['blocks']:
+                if block['date'] != current_date_str:
+                    if current_date_str is not None:
+                        block_lines.append("")
+                    block_lines.append(f"**{block['date']}:**")
+                    current_date_str = block['date']
+                block_lines.append(
+                    f"  **{block['label']}** (<t:{block['start_unix']}:t> / {block['start_time']}–{block['end_time']} TCT): "
+                    f"**{block['count']}** available"
+                )
+
+            best_lines = []
+            for block in summary['best_windows']:
+                if block['count'] > 0:
+                    best_lines.append(
+                        f"• **{block['label']}** ({block['date']} <t:{block['start_unix']}:t> / "
+                        f"{block['start_time']}–{block['end_time']} TCT) – **{block['count']}** members"
+                    )
+
+            if summary['start_date'] == summary['end_date']:
+                title = f"🧮 Availability Summary – {summary['start_date']}"
+            else:
+                title = f"🧮 Availability Summary – {summary['start_date']} to {summary['end_date']}"
+
+            embed = create_embed(title=title, description='\n'.join(block_lines), color=EMBED_COLOR_SUCCESS)
+
+            if best_lines:
+                embed.add_field(name='⭐ Best Windows', value='\n'.join(best_lines), inline=False)
+            else:
+                embed.add_field(name='⭐ Best Windows', value='No members have voted yet.', inline=False)
+
+            embed.set_footer(text=f"Times shown: Local time / TCT (Torn City Time = UTC)")
+
+            timetable = manager.generate_timetable(poll_id)
+            grid = manager.generate_member_grid(poll_id, interaction.guild)
+            combined = f"```\nAvailability (Torn Time)\n\n{timetable}\n\nMember Grid\n\n{grid}\n```"
+
+            if len(combined) <= 2000:
+                await interaction.followup.send(embed=embed, content=combined)
+            else:
+                chart_text = f"```\nAvailability (Torn Time)\n\n{timetable}\n```"
+                grid_text = f"```\nMember Grid\n\n{grid}\n```"
+                await interaction.followup.send(embed=embed, content=chart_text)
+                if len(grid_text) <= 2000:
+                    await interaction.followup.send(content=grid_text)
+                else:
+                    grid_lines = grid.split('\n')
+                    chunk = "```\nMember Grid\n\n"
+                    for line in grid_lines:
+                        if len(chunk) + len(line) + 5 > 2000:
+                            chunk += "```"
+                            await interaction.followup.send(content=chunk)
+                            chunk = "```\n"
+                        chunk += line + '\n'
+                    if chunk.strip('`\n '):
                         chunk += "```"
                         await interaction.followup.send(content=chunk)
-                        chunk = "```\n"
-                    chunk += line + '\n'
-                if chunk.strip('`\n '):
-                    chunk += "```"
-                    await interaction.followup.send(content=chunk)
+
+        # ── Mine ──
+        elif action_value == 'mine':
+            if not date:
+                await interaction.response.send_message(
+                    embed=create_embed(title='Missing Date',
+                                       description='Please provide a `date` (DD-MM-YYYY) for the poll to check.',
+                                       color=EMBED_COLOR_WARNING),
+                    ephemeral=True)
+                return
+
+            poll_id = manager.find_poll_by_date(date)
+            if not poll_id:
+                await interaction.response.send_message(
+                    embed=create_embed(title='No Poll Found',
+                                       description=f'No availability poll exists for {date}.',
+                                       color=EMBED_COLOR_WARNING),
+                    ephemeral=True)
+                return
+
+            poll = manager.get_poll(poll_id)
+            selections = manager.get_user_selections(poll_id, interaction.user.id)
+            blocks = poll['blocks']
+
+            if not selections:
+                await interaction.response.send_message(
+                    embed=create_embed(title='Your Availability',
+                                       description=f"You have not selected any time blocks for {poll['start_date']} to {poll['end_date']}.",
+                                       color=EMBED_COLOR_INFO),
+                    ephemeral=True)
+                return
+
+            selected_blocks = []
+            for block in blocks:
+                if block['id'] in selections:
+                    selected_blocks.append(
+                        f"✅ **{block['label']}**: {block['date']} <t:{block['start_unix']}:t> "
+                        f"({block['start_time']}–{block['end_time']} TCT)"
+                    )
+
+            if poll['start_date'] == poll['end_date']:
+                title = f"Your Availability – {poll['start_date']}"
+            else:
+                title = f"Your Availability – {poll['start_date']} to {poll['end_date']}"
+
+            embed = create_embed(title=title, description='\n'.join(selected_blocks), color=EMBED_COLOR_SUCCESS)
+            embed.set_footer(text=f"You've selected {len(selections)} time block(s)")
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+
+        # ── List ──
+        elif action_value == 'list':
+            if not manager.polls:
+                await interaction.response.send_message(
+                    embed=create_embed(title='No Active Polls',
+                                       description='There are no availability polls currently active.',
+                                       color=EMBED_COLOR_INFO),
+                    ephemeral=True)
+                return
+
+            poll_list = []
+            for pid, poll in manager.polls.items():
+                total_votes = sum(len(users) for users in manager.data.get(pid, {}).values())
+                if poll['start_date'] == poll['end_date']:
+                    poll_list.append(f"• **{poll['start_date']}** – {len(poll['blocks'])} blocks, {total_votes} votes")
+                else:
+                    poll_list.append(f"• **{poll['start_date']} to {poll['end_date']}** – {len(poll['blocks'])} blocks, {total_votes} votes")
+
+            embed = create_embed(title='📊 Active Availability Polls', description='\n'.join(poll_list), color=EMBED_COLOR_INFO)
+            embed.set_footer(text="Use /avail action:Summary date:<date> to see details")
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+
+        # ── Delete ──
+        elif action_value == 'delete':
+            if not is_management(interaction):
+                await interaction.response.send_message(
+                    embed=create_embed(title='Permission Denied',
+                                       description='You need Management permissions to delete polls.',
+                                       color=EMBED_COLOR_CRITICAL),
+                    ephemeral=True)
+                return
+
+            if not date:
+                await interaction.response.send_message(
+                    embed=create_embed(title='Missing Date',
+                                       description='Please provide a `date` (DD-MM-YYYY) for the poll to delete.',
+                                       color=EMBED_COLOR_WARNING),
+                    ephemeral=True)
+                return
+
+            poll_id = manager.find_poll_by_date(date)
+            if not poll_id:
+                await interaction.response.send_message(
+                    embed=create_embed(title='Not Found',
+                                       description=f'No availability poll exists for {date}.',
+                                       color=EMBED_COLOR_WARNING),
+                    ephemeral=True)
+                return
+
+            poll = manager.polls[poll_id]
+            del manager.polls[poll_id]
+            if poll_id in manager.data:
+                del manager.data[poll_id]
+
+            await manager.save_polls()
+            await manager.save_data()
+
+            await interaction.response.send_message(
+                embed=create_embed(title='✅ Poll Deleted',
+                                   description=f"Availability poll for {poll['start_date']} to {poll['end_date']} has been deleted.",
+                                   color=EMBED_COLOR_SUCCESS),
+                ephemeral=True)
 
     # ===== /tct_now command =====
     @bot.tree.command(
@@ -927,143 +1010,7 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
 
         await interaction.response.send_message(embed=embed)
 
-    # ===== /avail_delete command =====
-    @bot.tree.command(
-        name='avail_delete',
-        description='[Management] Delete an availability poll'
-    )
-    @app_commands.describe(
-        date='Any date within the poll to delete (DD-MM-YYYY)'
-    )
-    async def avail_delete(interaction: discord.Interaction, date: str):
-        """Delete an availability poll"""
-        if not is_management(interaction):
-            embed = create_embed(
-                title='Permission Denied',
-                description='You do not have permission to use this command.',
-                color=EMBED_COLOR_CRITICAL
-            )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-            return
-
-        poll_id = manager.find_poll_by_date(date)
-        if not poll_id:
-            embed = create_embed(
-                title='Not Found',
-                description=f'No availability poll exists for {date}.',
-                color=EMBED_COLOR_WARNING
-            )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-            return
-
-        poll = manager.polls[poll_id]
-
-        # Delete poll and data
-        del manager.polls[poll_id]
-        if poll_id in manager.data:
-            del manager.data[poll_id]
-
-        await manager.save_polls()
-        await manager.save_data()
-
-        embed = create_embed(
-            title='✅ Poll Deleted',
-            description=f"Availability poll for {poll['start_date']} to {poll['end_date']} has been deleted.",
-            color=EMBED_COLOR_SUCCESS
-        )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    # ===== /my_availability command =====
-    @bot.tree.command(
-        name='my_availability',
-        description='View your availability selections for a poll'
-    )
-    @app_commands.describe(
-        date='Any date within the poll (DD-MM-YYYY)'
-    )
-    async def my_availability(interaction: discord.Interaction, date: str):
-        """View your own availability selections"""
-        poll_id = manager.find_poll_by_date(date)
-
-        if not poll_id:
-            embed = create_embed(
-                title='No Poll Found',
-                description=f'No availability poll exists for {date}.',
-                color=EMBED_COLOR_WARNING
-            )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-            return
-
-        poll = manager.get_poll(poll_id)
-        selections = manager.get_user_selections(poll_id, interaction.user.id)
-        blocks = poll['blocks']
-
-        if not selections:
-            embed = create_embed(
-                title='Your Availability',
-                description=f"You have not selected any time blocks for {poll['start_date']} to {poll['end_date']}.",
-                color=EMBED_COLOR_INFO
-            )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-            return
-
-        # Build selection list
-        selected_blocks = []
-        for block in blocks:
-            if block['id'] in selections:
-                selected_blocks.append(
-                    f"✅ **{block['label']}**: {block['date']} <t:{block['start_unix']}:t> "
-                    f"({block['start_time']}–{block['end_time']} TCT)"
-                )
-
-        if poll['start_date'] == poll['end_date']:
-            title = f"Your Availability – {poll['start_date']}"
-        else:
-            title = f"Your Availability – {poll['start_date']} to {poll['end_date']}"
-
-        embed = create_embed(
-            title=title,
-            description='\n'.join(selected_blocks),
-            color=EMBED_COLOR_SUCCESS
-        )
-        embed.set_footer(text=f"You've selected {len(selections)} time block(s)")
-
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    # ===== /avail_list command =====
-    @bot.tree.command(
-        name='avail_list',
-        description='List all active availability polls'
-    )
-    async def avail_list(interaction: discord.Interaction):
-        """List all active polls"""
-        if not manager.polls:
-            embed = create_embed(
-                title='No Active Polls',
-                description='There are no availability polls currently active.',
-                color=EMBED_COLOR_INFO
-            )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-            return
-
-        poll_list = []
-        for poll_id, poll in manager.polls.items():
-            total_votes = sum(len(users) for users in manager.data.get(poll_id, {}).values())
-            if poll['start_date'] == poll['end_date']:
-                poll_list.append(f"• **{poll['start_date']}** – {len(poll['blocks'])} blocks, {total_votes} votes")
-            else:
-                poll_list.append(f"• **{poll['start_date']} to {poll['end_date']}** – {len(poll['blocks'])} blocks, {total_votes} votes")
-
-        embed = create_embed(
-            title='📊 Active Availability Polls',
-            description='\n'.join(poll_list),
-            color=EMBED_COLOR_INFO
-        )
-        embed.set_footer(text="Use /avail_summary <date> to see details")
-
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    print('Availability commands registered (/avail_setup, /avail_summary, /avail_delete, /avail_list, /my_availability, /tct_now)')
+    print('Availability commands registered (/avail, /tct_now)')
 
 
 async def restore_availability_views(bot, manager: AvailabilityManager, verified_role_name: str):

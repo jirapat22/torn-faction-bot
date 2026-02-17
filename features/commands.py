@@ -199,140 +199,126 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
     # Note: /whois command moved to features/verification.py
     # Note: /registered command removed - use /verify stats instead
 
-    # ===== CHAIN COMMANDS (Phase 3) =====
+    # ===== CHAIN COMMAND (Phase 3) =====
 
     if chain_tracker:
-        @bot.tree.command(name='chain', description='Show current faction chain status')
-        async def chain(interaction: discord.Interaction):
-            """Show current chain status"""
-            await interaction.response.defer()
+        @bot.tree.command(name='chain', description='Chain status, report, or participation board')
+        @app_commands.describe(view='What to show (default: current status)')
+        @app_commands.choices(view=[
+            app_commands.Choice(name='Status - Current chain info', value='status'),
+            app_commands.Choice(name='Report - Last chain top contributors', value='report'),
+            app_commands.Choice(name='Board - Full participation board (Management)', value='board'),
+        ])
+        async def chain(interaction: discord.Interaction, view: app_commands.Choice[str] = None):
+            """Unified chain command with multiple views"""
+            view_value = view.value if view else 'status'
 
-            # Get current chain data
-            chain_data = await chain_tracker.get_current_chain()
-
-            # Create and send embed
-            embed = await chain_tracker.format_chain_embed(chain_data)
-            await interaction.followup.send(embed=embed)
-
-        @bot.tree.command(name='chainreport', description='Show last completed chain report')
-        async def chainreport(interaction: discord.Interaction):
-            """Show last chain report with top contributors"""
-            await interaction.response.defer()
-
-            # Get chain report data
-            report_data = await chain_tracker.get_chain_report()
-
-            # Create and send embed
-            embed = await chain_tracker.format_chainreport_embed(report_data)
-            await interaction.followup.send(embed=embed)
-
-        @bot.tree.command(
-            name='chainboard',
-            description='[Management] Show full chain participation board'
-        )
-        async def chainboard(interaction: discord.Interaction):
-            """Show full chain participation for all members"""
-            if not is_management(interaction):
-                embed = create_embed(
-                    title='Permission Denied',
-                    description='You need Management permissions.',
-                    color=EMBED_COLOR_CRITICAL
-                )
+            # Board view requires management
+            if view_value == 'board' and not is_management(interaction):
                 await interaction.response.send_message(
-                    embed=embed, ephemeral=True
+                    embed=create_embed(
+                        title='Permission Denied',
+                        description='You need Management permissions to view the chain board.',
+                        color=EMBED_COLOR_CRITICAL
+                    ),
+                    ephemeral=True
                 )
                 return
 
             await interaction.response.defer()
-            aggregated = await chain_tracker.get_aggregated_chain_data()
-            embeds = await chain_tracker.format_chainboard_embeds(aggregated)
 
-            if isinstance(embeds, list):
-                for e in embeds:
-                    await interaction.followup.send(embed=e)
-            else:
-                await interaction.followup.send(embed=embeds)
+            if view_value == 'report':
+                report_data = await chain_tracker.get_chain_report()
+                embed = await chain_tracker.format_chainreport_embed(report_data)
+                await interaction.followup.send(embed=embed)
 
-    # ===== WAR COMMANDS (Phase 4) =====
+            elif view_value == 'board':
+                aggregated = await chain_tracker.get_aggregated_chain_data()
+                embeds = await chain_tracker.format_chainboard_embeds(aggregated)
+                if isinstance(embeds, list):
+                    for e in embeds:
+                        await interaction.followup.send(embed=e)
+                else:
+                    await interaction.followup.send(embed=embeds)
+
+            else:  # status (default)
+                chain_data = await chain_tracker.get_current_chain()
+                embed = await chain_tracker.format_chain_embed(chain_data)
+                await interaction.followup.send(embed=embed)
+
+    # ===== WAR COMMAND (Phase 4) =====
 
     if war_tracker:
-        @bot.tree.command(name='war', description='Show current faction war status')
-        async def war(interaction: discord.Interaction):
-            """Show current war status"""
-            await interaction.response.defer()
-
-            # Get current war data
-            war_info = await war_tracker.get_current_war()
-
-            # Create and send embed
-            embed = await war_tracker.format_war_embed(war_info)
-            await interaction.followup.send(embed=embed)
-
-        @bot.tree.command(name='warboard', description='Show war participation leaderboard (Management only)')
-        @app_commands.describe(view='View type: leave empty for stats, "xan" for Xanax calculation')
+        @bot.tree.command(name='war', description='War status, board, xan calc, or history')
+        @app_commands.describe(
+            view='What to show (default: current status)',
+            member='For History view: check a specific member\'s war history'
+        )
         @app_commands.choices(view=[
-            app_commands.Choice(name='Stats', value='stats'),
-            app_commands.Choice(name='Xan', value='xan'),
+            app_commands.Choice(name='Status - Current war info', value='status'),
+            app_commands.Choice(name='Board - War participation leaderboard (Management)', value='board'),
+            app_commands.Choice(name='Xan - Xanax calculation (Management)', value='xan'),
+            app_commands.Choice(name='History - War performance across wars (Management)', value='history'),
         ])
-        async def warboard(interaction: discord.Interaction, view: app_commands.Choice[str] = None):
-            """Show war participation leaderboard - management only"""
-            # Check management permissions
-            if not is_management(interaction):
+        async def war(interaction: discord.Interaction, view: app_commands.Choice[str] = None, member: discord.Member = None):
+            """Unified war command with multiple views"""
+            view_value = view.value if view else 'status'
+
+            # Board, xan, and history views require management
+            if view_value in ('board', 'xan', 'history') and not is_management(interaction):
                 await interaction.response.send_message(
-                    'You need Management permissions to use this command.',
+                    embed=create_embed(
+                        title='Permission Denied',
+                        description='You need Management permissions for this view.',
+                        color=EMBED_COLOR_CRITICAL
+                    ),
                     ephemeral=True
                 )
                 return
 
             await interaction.response.defer()
 
-            # Get latest war data (active or most recent completed)
-            war_info = await war_tracker.get_latest_war()
-
-            # Choose view based on parameter
-            if view and view.value == 'xan':
-                embeds = await war_tracker.format_xan_embed(war_info)
-            else:
+            if view_value == 'board':
+                war_info = await war_tracker.get_latest_war()
                 embeds = await war_tracker.format_warboard_embed(war_info)
+                if isinstance(embeds, list):
+                    for embed in embeds:
+                        await interaction.followup.send(embed=embed)
+                else:
+                    await interaction.followup.send(embed=embeds)
 
-            if isinstance(embeds, list):
-                for embed in embeds:
-                    await interaction.followup.send(embed=embed)
-            else:
-                await interaction.followup.send(embed=embeds)
+            elif view_value == 'xan':
+                war_info = await war_tracker.get_latest_war()
+                embeds = await war_tracker.format_xan_embed(war_info)
+                if isinstance(embeds, list):
+                    for embed in embeds:
+                        await interaction.followup.send(embed=embed)
+                else:
+                    await interaction.followup.send(embed=embeds)
 
-        @bot.tree.command(name='warstats', description='[Management] Show war performance history across wars')
-        @app_commands.describe(member='Optional: check a specific member\'s war history')
-        async def warstats(interaction: discord.Interaction, member: discord.Member = None):
-            """Show war stats history - management only"""
-            if not is_management(interaction):
-                await interaction.response.send_message(
-                    'You need Management permissions to use this command.',
-                    ephemeral=True
-                )
-                return
+            elif view_value == 'history':
+                if member:
+                    torn_id = inactivity_tracker.get_torn_id(member.id) if inactivity_tracker else None
+                    if not torn_id:
+                        await interaction.followup.send(embed=create_embed(
+                            title='Member Not Found',
+                            description=f'{member.mention} is not registered. They need to `/register` first.',
+                            color=EMBED_COLOR_WARNING
+                        ))
+                        return
+                    embed = await war_tracker.format_warstats_member_embed(torn_id, member.display_name)
+                else:
+                    embed = await war_tracker.format_warstats_overview_embed()
+                await interaction.followup.send(embed=embed)
 
-            await interaction.response.defer()
+            else:  # status (default)
+                war_info = await war_tracker.get_current_war()
+                embed = await war_tracker.format_war_embed(war_info)
+                await interaction.followup.send(embed=embed)
 
-            if member:
-                # Look up Torn ID for the specified member
-                torn_id = inactivity_tracker.get_torn_id(member.id) if inactivity_tracker else None
-                if not torn_id:
-                    await interaction.followup.send(embed=create_embed(
-                        title='Member Not Found',
-                        description=f'{member.mention} is not registered. They need to `/register` first.',
-                        color=EMBED_COLOR_WARNING
-                    ))
-                    return
-                embed = await war_tracker.format_warstats_member_embed(torn_id, member.display_name)
-            else:
-                embed = await war_tracker.format_warstats_overview_embed()
-
-            await interaction.followup.send(embed=embed)
-
-        print('War commands registered (/war, /warboard, /warstats)')
+        print('War command registered (/war with status/board/xan/history views)')
     else:
-        print('WARNING: war_tracker is None, war commands NOT registered')
+        print('WARNING: war_tracker is None, war command NOT registered')
 
     # ===== MANAGEMENT COMMANDS (Phase 5) =====
 

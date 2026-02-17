@@ -30,29 +30,28 @@ Unlink your Torn ID from Discord.
 
 ---
 
-## Chain Commands (Everyone)
+## Chain Command
 
-### `/chain`
-Show current faction chain status.
-- Current hit count, timeout, respect modifier
-
-### `/chainreport`
-Show last completed chain report.
-- Top contributors, total hits, respect earned
-
-### `/chainboard`
-Full chain participation board. *(Management only)*
-- Shows ALL faction members ranked by respect earned
-- Includes members with 0 hits for accountability
-- Monospace table with rank, name, hits, and respect columns
+### `/chain [view]`
+All chain info in one command.
+- **Status** (default) — Current chain status: hit count, timeout, respect modifier
+- **Report** — Last completed chain top contributors, total hits, respect earned
+- **Board** — Full participation board with ALL members ranked *(Management only)*
+  - Aggregates all chains in the last 24 hours
+  - Includes members with 0 hits for accountability
 
 ---
 
-## War Commands (Everyone)
+## War Command
 
-### `/war`
-Show current ranked war status.
-- Score, enemy faction, time remaining
+### `/war [view] [member]`
+All war info in one command.
+- **Status** (default) — Current ranked war status: score, enemy, time remaining
+- **Board** — War participation leaderboard *(Management only)*
+- **Xan** — Xanax reimbursement calculation *(Management only)*
+- **History** — War performance across multiple wars *(Management only)*
+  - No member: last 5 wars overview, top/bottom performers
+  - With member: that member's last 5 war records
 
 ### `/enemy list`
 View all tracked enemies with their status.
@@ -88,34 +87,18 @@ Manage verification settings.
 - `stats` - View verification statistics
 
 ### `/rolesync <action>`
-Configure automatic role sync with Torn positions.
+Configure automatic role sync with Torn positions. Supports **multiple Discord roles per position** (e.g., "Warlord Of Pinheads" → @Management + @Pinheads).
 - `status` - View current mappings
-- `setrole` - Map Torn position to Discord role
-- `remove` - Remove a position mapping
+- `setrole` - Add a Discord role to a Torn position (additive — run multiple times for multiple roles)
+- `remove` - Remove a specific role from a position (provide role), or remove all mappings for a position
 - `sync` - Force sync all members now
 - `toggle` - Enable/disable auto sync
 
-### `/warboard [view]`
-Full war participation report. *(Management only)*
-- Works during active war AND after war ends (data persists until next war starts)
-- **Stats** view (default):
-  - **War** — Hits on the war opponent
-  - **Out** — Hits on non-war targets
-  - **WHt** — Times hit by war opponent (incoming)
-  - **OHt** — Times hit by outsiders (incoming)
-  - Summary: total attacks, outside hits, incoming breakdown, participation count
-- **Xan** view (`/warboard view:Xan`):
-  - **War** — War hits (for xanax reimbursement)
-  - **Chn** — Chain outside hits (hits during faction chains of 10+ on non-war targets)
-  - **Tot** — Total reimbursable hits (War + Chn)
-  - Only shows members with hits
-
-### `/warstats [member]`
-War performance history across multiple wars. *(Management only)*
-- No member: shows last 5 wars overview, top 5 and bottom 5 performers by avg score
-- With member: shows that member's last 5 war records with attacks, defends, score
-- Data saved automatically when each war ends (keeps last 10 wars)
-- Bottom performers require 2+ wars played to appear
+### `/war board` / `/war xan` / `/war history`
+War management views (see War Command above).
+- **Board** — Stats: War hits, Out hits, incoming WHt/OHt, participation count
+- **Xan** — Reimbursement: War hits + Chain outside hits = Total reimbursable
+- **History** — Performance across last 5-10 wars, top/bottom performers
 
 ### `/enemy <action>`
 Manage enemy watchlist during war.
@@ -154,37 +137,23 @@ Track ally faction wars and get announcements.
 
 ---
 
-## Availability Commands
+## Availability Command
 
-### `/avail_setup <start_date> <start_time> <end_time> [end_date] [block_length] [poll_duration]`
-Create an availability poll for war/chain planning. *(Requires Management role)*
-- **start_date**: Start date in DD-MM-YYYY format
-- **start_time**: Start time in TCT/UTC (HH:MM, e.g. 00:00)
-- **end_time**: End time in TCT/UTC (HH:MM, e.g. 24:00)
-- **end_date**: Optional end date for multi-day events (DD-MM-YYYY)
-- **block_length**: Hours per time block (1-6, default: 2)
-- **poll_duration**: Hours until poll auto-closes (default: 24)
-- Creates buttons for each time block (labeled A-X)
-- Members click buttons to toggle availability *(Requires Verified role)*
-- Shows both TCT and local time, event countdown, and poll close countdown
-- Auto-posts results (bar chart + member grid + best window) when poll closes
-
-### `/avail_summary <date>`
-View availability results with bar chart and member grid.
-- **date**: Any date within the poll range (DD-MM-YYYY)
-- Shows bar chart (availability by time slot) + member grid (who's available where)
-- Highlights best time windows with most members available
-
-### `/avail_delete <date>`
-Delete an availability poll. *(Requires Management role)*
-- **date**: Any date within the poll to delete (DD-MM-YYYY)
-
-### `/avail_list`
-List all active availability polls.
-
-### `/my_availability <date>`
-Check your own availability selections for a poll.
-- **date**: Any date within the poll (DD-MM-YYYY)
+### `/avail [action] [date] [start_time] [end_time] [end_date] [block_length] [poll_duration]`
+All availability polling in one command.
+- **Setup** — Create a poll *(Management only)*
+  - Requires: `date` (start date), `start_time`, `end_time`
+  - Optional: `end_date` (multi-day), `block_length` (1-6h, default 2), `poll_duration` (default 24h)
+  - Creates buttons for each time block (labeled A-X)
+  - Members click buttons to toggle availability *(Requires Verified role)*
+  - Auto-posts results when poll closes
+- **Summary** — View poll results with bar chart + member grid
+  - Requires: `date` (any date within the poll)
+- **Mine** — Check your own selections
+  - Requires: `date`
+- **List** — Show all active polls
+- **Delete** — Remove a poll *(Management only)*
+  - Requires: `date`
 
 ### `/tct_now`
 Show the current Torn City Time (UTC).
@@ -271,11 +240,10 @@ Show the current Torn City Time (UTC).
 | Command | Who Can Use | Purpose |
 |---------|-------------|---------|
 | `/register` | Everyone | Link Torn account |
-| `/chain` | Everyone | Check chain status |
-| `/war` | Everyone | Check war status |
-| `/warboard` | Management | War participation report (Stats/Xan views) |
-| `/warstats` | Management | War performance history across wars |
-| `/chainboard` | Management | Full chain participation board |
+| `/chain` | Everyone | Chain status / report / board |
+| `/chain board` | Management | Full chain participation board |
+| `/war` | Everyone | War status / board / xan / history |
+| `/war board/xan/history` | Management | War leaderboard, xan calc, history |
 | `/enemy list` | Everyone | View enemy watchlist |
 | `/announce` | Management | Post announcements |
 | `/verify` | Management | Manage verification |
@@ -288,12 +256,13 @@ Show the current Torn City Time (UTC).
 | `/alliance setchannel` | Management | Set announcement channel |
 | `/alliance list` | Everyone | View ally war status |
 | `/alliance check` | Management | Force check ally wars |
-| `/avail_setup` | Management | Create availability poll |
-| `/avail_summary` | Everyone | View availability timetable |
+| `/avail setup` | Management | Create availability poll |
+| `/avail summary/mine/list` | Everyone | View poll results / your picks / list polls |
+| `/avail delete` | Management | Delete a poll |
 | `/tct_now` | Everyone | Show current TCT time |
 | `/test_inactivity` | Management | Manually run inactivity check |
 
 ---
 
-*Last updated: February 14, 2026*
+*Last updated: February 16, 2026*
 *Bot by Ascended Punks*

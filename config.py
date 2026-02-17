@@ -51,7 +51,6 @@ else:
 
 # Role IDs for pinging on specific events
 MANAGEMENT_PING_ROLE_ID = int(os.getenv("MANAGEMENT_PING_ROLE_ID", "0"))  # Ping for inactivity/war
-CHAINWATCHER_ROLE_ID = int(os.getenv("CHAINWATCHER_ROLE_ID", "0"))  # Ping for chain updates
 
 # Inactivity thresholds (in days)
 INACTIVITY_WARNING_DAYS = int(os.getenv("INACTIVITY_WARNING_DAYS", "3"))
