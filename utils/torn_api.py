@@ -306,3 +306,63 @@ async def fetch_player_data(torn_id, selections='profile', use_personal_key=True
     )
 
     return data
+
+
+async def fetch_ffscouter_stats(torn_ids: list) -> dict:
+    """
+    Fetch estimated battle stats for a list of Torn player IDs from FFScouter.
+
+    Args:
+        torn_ids: List of Torn player IDs (integers or strings). Max 205 per call.
+
+    Returns:
+        Dict of {torn_id_str: {'bs_estimate': int, 'bs_estimate_human': str,
+                               'fair_fight': float, 'last_updated': int}}
+        Empty dict if FFScouter key not configured or request fails.
+    """
+    from config import FFSCOUTER_API_KEY
+    if not FFSCOUTER_API_KEY:
+        print('FFScouter: FFSCOUTER_API_KEY not set — skipping stat lookup')
+        return {}
+
+    if not torn_ids:
+        return {}
+
+    # Cap at 205 per request (API limit)
+    targets = ','.join(str(tid) for tid in torn_ids[:205])
+
+    try:
+        session = await _get_session()
+        url = 'https://ffscouter.com/api/v1/get-stats'
+        params = {'key': FFSCOUTER_API_KEY, 'targets': targets}
+
+        async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=15)) as response:
+            if response.status != 200:
+                print(f'FFScouter API error: HTTP {response.status}')
+                return {}
+
+            data = await response.json()
+
+            # Handle error responses
+            if isinstance(data, dict) and 'error' in data:
+                print(f'FFScouter error: {data["error"]}')
+                return {}
+
+            # Normalise to {torn_id_str: player_obj}
+            result = {}
+            players = data if isinstance(data, list) else data.get('data', data.get('players', []))
+            if isinstance(players, list):
+                for p in players:
+                    pid = str(p.get('player_id', ''))
+                    if pid:
+                        result[pid] = p
+            elif isinstance(players, dict):
+                for pid, p in players.items():
+                    result[str(pid)] = p
+
+            print(f'FFScouter: fetched stats for {len(result)}/{len(torn_ids)} players')
+            return result
+
+    except Exception as e:
+        print(f'FFScouter request failed: {e}')
+        return {}

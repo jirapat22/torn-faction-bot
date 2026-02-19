@@ -10,7 +10,7 @@ Features:
 import discord
 from discord import app_commands
 from utils.helpers import create_embed, is_management
-from utils.torn_api import fetch_faction_data, fetch_any_faction_data
+from utils.torn_api import fetch_faction_data, fetch_any_faction_data, fetch_ffscouter_stats
 from config import (
     TORN_FACTION_ID,
     EMBED_COLOR_INFO,
@@ -76,6 +76,68 @@ def _level_buckets(members: dict) -> dict:
         else:
             buckets['100+'] += 1
     return buckets
+
+
+def _format_bs(n) -> str:
+    """Format battle stat number into human-readable form (e.g. 2,990,000,000 → 2.99b)"""
+    try:
+        n = int(n)
+        if n >= 1_000_000_000:
+            return f'{n / 1_000_000_000:.2f}b'
+        if n >= 1_000_000:
+            return f'{n / 1_000_000:.1f}m'
+        if n >= 1_000:
+            return f'{n / 1_000:.1f}k'
+        return str(n)
+    except (TypeError, ValueError):
+        return 'N/A'
+
+
+def _stat_tier(bs: int) -> str:
+    """Return tier label for a battle stat estimate"""
+    if bs >= 25_000_000_000:
+        return 'Elite  (25b+)'
+    if bs >= 5_000_000_000:
+        return 'V.Strong(5b+)'
+    if bs >= 1_000_000_000:
+        return 'Strong  (1b+)'
+    if bs >= 100_000_000:
+        return 'Moderate(100m+)'
+    return 'Developing   '
+
+
+def _bs_summary(ff_data: dict, member_ids: list) -> dict:
+    """
+    Compute battle stat summary for a set of member IDs given FFScouter data.
+
+    Returns:
+        {estimates: [ints], no_data: int, avg: float, top10_avg: float,
+         highest: int, lowest: int, tiers: {label: count}}
+    """
+    estimates = []
+    no_data = 0
+    for tid in member_ids:
+        p = ff_data.get(str(tid))
+        if p and p.get('bs_estimate'):
+            estimates.append(int(p['bs_estimate']))
+        else:
+            no_data += 1
+
+    tiers = {'Elite  (25b+)': 0, 'V.Strong(5b+)': 0,
+              'Strong  (1b+)': 0, 'Moderate(100m+)': 0, 'Developing   ': 0}
+    for bs in estimates:
+        tiers[_stat_tier(bs)] += 1
+
+    top10 = sorted(estimates, reverse=True)[:10]
+    return {
+        'estimates': estimates,
+        'no_data': no_data,
+        'avg': sum(estimates) / len(estimates) if estimates else 0,
+        'top10_avg': sum(top10) / len(top10) if top10 else 0,
+        'highest': max(estimates) if estimates else 0,
+        'lowest': min(estimates) if estimates else 0,
+        'tiers': tiers,
+    }
 
 
 def _parse_rankedwars(rankedwars: dict, faction_id: int) -> list:
@@ -275,109 +337,157 @@ async def setup_faction_commands(bot):
             own_best_chain   = own_basic.get('best_chain', 0) if own_basic else 0
             enemy_best_chain = enemy_basic.get('best_chain', 0)
 
-            own_avg    = _avg_level(own_members)
-            enemy_avg  = _avg_level(enemy_members)
-            own_top10  = _top_n_avg_level(own_members, 10)
-            enemy_top10= _top_n_avg_level(enemy_members, 10)
-
             own_cnt   = len(own_members)
             enemy_cnt = len(enemy_members)
 
-            # Chain efficiency (best chain per member — higher = more active chainers)
+            own_avg     = _avg_level(own_members)
+            enemy_avg   = _avg_level(enemy_members)
+            own_top10   = _top_n_avg_level(own_members, 10)
+            enemy_top10 = _top_n_avg_level(enemy_members, 10)
+
             own_chain_eff   = own_best_chain / own_cnt if own_cnt else 0
             enemy_chain_eff = enemy_best_chain / enemy_cnt if enemy_cnt else 0
 
-            # Level buckets
             own_b   = _level_buckets(own_members)
             enemy_b = _level_buckets(enemy_members)
 
+            # ── FFScouter battle stat lookup ──
+            from config import FFSCOUTER_API_KEY
+            all_ids = list(own_members.keys()) + list(enemy_members.keys())
+            ff_data = await fetch_ffscouter_stats(all_ids) if FFSCOUTER_API_KEY else {}
+
+            own_bs   = _bs_summary(ff_data, list(own_members.keys()))
+            enemy_bs = _bs_summary(ff_data, list(enemy_members.keys()))
+            has_ff   = bool(ff_data)
+
+            # ── Level bucket table ──
             COL = 8
             def brow(label, a, b):
-                return f'{label:<10} {str(a):>{COL}} {str(b):>{COL}}'
+                return f'{label:<14} {str(a):>{COL}} {str(b):>{COL}}'
 
-            bucket_header  = f'{"Level":<10} {own_label[:COL]:>{COL}} {enemy_label[:COL]:>{COL}}'
-            bucket_divider = '─' * len(bucket_header)
+            bl = '─' * (14 + COL * 2 + 2)
             bucket_table = '\n'.join([
-                bucket_header, bucket_divider,
+                f'{"Level":<14} {own_label[:COL]:>{COL}} {enemy_label[:COL]:>{COL}}', bl,
                 brow('Lvl 1-25',   own_b['1-25'],   enemy_b['1-25']),
                 brow('Lvl 26-50',  own_b['26-50'],  enemy_b['26-50']),
                 brow('Lvl 51-75',  own_b['51-75'],  enemy_b['51-75']),
                 brow('Lvl 76-100', own_b['76-100'], enemy_b['76-100']),
                 brow('Lvl 100+',   own_b['100+'],   enemy_b['100+']),
-                bucket_divider,
+                bl,
                 brow('Total',      own_cnt,          enemy_cnt),
             ])
 
+            # ── Stat summary table (FFScouter or level-only) ──
             COL2 = 14
             def srow(label, a, b):
                 return f'{label:<14} {str(a):<{COL2}} {str(b)}'
+            sl = '─' * (14 + COL2 * 2 + 2)
+            sh = f'{"":14} {own_label:<{COL2}} {enemy_label}'
 
-            stats_header  = f'{"":14} {own_label:<{COL2}} {enemy_label}'
-            stats_divider = '─' * max(len(stats_header), 40)
-            stats_table = '\n'.join([
-                stats_header, stats_divider,
-                srow('Avg Level',    f'{own_avg:.1f}',       f'{enemy_avg:.1f}'),
-                srow('Top 10 Avg',   f'{own_top10:.1f}',     f'{enemy_top10:.1f}'),
-                srow('Best Chain',   _format_number(own_best_chain), _format_number(enemy_best_chain)),
-                srow('Chain/Member', f'{own_chain_eff:.1f}', f'{enemy_chain_eff:.1f}'),
-            ])
+            if has_ff:
+                stat_rows = [
+                    sh, sl,
+                    srow('Avg Stats',   _format_bs(own_bs['avg']),       _format_bs(enemy_bs['avg'])),
+                    srow('Top 10 Avg',  _format_bs(own_bs['top10_avg']), _format_bs(enemy_bs['top10_avg'])),
+                    srow('Highest',     _format_bs(own_bs['highest']),   _format_bs(enemy_bs['highest'])),
+                    srow('Lowest',      _format_bs(own_bs['lowest']),    _format_bs(enemy_bs['lowest'])),
+                    srow('No FF data',  own_bs['no_data'],               enemy_bs['no_data']),
+                    sl,
+                    srow('Avg Level',   f'{own_avg:.1f}',                f'{enemy_avg:.1f}'),
+                    srow('Best Chain',  _format_number(own_best_chain),  _format_number(enemy_best_chain)),
+                ]
+
+                # Tier distribution
+                tier_rows = [f'{"Tier":<16} {own_label[:COL]:>{COL}} {enemy_label[:COL]:>{COL}}', bl]
+                for tier in ['Elite  (25b+)', 'V.Strong(5b+)', 'Strong  (1b+)', 'Moderate(100m+)', 'Developing   ']:
+                    o = own_bs['tiers'].get(tier, 0)
+                    e = enemy_bs['tiers'].get(tier, 0)
+                    if o or e:
+                        tier_rows.append(brow(tier, o, e))
+                tier_table = '\n'.join(tier_rows)
+            else:
+                stat_rows = [
+                    sh, sl,
+                    srow('Avg Level',   f'{own_avg:.1f}',               f'{enemy_avg:.1f}'),
+                    srow('Top 10 Avg',  f'{own_top10:.1f}',             f'{enemy_top10:.1f}'),
+                    srow('Best Chain',  _format_number(own_best_chain), _format_number(enemy_best_chain)),
+                    srow('Chain/Mbr',   f'{own_chain_eff:.1f}',         f'{enemy_chain_eff:.1f}'),
+                ]
+                tier_table = None
+
+            stats_table = '\n'.join(stat_rows)
 
             # ── Insights ──
             insights = []
 
-            # Overall level advantage
-            if own_avg > enemy_avg + 2:
-                insights.append(f'✅ **Level edge:** Your avg level ({own_avg:.1f}) is notably higher — expect an overall stat advantage.')
-            elif enemy_avg > own_avg + 2:
-                insights.append(f'⚠️ **Level gap:** Their avg level ({enemy_avg:.1f}) is higher — their members likely have stronger battle stats.')
+            if has_ff and own_bs['estimates'] and enemy_bs['estimates']:
+                own_power   = own_bs['top10_avg']
+                enemy_power = enemy_bs['top10_avg']
+                ratio = own_power / enemy_power if enemy_power else 1.0
+
+                if ratio >= 1.3:
+                    insights.append(f'✅ **Strong stat advantage:** Your top fighters avg {_format_bs(own_power)} vs their {_format_bs(enemy_power)} — expect to win most 1v1s.')
+                elif ratio <= 0.77:
+                    insights.append(f'⚠️ **Stat disadvantage:** Their top fighters avg {_format_bs(enemy_power)} vs yours {_format_bs(own_power)} — avoid extended 1v1 duels. Hit fast, hospital quickly.')
+                else:
+                    insights.append(f'⚖️ **Evenly matched:** Top fighter stats are close ({_format_bs(own_power)} vs {_format_bs(enemy_power)}) — activity and timing will decide the war.')
+
+                # Soft targets
+                enemy_dev = enemy_bs['tiers'].get('Developing   ', 0) + enemy_bs['tiers'].get('Moderate(100m+)', 0)
+                if enemy_dev > 0:
+                    insights.append(f'🎯 **Soft targets:** {enemy_dev} of their members are Developing/Moderate — prioritise these for easy score hits.')
+
+                own_dev = own_bs['tiers'].get('Developing   ', 0) + own_bs['tiers'].get('Moderate(100m+)', 0)
+                if own_dev > 0:
+                    insights.append(f'🛡️ **Protect your weaker members:** {own_dev} of your members are lower stat — they are easy targets. Keep them hospitalised or travelling during war.')
+
+                if own_bs['no_data'] > 3:
+                    insights.append(f'ℹ️ **{own_bs["no_data"]} of your members** have no FFScouter data — their stats are unknown. Encourage them to use FFScouter.')
+                if enemy_bs['no_data'] > 3:
+                    insights.append(f'ℹ️ **{enemy_bs["no_data"]} of their members** have no FFScouter data — hidden unknowns. Treat them cautiously.')
             else:
-                insights.append(f'⚖️ **Evenly matched** on average level ({own_avg:.1f} vs {enemy_avg:.1f}).')
+                # Level-based fallback insights
+                if own_avg > enemy_avg + 2:
+                    insights.append(f'✅ **Level edge:** Avg {own_avg:.1f} vs {enemy_avg:.1f} — expect an overall stat advantage.')
+                elif enemy_avg > own_avg + 2:
+                    insights.append(f'⚠️ **Level gap:** Their avg {enemy_avg:.1f} vs yours {own_avg:.1f} — they likely have stronger stats.')
+                else:
+                    insights.append(f'⚖️ **Level-matched** ({own_avg:.1f} vs {enemy_avg:.1f}) — war outcome will depend on training focus and activity.')
 
-            # Top fighters comparison (most relevant for war)
-            if own_top10 > enemy_top10 + 3:
-                insights.append(f'✅ **Top fighters stronger:** Your top 10 avg ({own_top10:.1f}) outclasses theirs ({enemy_top10:.1f}) — good for carrying war hits.')
-            elif enemy_top10 > own_top10 + 3:
-                insights.append(f'⚠️ **Their top fighters:** Top 10 avg ({enemy_top10:.1f} vs yours {own_top10:.1f}) — their core fighters may be harder to beat.')
-            else:
-                insights.append(f'⚖️ **Top fighters comparable** ({own_top10:.1f} vs {enemy_top10:.1f}) — war outcome will depend on activity and strategy.')
+                enemy_low = enemy_b['1-25'] + enemy_b['26-50']
+                own_low   = own_b['1-25'] + own_b['26-50']
+                if enemy_low:
+                    insights.append(f'🎯 **Soft targets:** {enemy_low} members below level 50.')
+                if own_low:
+                    insights.append(f'🛡️ **Protect your low-levels:** {own_low} members below 50 are easy targets.')
 
-            # Low-level members (easy targets)
-            enemy_low = enemy_b['1-25'] + enemy_b['26-50']
-            own_low   = own_b['1-25'] + own_b['26-50']
-            if enemy_low > 0:
-                insights.append(f'🎯 **Soft targets:** They have {enemy_low} members below level 50 — easier hits for score.')
-            if own_low > 0:
-                insights.append(f'🛡️ **Protect your low-levels:** You have {own_low} members below 50 who may be targeted for easy score.')
+                if not FFSCOUTER_API_KEY:
+                    insights.append('📌 **Add FFScouter:** Set `FFSCOUTER_API_KEY` in your `.env` for real estimated stat data instead of level estimates.')
 
-            # Size difference
             if own_cnt > enemy_cnt + 5:
-                insights.append(f'✅ **Numbers advantage:** {own_cnt} vs {enemy_cnt} — more members means more potential hits per hour.')
+                insights.append(f'✅ **Numbers advantage:** {own_cnt} vs {enemy_cnt} members — more hits per hour possible.')
             elif enemy_cnt > own_cnt + 5:
-                insights.append(f'⚠️ **Outnumbered:** {enemy_cnt} vs {own_cnt} — they can sustain more hits per hour. Activity discipline is critical.')
+                insights.append(f'⚠️ **Outnumbered:** {enemy_cnt} vs {own_cnt} — stay disciplined, hospital their actives.')
 
-            # Chain efficiency
             if own_chain_eff > enemy_chain_eff * 1.3:
-                insights.append(f'✅ **Chain culture:** Your chain efficiency ({own_chain_eff:.1f}/member) beats theirs ({enemy_chain_eff:.1f}) — your members hit more actively.')
+                insights.append(f'✅ **More active chainers:** Your chain efficiency ({own_chain_eff:.1f}/mbr) beats theirs ({enemy_chain_eff:.1f}).')
             elif enemy_chain_eff > own_chain_eff * 1.3:
-                insights.append(f'⚠️ **They chain more:** Their chain efficiency ({enemy_chain_eff:.1f}/member) vs yours ({own_chain_eff:.1f}) — they may be more active in war hits too.')
-
-            # Battle stat note
-            insights.append(
-                '📌 **Note:** Actual battle stats (Str/Spd/Def/Dex) are private. '
-                'Level is the best public proxy — higher level generally means stronger stats, '
-                'but gym training focus matters a lot at equal levels.'
-            )
+                insights.append(f'⚠️ **They chain harder:** Their efficiency ({enemy_chain_eff:.1f}/mbr) vs yours ({own_chain_eff:.1f}) — expect sustained pressure.')
 
             insights_text = '\n'.join(insights)
 
+            ff_note = '*(Stats via FFScouter — estimates only)*' if has_ff else '*(Add `FFSCOUTER_API_KEY` for real stat estimates)*'
+            desc = (
+                f'**Level Distribution:**\n```\n{bucket_table}\n```\n'
+                f'**Battle Stats:** {ff_note}\n```\n{stats_table}\n```\n'
+            )
+            if tier_table:
+                desc += f'**Stat Tiers:**\n```\n{tier_table}\n```\n'
+            desc += f'**Insights:**\n{insights_text}\n\n[View {enemy_name} on Torn]({torn_link})'
+
             embed = create_embed(
-                title=f'Battle Strength Analysis',
-                description=(
-                    f'**Level Distribution:**\n```\n{bucket_table}\n```\n'
-                    f'**Power Indicators:**\n```\n{stats_table}\n```\n'
-                    f'**Insights:**\n{insights_text}\n\n'
-                    f'[View {enemy_name} on Torn]({torn_link})'
-                ),
+                title='Battle Strength Analysis',
+                description=desc,
                 color=EMBED_COLOR_SUCCESS
             )
             await interaction.followup.send(embed=embed)

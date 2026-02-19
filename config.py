@@ -38,6 +38,11 @@ TORN_API_KEY = os.getenv("TORN_API_KEY")  # Faction API key for faction data
 TORN_PERSONAL_API_KEY = os.getenv("TORN_PERSONAL_API_KEY")  # Personal API key for user lookups (stakeout)
 TORN_FACTION_ID = int(os.getenv("TORN_FACTION_ID", "0"))
 
+# ===== FFSCOUTER SETTINGS =====
+# Get a free API key at: https://ffscouter.com
+# Used for estimated battle stat lookups in /faction stats
+FFSCOUTER_API_KEY = os.getenv("FFSCOUTER_API_KEY", "")
+
 # ===== BOT SETTINGS =====
 COMMAND_PREFIX = os.getenv("COMMAND_PREFIX", "!")
 
