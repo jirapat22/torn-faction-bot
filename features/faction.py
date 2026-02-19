@@ -201,28 +201,59 @@ def _record_line(results: list) -> str:
     return f'{" ".join(results)}  ({wins}W {losses}L {draws}D)'
 
 
-def _danger_label(bs: int) -> str:
-    if bs >= 5_000_000_000:
-        return ' ◀ AVOID'
-    if bs >= 1_000_000_000:
-        return ' ◀ CAUTION'
-    return ''
-
-
 def _build_threat_embed(enemy_members, own_members, ff_data, has_ff,
                          enemy_name, enemy_tag, faction_id):
     """
     Build a per-member threat assessment embed.
-    Shows enemy members sorted by estimated stats (or level),
-    with danger labels and a soft-target section.
+    Classifies enemy members relative to OUR OWN faction stats:
+      - AVOID   : their stats > our top-3 average  (they beat our best)
+      - CAUTION : their stats > our faction average (above our average)
+      - Soft    : their stats < our faction average (we can likely beat them)
+    Falls back to level comparison when FF data is unavailable.
     """
     from config import EMBED_COLOR_CRITICAL, EMBED_COLOR_WARNING, EMBED_COLOR_INFO
 
-    label = f'[{enemy_tag}] {enemy_name}' if enemy_tag else enemy_name
+    enemy_label = f'[{enemy_tag}] {enemy_name}' if enemy_tag else enemy_name
+
+    # ── Compute OUR benchmarks ──
+    own_stats = []
+    for tid, mdata in own_members.items():
+        p = ff_data.get(str(tid))
+        if p and p.get('bs_estimate'):
+            own_stats.append(int(p['bs_estimate']))
+
+    own_stats_sorted = sorted(own_stats, reverse=True)
+    own_avg_bs   = sum(own_stats) / len(own_stats) if own_stats else 0
+    own_top3_avg = sum(own_stats_sorted[:3]) / min(3, len(own_stats_sorted)) if own_stats_sorted else 0
+
+    # Level benchmarks (fallback when no FF data)
+    own_levels = [m.get('level', 0) for m in own_members.values() if isinstance(m, dict)]
+    own_avg_lvl  = sum(own_levels) / len(own_levels) if own_levels else 0
+    own_top3_lvl = sum(sorted(own_levels, reverse=True)[:3]) / 3 if own_levels else 0
+
+    use_relative_bs = has_ff and own_avg_bs > 0
+
+    def danger_label(bs, lvl):
+        if use_relative_bs:
+            if bs >= own_top3_avg:
+                return ' ◀ AVOID'
+            if bs >= own_avg_bs:
+                return ' ◀ CAUTION'
+        else:
+            if lvl >= own_top3_lvl:
+                return ' ◀ AVOID'
+            if lvl >= own_avg_lvl:
+                return ' ◀ CAUTION'
+        return ''
+
+    def is_soft_target(bs, lvl):
+        if use_relative_bs:
+            return bs < own_avg_bs
+        return lvl < own_avg_lvl
 
     # ── Classify enemy members ──
-    known = []    # (torn_id, name, level, bs)
-    unknown = []  # (torn_id, name, level)
+    known   = []  # (tid, name, lvl, bs)
+    unknown = []  # (tid, name, lvl)
 
     for tid, mdata in enemy_members.items():
         name = mdata.get('name', f'ID:{tid}')
@@ -236,41 +267,45 @@ def _build_threat_embed(enemy_members, own_members, ff_data, has_ff,
     known.sort(key=lambda x: x[3], reverse=True)
     unknown.sort(key=lambda x: x[2], reverse=True)
 
-    # ── Enemy threat table ──
-    NW, LW, SW = 16, 4, 9  # name width, level width, stat width
+    # ── Build tables ──
+    NW, LW, SW = 16, 4, 9
     div = '─' * (4 + NW + LW + SW + 10)
     hdr = f'{"#":>3} {"Name":<{NW}} {"Lvl":>{LW}}  {"Est.Stats":>{SW}}'
 
     threat_lines = [hdr, div]
     soft_lines   = [hdr, div]
     avoid_count  = 0
+    caution_count= 0
     soft_count   = 0
 
     for i, (tid, name, lvl, bs) in enumerate(known, 1):
-        label_flag = _danger_label(bs)
-        row = f'{i:>3} {name[:NW]:<{NW}} {lvl:>{LW}}  {_format_bs(bs):>{SW}}{label_flag}'
-        if bs >= 100_000_000:   # Moderate+ → threat list
-            threat_lines.append(row)
-            if bs >= 1_000_000_000:
-                avoid_count += 1
-        else:                   # Developing → soft targets
+        flag = danger_label(bs, lvl)
+        row  = f'{i:>3} {name[:NW]:<{NW}} {lvl:>{LW}}  {_format_bs(bs):>{SW}}{flag}'
+        if is_soft_target(bs, lvl):
             soft_lines.append(row)
             soft_count += 1
+        else:
+            threat_lines.append(row)
+            if '◀ AVOID' in flag:
+                avoid_count += 1
+            elif '◀ CAUTION' in flag:
+                caution_count += 1
 
-    # Unknown stats — append to threat or soft based on level
+    # Unknown stats section (sorted by level, labelled by level benchmark)
     if unknown:
         threat_lines.append('')
-        threat_lines.append(f'  ❓ No FFScouter data (by level):')
+        threat_lines.append('  ❓ No FFScouter data (sorted by level):')
         unk_div = '─' * (4 + NW + LW + 4)
         unk_hdr = f'{"#":>3} {"Name":<{NW}} {"Lvl":>{LW}}'
         threat_lines += [unk_hdr, unk_div]
         for i, (tid, name, lvl) in enumerate(unknown, 1):
-            threat_lines.append(f'{i:>3} {name[:NW]:<{NW}} {lvl:>{LW}}')
+            flag = danger_label(0, lvl)
+            threat_lines.append(f'{i:>3} {name[:NW]:<{NW}} {lvl:>{LW}}{flag}')
 
     threat_table = '\n'.join(threat_lines)
     soft_table   = '\n'.join(soft_lines) if soft_count else None
 
-    # ── Our own top fighters (for quick reference) ──
+    # ── Our top fighters ──
     own_known = []
     for tid, mdata in own_members.items():
         name = mdata.get('name', f'ID:{tid}')
@@ -286,30 +321,48 @@ def _build_threat_embed(enemy_members, own_members, ff_data, has_ff,
         own_lines.append(f'{i:>3} {name[:NW]:<{NW}} {lvl:>{LW}}  {bs_str:>{SW}}')
     own_table = '\n'.join(own_lines)
 
-    # ── Assemble description ──
-    data_note = '*(via FFScouter)*' if has_ff else '*(sorted by level — no FFScouter data)*'
-    desc = f'**⚠️ Enemy Roster — {label}** {data_note}\n```\n{threat_table}\n```\n'
+    # ── Benchmark legend ──
+    if use_relative_bs:
+        legend = (
+            f'Thresholds based on your faction:\n'
+            f'  ◀ AVOID   = above your top-3 avg ({_format_bs(own_top3_avg)})\n'
+            f'  ◀ CAUTION = above your faction avg ({_format_bs(own_avg_bs)})\n'
+            f'  Soft      = below your faction avg'
+        )
+    else:
+        legend = (
+            f'Thresholds based on your faction (level):\n'
+            f'  ◀ AVOID   = above your top-3 avg level ({own_top3_lvl:.0f})\n'
+            f'  ◀ CAUTION = above your faction avg level ({own_avg_lvl:.0f})\n'
+            f'  Soft      = below your faction avg level'
+        )
 
+    # ── Assemble ──
+    data_note = '*(via FFScouter)*' if has_ff else '*(sorted by level — add FFSCOUTER_API_KEY for real stats)*'
+    desc = (
+        f'**⚠️ Enemy Roster — {enemy_label}** {data_note}\n'
+        f'```\n{legend}\n```\n'
+        f'```\n{threat_table}\n```\n'
+    )
     if soft_table:
-        desc += f'**🎯 Soft Targets (Developing stat range):**\n```\n{soft_table}\n```\n'
+        desc += f'**🎯 Soft Targets** *(below your faction avg — you have the stat edge)*\n```\n{soft_table}\n```\n'
 
     desc += f'**✅ Our Top Fighters:**\n```\n{own_table}\n```\n'
 
     if avoid_count:
-        desc += f'\n> **{avoid_count} member(s) marked ◀ AVOID** — do not engage without a stat advantage. Hospital them with members they can\'t beat back.'
-    if not has_ff:
-        desc += '\n> Set `FFSCOUTER_API_KEY` for real stat estimates.'
+        desc += f'\n> **{avoid_count} member(s) ◀ AVOID** — outstat your top 3. Use your strongest members to hospital them, then leave them alone.'
+    if caution_count:
+        desc += f'\n> **{caution_count} member(s) ◀ CAUTION** — above your faction average. Approach selectively.'
 
-    # Pick colour based on threat level
     if avoid_count >= 5:
         color = EMBED_COLOR_CRITICAL
-    elif avoid_count >= 2:
+    elif avoid_count >= 2 or caution_count >= 5:
         color = EMBED_COLOR_WARNING
     else:
         color = EMBED_COLOR_INFO
 
     return create_embed(
-        title=f'Threat Assessment — {label}',
+        title=f'Threat Assessment — {enemy_label}',
         description=desc,
         color=color
     )
