@@ -28,6 +28,7 @@ from features.event_reminders import EventReminderManager
 from features.stakeout import StakeoutManager, setup_stakeout_commands
 from features.alliance import AllianceManager, setup_alliance_commands
 from features.commands import setup_commands
+from features.faction import setup_faction_commands
 from utils.helpers import ensure_data_directories
 from utils.torn_api import verify_api_key
 
@@ -140,6 +141,9 @@ async def on_ready():
         alliance_manager = AllianceManager(bot)
         await alliance_manager.load_data()
         await setup_alliance_commands(bot, alliance_manager)
+
+        # Initialize faction tools
+        await setup_faction_commands(bot)
 
         # Register slash commands
         await setup_commands(bot, inactivity_tracker, chain_tracker, war_tracker, verification_system)
