@@ -201,6 +201,120 @@ def _record_line(results: list) -> str:
     return f'{" ".join(results)}  ({wins}W {losses}L {draws}D)'
 
 
+def _danger_label(bs: int) -> str:
+    if bs >= 5_000_000_000:
+        return ' ◀ AVOID'
+    if bs >= 1_000_000_000:
+        return ' ◀ CAUTION'
+    return ''
+
+
+def _build_threat_embed(enemy_members, own_members, ff_data, has_ff,
+                         enemy_name, enemy_tag, faction_id):
+    """
+    Build a per-member threat assessment embed.
+    Shows enemy members sorted by estimated stats (or level),
+    with danger labels and a soft-target section.
+    """
+    from config import EMBED_COLOR_CRITICAL, EMBED_COLOR_WARNING, EMBED_COLOR_INFO
+
+    label = f'[{enemy_tag}] {enemy_name}' if enemy_tag else enemy_name
+
+    # ── Classify enemy members ──
+    known = []    # (torn_id, name, level, bs)
+    unknown = []  # (torn_id, name, level)
+
+    for tid, mdata in enemy_members.items():
+        name = mdata.get('name', f'ID:{tid}')
+        lvl  = mdata.get('level', 0)
+        p    = ff_data.get(str(tid))
+        if p and p.get('bs_estimate'):
+            known.append((tid, name, lvl, int(p['bs_estimate'])))
+        else:
+            unknown.append((tid, name, lvl))
+
+    known.sort(key=lambda x: x[3], reverse=True)
+    unknown.sort(key=lambda x: x[2], reverse=True)
+
+    # ── Enemy threat table ──
+    NW, LW, SW = 16, 4, 9  # name width, level width, stat width
+    div = '─' * (4 + NW + LW + SW + 10)
+    hdr = f'{"#":>3} {"Name":<{NW}} {"Lvl":>{LW}}  {"Est.Stats":>{SW}}'
+
+    threat_lines = [hdr, div]
+    soft_lines   = [hdr, div]
+    avoid_count  = 0
+    soft_count   = 0
+
+    for i, (tid, name, lvl, bs) in enumerate(known, 1):
+        label_flag = _danger_label(bs)
+        row = f'{i:>3} {name[:NW]:<{NW}} {lvl:>{LW}}  {_format_bs(bs):>{SW}}{label_flag}'
+        if bs >= 100_000_000:   # Moderate+ → threat list
+            threat_lines.append(row)
+            if bs >= 1_000_000_000:
+                avoid_count += 1
+        else:                   # Developing → soft targets
+            soft_lines.append(row)
+            soft_count += 1
+
+    # Unknown stats — append to threat or soft based on level
+    if unknown:
+        threat_lines.append('')
+        threat_lines.append(f'  ❓ No FFScouter data (by level):')
+        unk_div = '─' * (4 + NW + LW + 4)
+        unk_hdr = f'{"#":>3} {"Name":<{NW}} {"Lvl":>{LW}}'
+        threat_lines += [unk_hdr, unk_div]
+        for i, (tid, name, lvl) in enumerate(unknown, 1):
+            threat_lines.append(f'{i:>3} {name[:NW]:<{NW}} {lvl:>{LW}}')
+
+    threat_table = '\n'.join(threat_lines)
+    soft_table   = '\n'.join(soft_lines) if soft_count else None
+
+    # ── Our own top fighters (for quick reference) ──
+    own_known = []
+    for tid, mdata in own_members.items():
+        name = mdata.get('name', f'ID:{tid}')
+        lvl  = mdata.get('level', 0)
+        p    = ff_data.get(str(tid))
+        bs   = int(p['bs_estimate']) if p and p.get('bs_estimate') else 0
+        own_known.append((name, lvl, bs))
+    own_known.sort(key=lambda x: x[2] if has_ff else x[1], reverse=True)
+
+    own_lines = [hdr, div]
+    for i, (name, lvl, bs) in enumerate(own_known[:10], 1):
+        bs_str = _format_bs(bs) if bs else '  unknown'
+        own_lines.append(f'{i:>3} {name[:NW]:<{NW}} {lvl:>{LW}}  {bs_str:>{SW}}')
+    own_table = '\n'.join(own_lines)
+
+    # ── Assemble description ──
+    data_note = '*(via FFScouter)*' if has_ff else '*(sorted by level — no FFScouter data)*'
+    desc = f'**⚠️ Enemy Roster — {label}** {data_note}\n```\n{threat_table}\n```\n'
+
+    if soft_table:
+        desc += f'**🎯 Soft Targets (Developing stat range):**\n```\n{soft_table}\n```\n'
+
+    desc += f'**✅ Our Top Fighters:**\n```\n{own_table}\n```\n'
+
+    if avoid_count:
+        desc += f'\n> **{avoid_count} member(s) marked ◀ AVOID** — do not engage without a stat advantage. Hospital them with members they can\'t beat back.'
+    if not has_ff:
+        desc += '\n> Set `FFSCOUTER_API_KEY` for real stat estimates.'
+
+    # Pick colour based on threat level
+    if avoid_count >= 5:
+        color = EMBED_COLOR_CRITICAL
+    elif avoid_count >= 2:
+        color = EMBED_COLOR_WARNING
+    else:
+        color = EMBED_COLOR_INFO
+
+    return create_embed(
+        title=f'Threat Assessment — {label}',
+        description=desc,
+        color=color
+    )
+
+
 async def setup_faction_commands(bot):
     """Register /faction slash commands"""
 
@@ -491,5 +605,17 @@ async def setup_faction_commands(bot):
                 color=EMBED_COLOR_SUCCESS
             )
             await interaction.followup.send(embed=embed)
+
+            # ── Threat Assessment embed ──────────────────────────────
+            threat_embed = _build_threat_embed(
+                enemy_members=enemy_members,
+                own_members=own_members,
+                ff_data=ff_data,
+                has_ff=has_ff,
+                enemy_name=enemy_name,
+                enemy_tag=enemy_tag,
+                faction_id=faction_id,
+            )
+            await interaction.followup.send(embed=threat_embed)
 
     print('Faction commands registered (/faction compare, /faction stats)')
