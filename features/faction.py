@@ -229,7 +229,7 @@ def _build_threat_embed(enemy_members, own_members, ff_data, has_ff,
     # Level benchmarks (fallback when no FF data)
     own_levels = [m.get('level', 0) for m in own_members.values() if isinstance(m, dict)]
     own_avg_lvl  = sum(own_levels) / len(own_levels) if own_levels else 0
-    own_top3_lvl = sum(sorted(own_levels, reverse=True)[:3]) / 3 if own_levels else 0
+    own_top3_lvl = sum(sorted(own_levels, reverse=True)[:3]) / min(3, len(own_levels)) if own_levels else 0
 
     use_relative_bs = has_ff and own_avg_bs > 0
 

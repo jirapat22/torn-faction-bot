@@ -35,13 +35,13 @@ class RoleSyncManager:
         }
         self.config = load_json(self.config_file, default=default_config)
         raw_roles = self.config.get('position_roles', {})
-        # Migrate old format (single int) to new format (list of ints)
+        # Migrate old format (single int/str) to new format (list of ints)
         self.position_roles = {}
         for pos, val in raw_roles.items():
             if isinstance(val, list):
-                self.position_roles[pos] = val
+                self.position_roles[pos] = [int(v) for v in val if v]
             else:
-                self.position_roles[pos] = [val]
+                self.position_roles[pos] = [int(val)]
         print(f'Loaded role sync config with {len(self.position_roles)} position mappings')
 
     async def save_config(self):

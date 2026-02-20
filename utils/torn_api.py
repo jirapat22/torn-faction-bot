@@ -353,12 +353,15 @@ async def fetch_ffscouter_stats(torn_ids: list) -> dict:
             players = data if isinstance(data, list) else data.get('data', data.get('players', []))
             if isinstance(players, list):
                 for p in players:
+                    if not isinstance(p, dict):
+                        continue
                     pid = str(p.get('player_id', ''))
                     if pid:
                         result[pid] = p
             elif isinstance(players, dict):
                 for pid, p in players.items():
-                    result[str(pid)] = p
+                    if isinstance(p, dict):
+                        result[str(pid)] = p
 
             print(f'FFScouter: fetched stats for {len(result)}/{len(torn_ids)} players')
             return result
