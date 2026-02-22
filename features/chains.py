@@ -351,10 +351,10 @@ class ChainTracker:
                 'respect': stats.get('respect', 0)
             })
 
-        # Sort members by respect (since hits might be 0)
+        # Sort members by hits, then respect as tiebreaker
         sorted_members = sorted(
             member_list,
-            key=lambda x: x['respect'],
+            key=lambda x: (x['hits'], x['respect']),
             reverse=True
         )
 
@@ -376,7 +376,7 @@ class ChainTracker:
         # Add top contributors (max 5)
         if sorted_members:
             top_contributors = '\n'.join([
-                f'{i+1}. **{m["name"]}**: {m["respect"]:.2f} respect' + (f' ({m["hits"]} hits)' if m["hits"] > 0 else '')
+                f'{i+1}. **{m["name"]}**: {m["hits"]} hits' + (f' ({m["respect"]:.2f} respect)' if m["respect"] > 0 else '')
                 for i, m in enumerate(sorted_members[:5])
             ])
             embed.add_field(
@@ -432,7 +432,7 @@ class ChainTracker:
                 'respect': chain_data.get('respect', 0.0),
             })
 
-        sorted_members = sorted(member_list, key=lambda x: x['respect'], reverse=True)
+        sorted_members = sorted(member_list, key=lambda x: (x['hits'], x['respect']), reverse=True)
 
         total_hits = sum(m['hits'] for m in member_list)
         participants = len([m for m in member_list if m['hits'] > 0])
@@ -516,6 +516,7 @@ class ChainTracker:
                 embeds.append(embed)
                 embed = create_embed(
                     title='Chain Board (continued)',
+                    description='',
                     color=EMBED_COLOR_SUCCESS
                 )
             label = f'All Members ({len(sorted_members)})' if idx == 0 else 'Members (cont.)'
