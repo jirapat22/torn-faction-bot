@@ -135,14 +135,13 @@ class InactivityTracker:
         """
         now = time.time()
 
-        # Build: last completed OC timestamp per torn_id (active/in-progress OCs are ignored)
+        # Pass 1: build active_in_oc (currently assigned to an in-progress OC)
+        # and last_completion (most recent completed OC per member)
+        active_in_oc = set()
         last_completion = {}  # {torn_id_str: float timestamp}
 
         for crime_data in crimes.values():
             time_completed = crime_data.get('time_completed', 0)
-            if not time_completed:
-                continue  # skip active/in-progress crimes
-
             participants = crime_data.get('participants', [])
 
             # participants can be a list of {torn_id: {description}} dicts
@@ -155,9 +154,13 @@ class InactivityTracker:
                     continue
                 for torn_id, _pdata in participant_obj.items():
                     tid = str(torn_id)
-                    tc = float(time_completed)
-                    if tid not in last_completion or tc > last_completion[tid]:
-                        last_completion[tid] = tc
+                    if not time_completed:
+                        # Active / in-progress crime
+                        active_in_oc.add(tid)
+                    else:
+                        tc = float(time_completed)
+                        if tid not in last_completion or tc > last_completion[tid]:
+                            last_completion[tid] = tc
 
         oc_warning = []
         oc_critical = []
@@ -168,6 +171,10 @@ class InactivityTracker:
 
             # Grace period for new members
             if days_in_faction < OC_NEW_MEMBER_GRACE_DAYS:
+                continue
+
+            # Currently in an active OC → counts as participating
+            if tid in active_in_oc:
                 continue
 
             last_oc_ts = last_completion.get(tid)
