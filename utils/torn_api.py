@@ -310,17 +310,62 @@ async def fetch_player_data(torn_id, selections='profile', use_personal_key=True
 
 async def fetch_faction_crimes():
     """
-    Fetch faction organized crimes (active and recent completed).
+    Fetch and normalize faction organized crimes.
+    Tries v2 API first (current OC2 system), falls back to v1.
 
     Returns:
-        Dict of {crime_id: crime_data} or empty dict if error.
-        Each crime_data includes: crime_name, time_completed (0 if active),
-        time_left, participants (list of {torn_id: {description}}).
+        List of normalized crime dicts:
+        - 'completed': bool
+        - 'completion_ts': float (Unix timestamp, 0 if active)
+        - 'participants': list of torn_id strings
     """
+    normalized = []
+
+    # Try v2 first (Torn OC2 system — slots-based)
+    data = await fetch_faction_data_v2('crimes')
+    if data and isinstance(data.get('crimes'), list) and data['crimes']:
+        for crime in data['crimes']:
+            if not isinstance(crime, dict):
+                continue
+            status = crime.get('status', '')
+            completed = status == 'completed'
+            completion_ts = float(crime.get('initiated_at') or 0)
+            # v2 uses 'slots' (or sometimes 'participants')
+            slots = crime.get('slots', crime.get('participants', []))
+            participants = [
+                str(s['user_id'])
+                for s in (slots if isinstance(slots, list) else [])
+                if isinstance(s, dict) and s.get('user_id')
+            ]
+            normalized.append({
+                'completed': completed,
+                'completion_ts': completion_ts,
+                'participants': participants,
+            })
+        if normalized:
+            return normalized
+
+    # Fall back to v1 (legacy OC1 system)
     data = await fetch_faction_data('crimes')
-    if not data:
-        return {}
-    return data.get('crimes', {})
+    if data:
+        for crime_data in (data.get('crimes') or {}).values():
+            if not isinstance(crime_data, dict):
+                continue
+            time_completed = crime_data.get('time_completed', 0)
+            raw_parts = crime_data.get('participants', [])
+            if isinstance(raw_parts, dict):
+                raw_parts = [{k: v} for k, v in raw_parts.items()]
+            participants = []
+            for p in (raw_parts if isinstance(raw_parts, list) else []):
+                if isinstance(p, dict):
+                    participants.extend(str(tid) for tid in p.keys())
+            normalized.append({
+                'completed': bool(time_completed),
+                'completion_ts': float(time_completed) if time_completed else 0.0,
+                'participants': participants,
+            })
+
+    return normalized
 
 
 async def fetch_ffscouter_stats(torn_ids: list) -> dict:

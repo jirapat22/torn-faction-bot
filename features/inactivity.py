@@ -147,27 +147,23 @@ class InactivityTracker:
         data_updated = False
 
         # Build active_in_oc and update accumulated last_oc_completion
+        # crimes is a normalized list from fetch_faction_crimes()
         active_in_oc = set()
 
-        for crime_data in crimes.values():
-            time_completed = crime_data.get('time_completed', 0)
-            participants = crime_data.get('participants', [])
-
-            if isinstance(participants, dict):
-                participants = [{tid: pdata} for tid, pdata in participants.items()]
-
-            for participant_obj in participants:
-                if not isinstance(participant_obj, dict):
-                    continue
-                for torn_id, _pdata in participant_obj.items():
-                    tid = str(torn_id)
-                    if not time_completed:
-                        active_in_oc.add(tid)
-                    else:
-                        tc = float(time_completed)
-                        if tid not in self.last_oc_completion or tc > self.last_oc_completion[tid]:
-                            self.last_oc_completion[tid] = tc
-                            data_updated = True
+        for crime in (crimes if isinstance(crimes, list) else []):
+            if not isinstance(crime, dict):
+                continue
+            completed = crime.get('completed', False)
+            completion_ts = crime.get('completion_ts', 0)
+            for tid in crime.get('participants', []):
+                tid = str(tid)
+                if not completed:
+                    active_in_oc.add(tid)
+                elif completion_ts:
+                    tc = float(completion_ts)
+                    if tid not in self.last_oc_completion or tc > self.last_oc_completion[tid]:
+                        self.last_oc_completion[tid] = tc
+                        data_updated = True
 
         oc_warning = []
         oc_critical = []
@@ -246,8 +242,8 @@ class InactivityTracker:
             await channel.send(embed=error_embed)
             return
 
-        if crimes is None:
-            crimes = {}
+        if not crimes:
+            crimes = []
 
         # Track inactive members
         warning_members = []  # 3+ days inactive
@@ -328,8 +324,8 @@ class InactivityTracker:
         )
         if not torn_members:
             return None
-        if crimes is None:
-            crimes = {}
+        if not crimes:
+            crimes = []
 
         warning_members = []
         critical_members = []

@@ -774,28 +774,30 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
                 oc_w = summary['oc_warning']
                 total = summary['total']
 
-                lines = [
-                    f'**Members checked:** {total}',
-                    '',
-                    f'🔴 Inactivity Critical ({INACTIVITY_CRITICAL_DAYS}+ days): **{len(ic)}**',
-                    f'⚠️ Inactivity Warning ({INACTIVITY_WARNING_DAYS}+ days): **{len(iw)}**',
-                    f'🔴 OC Critical ({OC_CRITICAL_DAYS}+ days): **{len(oc_c)}**',
-                    f'⚠️ OC Warning ({OC_WARNING_DAYS}+ days): **{len(oc_w)}**',
-                ]
+                lines = []
 
-                for section_label, members in [
-                    ('Critical Inactivity', ic), ('Inactivity Warning', iw),
-                    ('OC Critical', oc_c), ('OC Warning', oc_w)
-                ]:
-                    if members:
-                        lines.append(f'\n**{section_label}:**')
-                        for m in members[:5]:
-                            lines.append(f'• {m["torn_name"]} [Lvl {m["torn_level"]}] — {m["days"]:.0f}d')
-                        if len(members) > 5:
-                            lines.append(f'  *...and {len(members) - 5} more*')
+                if ic:
+                    lines.append('**Inactive (Critical):**')
+                    for m in ic:
+                        lines.append(f'• {m["torn_name"]} — {m["days"]}d')
+                if iw:
+                    if lines: lines.append('')
+                    lines.append('**Inactive (Warning):**')
+                    for m in iw:
+                        lines.append(f'• {m["torn_name"]} — {m["days"]}d')
+                if oc_c:
+                    if lines: lines.append('')
+                    lines.append('**No OC (Critical):**')
+                    for m in oc_c:
+                        lines.append(f'• {m["torn_name"]} — {m["days"]:.0f}d')
+                if oc_w:
+                    if lines: lines.append('')
+                    lines.append('**No OC (Warning):**')
+                    for m in oc_w:
+                        lines.append(f'• {m["torn_name"]} — {m["days"]:.0f}d')
 
-                if not ic and not iw and not oc_c and not oc_w:
-                    lines.append('\n✅ All members active and participating in OCs.')
+                if not lines:
+                    lines.append(f'✅ All {total} members active. No inactivity or OC issues.')
 
                 await interaction.followup.send(
                     embed=create_embed('📋 Inactivity + OC Check', '\n'.join(lines), color=EMBED_COLOR_INFO),
