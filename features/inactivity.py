@@ -46,14 +46,23 @@ class InactivityTracker:
         print(f'Loaded Torn ID mappings for {len(self.user_mapping)} Discord users')
 
     async def load_oc_data(self):
-        """Load accumulated OC participation data from JSON"""
-        data = load_json(self.oc_data_file, default={})
+        """Load accumulated OC participation data from JSON.
+        If the file is from an old format (no version key), clears stale v1 data
+        and starts fresh so v2 API data can accumulate cleanly.
+        """
+        raw = load_json(self.oc_data_file, default={})
+        if raw.get('version') != 2:
+            # Old format or first run — clear stale data and start fresh
+            self.last_oc_completion = {}
+            print('OC data reset: clearing old data, will accumulate fresh v2 OC history')
+            return
+        data = raw.get('data', {})
         self.last_oc_completion = {str(k): float(v) for k, v in data.items() if v}
         print(f'Loaded OC participation data for {len(self.last_oc_completion)} members')
 
     async def save_oc_data(self):
         """Save accumulated OC participation data to JSON"""
-        save_json(self.oc_data_file, self.last_oc_completion)
+        save_json(self.oc_data_file, {'version': 2, 'data': self.last_oc_completion})
 
     async def save_user_mapping(self):
         """Save Discord to Torn ID mapping to JSON file"""
