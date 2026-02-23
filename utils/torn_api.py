@@ -308,6 +308,21 @@ async def fetch_player_data(torn_id, selections='profile', use_personal_key=True
     return data
 
 
+async def fetch_faction_crimes():
+    """
+    Fetch faction organized crimes (active and recent completed).
+
+    Returns:
+        Dict of {crime_id: crime_data} or empty dict if error.
+        Each crime_data includes: crime_name, time_completed (0 if active),
+        time_left, participants (list of {torn_id: {description}}).
+    """
+    data = await fetch_faction_data('crimes')
+    if not data:
+        return {}
+    return data.get('crimes', {})
+
+
 async def fetch_ffscouter_stats(torn_ids: list) -> dict:
     """
     Fetch estimated battle stats for a list of Torn player IDs from FFScouter.

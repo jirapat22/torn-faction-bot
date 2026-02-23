@@ -10,14 +10,18 @@ NEW BEHAVIOR:
 - Registration is OPTIONAL (only needed for Discord mentions)
 """
 
+import time
 import discord
 from datetime import datetime
 from utils.helpers import load_json, save_json, create_embed, format_timestamp, get_days_since, get_current_timestamp
-from utils.torn_api import fetch_faction_members
+from utils.torn_api import fetch_faction_members, fetch_faction_crimes
 from config import (
     INACTIVITY_ALERTS_CHANNEL_ID,
     INACTIVITY_WARNING_DAYS,
     INACTIVITY_CRITICAL_DAYS,
+    OC_WARNING_DAYS,
+    OC_CRITICAL_DAYS,
+    OC_NEW_MEMBER_GRACE_DAYS,
     EMBED_COLOR_WARNING,
     EMBED_COLOR_CRITICAL,
     EMBED_COLOR_SUCCESS,
@@ -116,6 +120,87 @@ class InactivityTracker:
                 return discord_id
         return None
 
+    def _get_oc_status(self, torn_members, crimes):
+        """
+        Determine OC participation status for each member.
+
+        A member is considered active if they are currently assigned to an
+        in-progress OC (time_completed == 0). Otherwise their last completion
+        timestamp is used to calculate days since last OC.
+
+        Members in the faction fewer than OC_NEW_MEMBER_GRACE_DAYS are skipped.
+
+        Returns:
+            (oc_warning, oc_critical) — each a list of member dicts.
+        """
+        now = time.time()
+
+        # Build: who is in an active (not yet completed) OC right now
+        active_in_oc = set()
+        # Build: last completion timestamp per torn_id
+        last_completion = {}  # {torn_id_str: float timestamp}
+
+        for crime_data in crimes.values():
+            time_completed = crime_data.get('time_completed', 0)
+            participants = crime_data.get('participants', [])
+
+            # participants can be a list of {torn_id: {description}} dicts
+            # or occasionally a plain dict {torn_id: {description}}
+            if isinstance(participants, dict):
+                participants = [{tid: pdata} for tid, pdata in participants.items()]
+
+            for participant_obj in participants:
+                if not isinstance(participant_obj, dict):
+                    continue
+                for torn_id, _pdata in participant_obj.items():
+                    tid = str(torn_id)
+                    if time_completed == 0:
+                        active_in_oc.add(tid)
+                    else:
+                        tc = float(time_completed)
+                        if tid not in last_completion or tc > last_completion[tid]:
+                            last_completion[tid] = tc
+
+        oc_warning = []
+        oc_critical = []
+
+        for torn_id, member in torn_members.items():
+            tid = str(torn_id)
+            days_in_faction = member.get('days_in_faction', 0)
+
+            # Grace period for new members
+            if days_in_faction < OC_NEW_MEMBER_GRACE_DAYS:
+                continue
+
+            # Currently slotted into an active OC — counts as participating
+            if tid in active_in_oc:
+                continue
+
+            last_oc_ts = last_completion.get(tid)
+            if last_oc_ts is not None:
+                days_since = (now - last_oc_ts) / 86400
+            else:
+                # Never completed an OC — use days_in_faction as the measure
+                days_since = float(days_in_faction)
+
+            if days_since < OC_WARNING_DAYS:
+                continue
+
+            member_data = {
+                'torn_name': member.get('name', f'ID:{tid}'),
+                'torn_id': tid,
+                'torn_level': member.get('level', '?'),
+                'days': round(days_since, 1),
+                'last_oc_ts': last_oc_ts,  # None if never done one
+            }
+
+            if days_since >= OC_CRITICAL_DAYS:
+                oc_critical.append(member_data)
+            else:
+                oc_warning.append(member_data)
+
+        return oc_warning, oc_critical
+
     async def check_and_alert_inactive(self):
         """
         Check for inactive members on Torn and send alerts
@@ -138,12 +223,15 @@ class InactivityTracker:
             print(f'Warning: Could not find guild (ID: {GUILD_ID})')
             # Still continue - we can check faction members without Discord
 
-        # Fetch Torn faction member data
-        torn_members = await fetch_faction_members()
+        # Fetch Torn faction member data and crimes in parallel
+        import asyncio
+        torn_members, crimes = await asyncio.gather(
+            fetch_faction_members(),
+            fetch_faction_crimes()
+        )
 
         if not torn_members:
             print('Error: Could not fetch Torn faction data')
-            # Post error to inactivity-alerts channel (not announcements)
             error_embed = create_embed(
                 title='Inactivity Check Failed',
                 description='Could not connect to Torn API to check member activity. Will retry tomorrow.',
@@ -151,6 +239,9 @@ class InactivityTracker:
             )
             await channel.send(embed=error_embed)
             return
+
+        if crimes is None:
+            crimes = {}
 
         # Track inactive members
         warning_members = []  # 3+ days inactive
@@ -206,14 +297,18 @@ class InactivityTracker:
             elif days_inactive >= INACTIVITY_WARNING_DAYS:
                 warning_members.append(member_data)
 
+        # OC participation check
+        oc_warning, oc_critical = self._get_oc_status(torn_members, crimes)
+        print(f'OC check: {len(oc_warning)} warning, {len(oc_critical)} critical out of {len(torn_members)} total')
+
         # Always post daily summary
         total_inactive = len(warning_members) + len(critical_members)
         total_checked = len(torn_members)
 
         print(f'Inactivity check: {total_inactive} inactive out of {total_checked} total')
-        await self._send_inactivity_alert(channel, warning_members, critical_members, total_checked)
+        await self._send_inactivity_alert(channel, warning_members, critical_members, total_checked, oc_warning, oc_critical)
 
-    async def _send_inactivity_alert(self, channel, warning_members, critical_members, total_faction_members):
+    async def _send_inactivity_alert(self, channel, warning_members, critical_members, total_faction_members, oc_warning=None, oc_critical=None):
         """
         Send inactivity alert embed to the channel
         ALWAYS posts to inactivity-alerts channel
@@ -223,16 +318,26 @@ class InactivityTracker:
             warning_members: List of members inactive for 3+ days
             critical_members: List of members inactive for 5+ days
             total_faction_members: Total number of faction members checked
+            oc_warning: List of members with no OC for 2+ days
+            oc_critical: List of members with no OC for 4+ days
         """
-        # Only ping management if there are inactive members
-        if MANAGEMENT_PING_ROLE_ID and (warning_members or critical_members):
+        if oc_warning is None:
+            oc_warning = []
+        if oc_critical is None:
+            oc_critical = []
+
+        has_inactivity = bool(warning_members or critical_members)
+        has_oc_issues = bool(oc_warning or oc_critical)
+
+        # Only ping management if there's something to report
+        if MANAGEMENT_PING_ROLE_ID and (has_inactivity or has_oc_issues):
             await channel.send(f'<@&{MANAGEMENT_PING_ROLE_ID}>')
 
-        # If everyone is active, post a positive summary
-        if not warning_members and not critical_members:
+        # If everyone is active on both checks, post a positive summary
+        if not warning_members and not critical_members and not oc_warning and not oc_critical:
             active_embed = create_embed(
                 title='✅ Daily Inactivity Check',
-                description=f'All **{total_faction_members}** faction members are active!\n\nNo one has been inactive for {INACTIVITY_WARNING_DAYS}+ days.',
+                description=f'All **{total_faction_members}** faction members are active!\n\nNo inactivity or OC issues found.',
                 color=EMBED_COLOR_SUCCESS
             )
             await channel.send(embed=active_embed)
@@ -305,6 +410,68 @@ class InactivityTracker:
                 embed = create_embed(title=title, description=chunk.strip(), color=EMBED_COLOR_WARNING)
                 await channel.send(embed=embed)
             print(f'Sent warning alert for {len(warning_members)} members')
+
+        # ── OC Participation alerts ──────────────────────────────────────────
+
+        if oc_critical:
+            lines = []
+            for data in oc_critical:
+                last_ts = data['last_oc_ts']
+                if last_ts:
+                    last_str = format_timestamp(int(last_ts), 'R')
+                else:
+                    last_str = 'Never'
+                lines.append(
+                    f'**{data["torn_name"]}** [Lvl {data["torn_level"]}]\n'
+                    f'  {data["days"]:.0f} days without OC · Last OC: {last_str}'
+                )
+
+            header = f'**{len(oc_critical)} member(s)** have not participated in an OC for {OC_CRITICAL_DAYS}+ days:\n\n'
+            chunks = []
+            current = header
+            for line in lines:
+                if len(current) + len(line) + 2 > 4000:
+                    chunks.append(current)
+                    current = ''
+                current += line + '\n\n'
+            if current:
+                chunks.append(current)
+
+            for i, chunk in enumerate(chunks):
+                title = '🔴 OC Participation Critical' if i == 0 else '🔴 OC Critical (continued)'
+                embed = create_embed(title=title, description=chunk.strip(), color=EMBED_COLOR_CRITICAL)
+                await channel.send(embed=embed)
+            print(f'Sent OC critical alert for {len(oc_critical)} members')
+
+        if oc_warning:
+            lines = []
+            for data in oc_warning:
+                last_ts = data['last_oc_ts']
+                if last_ts:
+                    last_str = format_timestamp(int(last_ts), 'R')
+                else:
+                    last_str = 'Never'
+                lines.append(
+                    f'**{data["torn_name"]}** [Lvl {data["torn_level"]}]\n'
+                    f'  {data["days"]:.0f} days without OC · Last OC: {last_str}'
+                )
+
+            header = f'**{len(oc_warning)} member(s)** have not participated in an OC for {OC_WARNING_DAYS}+ days:\n\n'
+            chunks = []
+            current = header
+            for line in lines:
+                if len(current) + len(line) + 2 > 4000:
+                    chunks.append(current)
+                    current = ''
+                current += line + '\n\n'
+            if current:
+                chunks.append(current)
+
+            for i, chunk in enumerate(chunks):
+                title = '⚠️ OC Participation Warning' if i == 0 else '⚠️ OC Warning (continued)'
+                embed = create_embed(title=title, description=chunk.strip(), color=EMBED_COLOR_WARNING)
+                await channel.send(embed=embed)
+            print(f'Sent OC warning alert for {len(oc_warning)} members')
 
     def get_all_mappings(self):
         """

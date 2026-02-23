@@ -61,6 +61,11 @@ MANAGEMENT_PING_ROLE_ID = int(os.getenv("MANAGEMENT_PING_ROLE_ID", "0"))  # Ping
 INACTIVITY_WARNING_DAYS = int(os.getenv("INACTIVITY_WARNING_DAYS", "3"))
 INACTIVITY_CRITICAL_DAYS = int(os.getenv("INACTIVITY_CRITICAL_DAYS", "5"))
 
+# OC participation thresholds (in days since last completed/active OC)
+OC_WARNING_DAYS = int(os.getenv("OC_WARNING_DAYS", "2"))
+OC_CRITICAL_DAYS = int(os.getenv("OC_CRITICAL_DAYS", "4"))
+OC_NEW_MEMBER_GRACE_DAYS = int(os.getenv("OC_NEW_MEMBER_GRACE_DAYS", "3"))
+
 # Embed color (Discord color codes)
 EMBED_COLOR_INFO = 0x3498db     # Blue for info messages
 EMBED_COLOR_WARNING = 0xf39c12  # Orange for warnings
