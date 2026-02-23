@@ -91,6 +91,7 @@ async def on_ready():
         # Initialize inactivity tracker
         inactivity_tracker = InactivityTracker(bot)
         await inactivity_tracker.load_user_mapping()
+        await inactivity_tracker.load_oc_data()
 
         # Initialize chain tracker
         chain_tracker = ChainTracker(bot)

@@ -37,11 +37,23 @@ class InactivityTracker:
         self.bot = bot
         self.user_mapping = {}  # {discord_id: torn_id}
         self.mapping_file = 'data/discord_to_torn.json'
+        self.oc_data_file = 'data/oc_participation.json'
+        self.last_oc_completion = {}  # {torn_id_str: float timestamp} — accumulated across runs
 
     async def load_user_mapping(self):
         """Load Discord to Torn ID mapping from JSON file"""
         self.user_mapping = load_json(self.mapping_file, default={})
         print(f'Loaded Torn ID mappings for {len(self.user_mapping)} Discord users')
+
+    async def load_oc_data(self):
+        """Load accumulated OC participation data from JSON"""
+        data = load_json(self.oc_data_file, default={})
+        self.last_oc_completion = {str(k): float(v) for k, v in data.items() if v}
+        print(f'Loaded OC participation data for {len(self.last_oc_completion)} members')
+
+    async def save_oc_data(self):
+        """Save accumulated OC participation data to JSON"""
+        save_json(self.oc_data_file, self.last_oc_completion)
 
     async def save_user_mapping(self):
         """Save Discord to Torn ID mapping to JSON file"""
@@ -124,28 +136,23 @@ class InactivityTracker:
         """
         Determine OC participation status for each member.
 
-        A member is considered active if they are currently assigned to an
-        in-progress OC (time_completed == 0). Otherwise their last completion
-        timestamp is used to calculate days since last OC.
-
-        Members in the faction fewer than OC_NEW_MEMBER_GRACE_DAYS are skipped.
+        Updates self.last_oc_completion with any new completions found in crimes.
+        Only flags members who appear in accumulated OC data (skips unknowns to
+        avoid false positives on first run or for members outside API history window).
 
         Returns:
-            (oc_warning, oc_critical) — each a list of member dicts.
+            (oc_warning, oc_critical, data_updated) — lists and a bool flag.
         """
         now = time.time()
+        data_updated = False
 
-        # Pass 1: build active_in_oc (currently assigned to an in-progress OC)
-        # and last_completion (most recent completed OC per member)
+        # Build active_in_oc and update accumulated last_oc_completion
         active_in_oc = set()
-        last_completion = {}  # {torn_id_str: float timestamp}
 
         for crime_data in crimes.values():
             time_completed = crime_data.get('time_completed', 0)
             participants = crime_data.get('participants', [])
 
-            # participants can be a list of {torn_id: {description}} dicts
-            # or occasionally a plain dict {torn_id: {description}}
             if isinstance(participants, dict):
                 participants = [{tid: pdata} for tid, pdata in participants.items()]
 
@@ -155,12 +162,12 @@ class InactivityTracker:
                 for torn_id, _pdata in participant_obj.items():
                     tid = str(torn_id)
                     if not time_completed:
-                        # Active / in-progress crime
                         active_in_oc.add(tid)
                     else:
                         tc = float(time_completed)
-                        if tid not in last_completion or tc > last_completion[tid]:
-                            last_completion[tid] = tc
+                        if tid not in self.last_oc_completion or tc > self.last_oc_completion[tid]:
+                            self.last_oc_completion[tid] = tc
+                            data_updated = True
 
         oc_warning = []
         oc_critical = []
@@ -169,21 +176,19 @@ class InactivityTracker:
             tid = str(torn_id)
             days_in_faction = member.get('days_in_faction', 0)
 
-            # Grace period for new members
             if days_in_faction < OC_NEW_MEMBER_GRACE_DAYS:
                 continue
 
-            # Currently in an active OC → counts as participating
             if tid in active_in_oc:
                 continue
 
-            last_oc_ts = last_completion.get(tid)
-            if last_oc_ts is not None:
-                days_since = (now - last_oc_ts) / 86400
-            else:
-                # Never completed an OC — use days_in_faction as the measure
-                days_since = float(days_in_faction)
+            last_oc_ts = self.last_oc_completion.get(tid)
+            if last_oc_ts is None:
+                # No accumulated OC history — skip to avoid false positives
+                # (data builds up over time with each daily run)
+                continue
 
+            days_since = (now - last_oc_ts) / 86400
             if days_since < OC_WARNING_DAYS:
                 continue
 
@@ -192,7 +197,7 @@ class InactivityTracker:
                 'torn_id': tid,
                 'torn_level': member.get('level', '?'),
                 'days': round(days_since, 1),
-                'last_oc_ts': last_oc_ts,  # None if never done one
+                'last_oc_ts': last_oc_ts,
             }
 
             if days_since >= OC_CRITICAL_DAYS:
@@ -200,7 +205,7 @@ class InactivityTracker:
             else:
                 oc_warning.append(member_data)
 
-        return oc_warning, oc_critical
+        return oc_warning, oc_critical, data_updated
 
     async def check_and_alert_inactive(self):
         """
@@ -299,7 +304,9 @@ class InactivityTracker:
                 warning_members.append(member_data)
 
         # OC participation check
-        oc_warning, oc_critical = self._get_oc_status(torn_members, crimes)
+        oc_warning, oc_critical, oc_updated = self._get_oc_status(torn_members, crimes)
+        if oc_updated:
+            await self.save_oc_data()
         print(f'OC check: {len(oc_warning)} warning, {len(oc_critical)} critical out of {len(torn_members)} total')
 
         # Always post daily summary
@@ -308,6 +315,55 @@ class InactivityTracker:
 
         print(f'Inactivity check: {total_inactive} inactive out of {total_checked} total')
         await self._send_inactivity_alert(channel, warning_members, critical_members, total_checked, oc_warning, oc_critical)
+
+    async def test_run(self):
+        """
+        Run inactivity + OC checks silently — no channel posts.
+        Returns a summary dict for ephemeral display via /test command.
+        """
+        import asyncio
+        torn_members, crimes = await asyncio.gather(
+            fetch_faction_members(),
+            fetch_faction_crimes()
+        )
+        if not torn_members:
+            return None
+        if crimes is None:
+            crimes = {}
+
+        warning_members = []
+        critical_members = []
+
+        for torn_id, torn_member in torn_members.items():
+            last_action_data = torn_member.get('last_action', {})
+            last_action_timestamp = last_action_data.get('timestamp')
+            if not last_action_timestamp:
+                continue
+            days_inactive = get_days_since(last_action_timestamp)
+            if days_inactive < INACTIVITY_WARNING_DAYS:
+                continue
+            member_data = {
+                'torn_name': torn_member.get('name', 'Unknown'),
+                'torn_id': torn_id,
+                'torn_level': torn_member.get('level', '?'),
+                'days': days_inactive,
+            }
+            if days_inactive >= INACTIVITY_CRITICAL_DAYS:
+                critical_members.append(member_data)
+            else:
+                warning_members.append(member_data)
+
+        oc_warning, oc_critical, oc_updated = self._get_oc_status(torn_members, crimes)
+        if oc_updated:
+            await self.save_oc_data()
+
+        return {
+            'total': len(torn_members),
+            'inactivity_critical': critical_members,
+            'inactivity_warning': warning_members,
+            'oc_critical': oc_critical,
+            'oc_warning': oc_warning,
+        }
 
     async def _send_inactivity_alert(self, channel, warning_members, critical_members, total_faction_members, oc_warning=None, oc_critical=None):
         """

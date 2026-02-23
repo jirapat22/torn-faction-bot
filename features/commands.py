@@ -13,7 +13,11 @@ from config import (
     EMBED_COLOR_SUCCESS,
     EMBED_COLOR_WARNING,
     EMBED_COLOR_CRITICAL,
-    ANNOUNCEMENTS_CHANNEL_ID
+    ANNOUNCEMENTS_CHANNEL_ID,
+    INACTIVITY_WARNING_DAYS,
+    INACTIVITY_CRITICAL_DAYS,
+    OC_WARNING_DAYS,
+    OC_CRITICAL_DAYS,
 )
 
 
@@ -756,60 +760,133 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
 
         try:
             if feature == 'inactivity':
-                await inactivity_tracker.check_and_alert_inactive()
-                note = 'Results posted to #inactivity-alerts.'
+                summary = await inactivity_tracker.test_run()
+                if not summary:
+                    await interaction.followup.send(
+                        embed=create_embed('❌ Inactivity Check Failed', 'Could not fetch data from Torn API.', color=EMBED_COLOR_CRITICAL),
+                        ephemeral=True
+                    )
+                    return
+
+                ic = summary['inactivity_critical']
+                iw = summary['inactivity_warning']
+                oc_c = summary['oc_critical']
+                oc_w = summary['oc_warning']
+                total = summary['total']
+
+                lines = [
+                    f'**Members checked:** {total}',
+                    '',
+                    f'🔴 Inactivity Critical ({INACTIVITY_CRITICAL_DAYS}+ days): **{len(ic)}**',
+                    f'⚠️ Inactivity Warning ({INACTIVITY_WARNING_DAYS}+ days): **{len(iw)}**',
+                    f'🔴 OC Critical ({OC_CRITICAL_DAYS}+ days): **{len(oc_c)}**',
+                    f'⚠️ OC Warning ({OC_WARNING_DAYS}+ days): **{len(oc_w)}**',
+                ]
+
+                for section_label, members in [
+                    ('Critical Inactivity', ic), ('Inactivity Warning', iw),
+                    ('OC Critical', oc_c), ('OC Warning', oc_w)
+                ]:
+                    if members:
+                        lines.append(f'\n**{section_label}:**')
+                        for m in members[:5]:
+                            lines.append(f'• {m["torn_name"]} [Lvl {m["torn_level"]}] — {m["days"]:.0f}d')
+                        if len(members) > 5:
+                            lines.append(f'  *...and {len(members) - 5} more*')
+
+                if not ic and not iw and not oc_c and not oc_w:
+                    lines.append('\n✅ All members active and participating in OCs.')
+
+                await interaction.followup.send(
+                    embed=create_embed('📋 Inactivity + OC Check', '\n'.join(lines), color=EMBED_COLOR_INFO),
+                    ephemeral=True
+                )
+                return
+
             elif feature == 'events':
                 if event_reminder_manager:
-                    await event_reminder_manager.check_and_announce_events()
-                    note = 'Event reminder check complete.'
+                    result = await event_reminder_manager.check_and_announce_events()
+                    checked = result.get('checked', 0)
+                    announced = result.get('announced', 0)
+                    upcoming = result.get('upcoming', [])
+                    lines = [f'**Scheduled events found:** {checked}']
+                    if announced:
+                        lines.append(f'**Reminders posted this run:** {announced}')
+                    else:
+                        lines.append('No events in the 33–37h reminder window.')
+                    if upcoming:
+                        lines.append('\n**Upcoming events:**')
+                        for name, hrs in sorted(upcoming, key=lambda x: x[1])[:5]:
+                            lines.append(f'• {name} — in {hrs:.1f}h')
+                    note = '\n'.join(lines)
+                    color = EMBED_COLOR_SUCCESS
                 else:
                     note = 'Event reminder manager not available.'
+                    color = EMBED_COLOR_WARNING
+
             elif feature == 'rolesync':
                 if role_sync_manager:
                     await role_sync_manager.sync_all_members()
-                    note = 'Role sync complete.'
+                    note = 'Role sync complete. All members processed.'
+                    color = EMBED_COLOR_SUCCESS
                 else:
                     note = 'Role sync manager not available.'
+                    color = EMBED_COLOR_WARNING
+
             elif feature == 'enemies':
-                if enemy_watchlist and enemy_watchlist.get_enemy_count() > 0:
-                    await enemy_watchlist.check_all_enemies(post_updates=True)
-                    note = 'Enemy watchlist check complete.'
-                elif enemy_watchlist:
-                    note = 'No enemies on watchlist.'
+                if enemy_watchlist:
+                    count = enemy_watchlist.get_enemy_count()
+                    if count > 0:
+                        await enemy_watchlist.check_all_enemies(post_updates=True)
+                        note = f'Checked **{count}** watched enemies. Any status changes posted to their channel.'
+                    else:
+                        note = 'No enemies on watchlist.'
+                    color = EMBED_COLOR_SUCCESS
                 else:
                     note = 'Enemy watchlist not available.'
+                    color = EMBED_COLOR_WARNING
+
             elif feature == 'stakeout':
-                if stakeout_manager and stakeout_manager.get_stakeout_count() > 0:
-                    await stakeout_manager.check_all_stakeouts()
-                    note = 'Stakeout check complete.'
-                elif stakeout_manager:
-                    note = 'No stakeout targets active.'
+                if stakeout_manager:
+                    count = stakeout_manager.get_stakeout_count()
+                    if count > 0:
+                        await stakeout_manager.check_all_stakeouts()
+                        note = f'Checked **{count}** stakeout target(s). Any updates posted to their channel.'
+                    else:
+                        note = 'No stakeout targets active.'
+                    color = EMBED_COLOR_SUCCESS
                 else:
                     note = 'Stakeout manager not available.'
+                    color = EMBED_COLOR_WARNING
+
             elif feature == 'alliance':
-                if alliance_manager and alliance_manager.get_ally_count() > 0:
-                    await alliance_manager.check_ally_wars()
-                    note = 'Alliance war check complete.'
-                elif alliance_manager:
-                    note = 'No allied factions configured.'
+                if alliance_manager:
+                    count = alliance_manager.get_ally_count()
+                    if count > 0:
+                        await alliance_manager.check_ally_wars()
+                        note = f'Checked **{count}** allied faction(s). Any war updates posted to their channel.'
+                    else:
+                        note = 'No allied factions configured.'
+                    color = EMBED_COLOR_SUCCESS
                 else:
                     note = 'Alliance manager not available.'
+                    color = EMBED_COLOR_WARNING
+
             else:
                 note = 'Unknown feature.'
+                color = EMBED_COLOR_WARNING
 
-            embed = create_embed(
-                title=f'✅ {label}',
-                description=note,
-                color=EMBED_COLOR_SUCCESS
+            label = label_map.get(feature, feature)
+            await interaction.followup.send(
+                embed=create_embed(f'✅ {label}', note, color=color),
+                ephemeral=True
             )
         except Exception as e:
-            embed = create_embed(
-                title=f'❌ {label} Failed',
-                description=str(e),
-                color=EMBED_COLOR_CRITICAL
+            label = label_map.get(feature, feature)
+            await interaction.followup.send(
+                embed=create_embed(f'❌ {label} Failed', str(e), color=EMBED_COLOR_CRITICAL),
+                ephemeral=True
             )
-
-        await interaction.followup.send(embed=embed, ephemeral=True)
 
     print('Management commands registered (/announce, /createevent, /test)')
     print('Slash commands registered')

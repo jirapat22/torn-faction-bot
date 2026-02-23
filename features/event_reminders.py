@@ -80,11 +80,15 @@ class EventReminderManager:
         Check all scheduled events and post reminders for those starting in ~35 hours.
 
         Called by background task.
+
+        Returns:
+            dict with 'checked' (total events), 'announced' (reminders posted this run),
+            'upcoming' (list of (name, hours_until) for all scheduled events).
         """
         guild = self.bot.get_guild(GUILD_ID)
         if not guild:
             print(f'Event reminders: Could not find guild (ID: {GUILD_ID})')
-            return
+            return {'checked': 0, 'announced': 0, 'upcoming': []}
 
         now = datetime.now(timezone.utc)
 
@@ -93,30 +97,36 @@ class EventReminderManager:
             events = await guild.fetch_scheduled_events()
         except Exception as e:
             print(f'Event reminders: Failed to fetch events: {e}')
-            return
+            return {'checked': 0, 'announced': 0, 'upcoming': []}
+
+        checked = 0
+        announced = 0
+        upcoming = []
 
         for event in events:
+            if event.status != discord.EventStatus.scheduled:
+                continue
+
+            time_until = event.start_time - now
+            hours_until = time_until.total_seconds() / 3600
+            checked += 1
+            upcoming.append((event.name, hours_until))
+
             # Skip if already announced
             if event.id in self.announced_events:
                 continue
 
-            # Skip if event has already started or ended
-            if event.status != discord.EventStatus.scheduled:
-                continue
-
-            # Calculate hours until event starts
-            time_until = event.start_time - now
-            hours_until = time_until.total_seconds() / 3600
-
             # Check if within the announcement window (33-37 hours)
-            # This gives a 4-hour window to catch events even if check runs late
             if 33 <= hours_until <= 37:
                 await self._announce_event(event, hours_until)
                 self.announced_events.add(event.id)
                 await self.save_data()
+                announced += 1
 
         # Clean up old event IDs (events that no longer exist)
         await self._cleanup_old_events(events)
+
+        return {'checked': checked, 'announced': announced, 'upcoming': upcoming}
 
     async def _announce_event(self, event: discord.ScheduledEvent, hours_until: float):
         """Post the reminder message for an event."""
