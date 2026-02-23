@@ -146,7 +146,14 @@ async def on_ready():
         await setup_faction_commands(bot)
 
         # Register slash commands
-        await setup_commands(bot, inactivity_tracker, chain_tracker, war_tracker, verification_system)
+        await setup_commands(
+            bot, inactivity_tracker, chain_tracker, war_tracker, verification_system,
+            event_reminder_manager=event_reminder_manager,
+            role_sync_manager=role_sync_manager,
+            enemy_watchlist=enemy_watchlist,
+            stakeout_manager=stakeout_manager,
+            alliance_manager=alliance_manager
+        )
 
         # Sync slash commands with Discord (guild-specific for instant updates)
         from config import GUILD_ID

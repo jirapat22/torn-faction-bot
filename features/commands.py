@@ -17,7 +17,9 @@ from config import (
 )
 
 
-async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracker=None, verification_system=None):
+async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracker=None, verification_system=None,
+                         event_reminder_manager=None, role_sync_manager=None,
+                         enemy_watchlist=None, stakeout_manager=None, alliance_manager=None):
     """
     Register all slash commands with the bot
 
@@ -721,35 +723,93 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
         )
         await interaction.response.send_message(embed=embed, view=EventTypeView(), ephemeral=True)
 
-    @bot.tree.command(name='test_inactivity', description='[Management] Manually trigger inactivity check')
-    async def test_inactivity(interaction: discord.Interaction):
-        """Manually run the inactivity check (Management only)"""
+    @bot.tree.command(name='test', description='[Management] Manually trigger a background feature check')
+    @app_commands.describe(feature='Which feature to test')
+    @app_commands.choices(feature=[
+        app_commands.Choice(name='Inactivity + OC check', value='inactivity'),
+        app_commands.Choice(name='Event reminders', value='events'),
+        app_commands.Choice(name='Role sync', value='rolesync'),
+        app_commands.Choice(name='Enemy watchlist', value='enemies'),
+        app_commands.Choice(name='Stakeout check', value='stakeout'),
+        app_commands.Choice(name='Alliance war check', value='alliance'),
+    ])
+    async def test_feature(interaction: discord.Interaction, feature: str):
+        """Manually trigger a background feature for testing (Management only)"""
         if not is_management(interaction):
-            embed = create_embed(
-                title='Permission Denied',
-                description='You do not have permission to use this command.',
-                color=EMBED_COLOR_CRITICAL
+            await interaction.response.send_message(
+                embed=create_embed('Permission Denied', 'Management only.', color=EMBED_COLOR_CRITICAL),
+                ephemeral=True
             )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
             return
 
         await interaction.response.defer(ephemeral=True)
 
+        label_map = {
+            'inactivity': 'Inactivity + OC Check',
+            'events':     'Event Reminders',
+            'rolesync':   'Role Sync',
+            'enemies':    'Enemy Watchlist',
+            'stakeout':   'Stakeout Check',
+            'alliance':   'Alliance War Check',
+        }
+        label = label_map.get(feature, feature)
+
         try:
-            await inactivity_tracker.check_and_alert_inactive()
+            if feature == 'inactivity':
+                await inactivity_tracker.check_and_alert_inactive()
+                note = 'Results posted to #inactivity-alerts.'
+            elif feature == 'events':
+                if event_reminder_manager:
+                    await event_reminder_manager.check_and_announce_events()
+                    note = 'Event reminder check complete.'
+                else:
+                    note = 'Event reminder manager not available.'
+            elif feature == 'rolesync':
+                if role_sync_manager:
+                    await role_sync_manager.sync_all_members()
+                    note = 'Role sync complete.'
+                else:
+                    note = 'Role sync manager not available.'
+            elif feature == 'enemies':
+                if enemy_watchlist and enemy_watchlist.get_enemy_count() > 0:
+                    await enemy_watchlist.check_all_enemies(post_updates=True)
+                    note = 'Enemy watchlist check complete.'
+                elif enemy_watchlist:
+                    note = 'No enemies on watchlist.'
+                else:
+                    note = 'Enemy watchlist not available.'
+            elif feature == 'stakeout':
+                if stakeout_manager and stakeout_manager.get_stakeout_count() > 0:
+                    await stakeout_manager.check_all_stakeouts()
+                    note = 'Stakeout check complete.'
+                elif stakeout_manager:
+                    note = 'No stakeout targets active.'
+                else:
+                    note = 'Stakeout manager not available.'
+            elif feature == 'alliance':
+                if alliance_manager and alliance_manager.get_ally_count() > 0:
+                    await alliance_manager.check_ally_wars()
+                    note = 'Alliance war check complete.'
+                elif alliance_manager:
+                    note = 'No allied factions configured.'
+                else:
+                    note = 'Alliance manager not available.'
+            else:
+                note = 'Unknown feature.'
+
             embed = create_embed(
-                title='Inactivity Check Complete',
-                description='Manual inactivity check has been run. Check #inactivity-alerts for results.',
+                title=f'✅ {label}',
+                description=note,
                 color=EMBED_COLOR_SUCCESS
             )
         except Exception as e:
             embed = create_embed(
-                title='Error',
-                description=f'Inactivity check failed: {str(e)}',
+                title=f'❌ {label} Failed',
+                description=str(e),
                 color=EMBED_COLOR_CRITICAL
             )
 
         await interaction.followup.send(embed=embed, ephemeral=True)
 
-    print('Management commands registered (/announce, /createevent, /test_inactivity)')
+    print('Management commands registered (/announce, /createevent, /test)')
     print('Slash commands registered')
