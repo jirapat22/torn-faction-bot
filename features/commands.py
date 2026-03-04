@@ -772,6 +772,7 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
                 iw = summary['inactivity_warning']
                 oc_c = summary['oc_critical']
                 oc_w = summary['oc_warning']
+                lf = summary.get('left_faction', [])
                 total = summary['total']
 
                 lines = []
@@ -795,9 +796,14 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
                     lines.append('**No OC (Warning):**')
                     for m in oc_w:
                         lines.append(f'• {m["torn_name"]} — {m["days"]:.0f}d')
+                if lf:
+                    if lines: lines.append('')
+                    lines.append('**Left Faction (7+ days):**')
+                    for m in lf:
+                        lines.append(f'• {m["torn_name"]} — {m["days_gone"]:.0f}d gone')
 
                 if not lines:
-                    lines.append(f'✅ All {total} members active. No inactivity or OC issues.')
+                    lines.append(f'✅ All {total} members active. No inactivity, OC, or left-faction issues.')
 
                 await interaction.followup.send(
                     embed=create_embed('📋 Inactivity + OC Check', '\n'.join(lines), color=EMBED_COLOR_INFO),

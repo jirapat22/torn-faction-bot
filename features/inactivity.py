@@ -22,6 +22,7 @@ from config import (
     OC_WARNING_DAYS,
     OC_CRITICAL_DAYS,
     OC_NEW_MEMBER_GRACE_DAYS,
+    LEFT_FACTION_ALERT_DAYS,
     EMBED_COLOR_WARNING,
     EMBED_COLOR_CRITICAL,
     EMBED_COLOR_SUCCESS,
@@ -39,6 +40,8 @@ class InactivityTracker:
         self.mapping_file = 'data/discord_to_torn.json'
         self.oc_data_file = 'data/oc_participation.json'
         self.last_oc_completion = {}  # {torn_id_str: float timestamp} — accumulated across runs
+        self.left_faction_file = 'data/left_faction.json'
+        self.left_faction = {}  # {torn_id_str: {first_gone, torn_name, discord_id}}
 
     async def load_user_mapping(self):
         """Load Discord to Torn ID mapping from JSON file"""
@@ -63,6 +66,16 @@ class InactivityTracker:
     async def save_oc_data(self):
         """Save accumulated OC participation data to JSON"""
         save_json(self.oc_data_file, {'version': 2, 'data': self.last_oc_completion})
+
+    async def load_left_faction_data(self):
+        """Load left-faction tracking data from JSON."""
+        raw = load_json(self.left_faction_file, default={})
+        self.left_faction = {str(k): v for k, v in raw.items()}
+        print(f'Loaded left-faction data for {len(self.left_faction)} members')
+
+    async def save_left_faction_data(self):
+        """Save left-faction tracking data to JSON."""
+        save_json(self.left_faction_file, self.left_faction)
 
     async def save_user_mapping(self):
         """Save Discord to Torn ID mapping to JSON file"""
@@ -212,6 +225,64 @@ class InactivityTracker:
 
         return oc_warning, oc_critical, data_updated
 
+    def _get_left_faction_status(self, torn_members):
+        """
+        Detect verified Discord members who are no longer in the Torn faction.
+
+        - First time detected as gone: records timestamp
+        - Rejoined faction: removes from tracking
+        - Gone >= LEFT_FACTION_ALERT_DAYS: added to alert list
+
+        Returns:
+            (alerts, data_updated)
+            alerts: list of dicts with torn_id, torn_name, discord_id, days_gone
+        """
+        now = time.time()
+        data_updated = False
+        alerts = []
+
+        current_torn_ids = set(str(tid) for tid in torn_members.keys())
+
+        # Name lookup from verified_users (so we have names even after they leave)
+        verified_users = load_json('data/verified_users.json', default={})
+        torn_id_to_name = {}
+        for d_id, data in verified_users.items():
+            tid = str(data.get('torn_id', ''))
+            name = data.get('torn_name', '')
+            if tid and name:
+                torn_id_to_name[tid] = name
+
+        for discord_id, torn_id in self.user_mapping.items():
+            tid = str(torn_id)
+
+            if tid in current_torn_ids:
+                # Back in faction — stop tracking
+                if tid in self.left_faction:
+                    del self.left_faction[tid]
+                    data_updated = True
+            else:
+                # Not in faction
+                if tid not in self.left_faction:
+                    torn_name = torn_id_to_name.get(tid, f'ID:{tid}')
+                    self.left_faction[tid] = {
+                        'first_gone': now,
+                        'torn_name': torn_name,
+                        'discord_id': discord_id,
+                    }
+                    data_updated = True
+
+                entry = self.left_faction[tid]
+                days_gone = (now - entry['first_gone']) / 86400
+                if days_gone >= LEFT_FACTION_ALERT_DAYS:
+                    alerts.append({
+                        'torn_id': tid,
+                        'torn_name': entry['torn_name'],
+                        'discord_id': entry['discord_id'],
+                        'days_gone': round(days_gone, 1),
+                    })
+
+        return alerts, data_updated
+
     async def check_and_alert_inactive(self):
         """
         Check for inactive members on Torn and send alerts
@@ -314,12 +385,18 @@ class InactivityTracker:
             await self.save_oc_data()
         print(f'OC check: {len(oc_warning)} warning, {len(oc_critical)} critical out of {len(torn_members)} total')
 
+        # Left-faction check (verified Discord members no longer in Torn faction)
+        left_alerts, left_updated = self._get_left_faction_status(torn_members)
+        if left_updated:
+            await self.save_left_faction_data()
+        print(f'Left-faction check: {len(left_alerts)} alert(s), tracking {len(self.left_faction)} members')
+
         # Always post daily summary
         total_inactive = len(warning_members) + len(critical_members)
         total_checked = len(torn_members)
 
         print(f'Inactivity check: {total_inactive} inactive out of {total_checked} total')
-        await self._send_inactivity_alert(channel, warning_members, critical_members, total_checked, oc_warning, oc_critical)
+        await self._send_inactivity_alert(channel, warning_members, critical_members, total_checked, oc_warning, oc_critical, left_alerts)
 
     async def test_run(self):
         """
@@ -362,15 +439,20 @@ class InactivityTracker:
         if oc_updated:
             await self.save_oc_data()
 
+        left_alerts, left_updated = self._get_left_faction_status(torn_members)
+        if left_updated:
+            await self.save_left_faction_data()
+
         return {
             'total': len(torn_members),
             'inactivity_critical': critical_members,
             'inactivity_warning': warning_members,
             'oc_critical': oc_critical,
             'oc_warning': oc_warning,
+            'left_faction': left_alerts,
         }
 
-    async def _send_inactivity_alert(self, channel, warning_members, critical_members, total_faction_members, oc_warning=None, oc_critical=None):
+    async def _send_inactivity_alert(self, channel, warning_members, critical_members, total_faction_members, oc_warning=None, oc_critical=None, left_faction=None):
         """
         Send inactivity alert embed to the channel
         ALWAYS posts to inactivity-alerts channel
@@ -382,24 +464,28 @@ class InactivityTracker:
             total_faction_members: Total number of faction members checked
             oc_warning: List of members with no OC for 2+ days
             oc_critical: List of members with no OC for 4+ days
+            left_faction: List of verified Discord members gone from faction 7+ days
         """
         if oc_warning is None:
             oc_warning = []
         if oc_critical is None:
             oc_critical = []
+        if left_faction is None:
+            left_faction = []
 
         has_inactivity = bool(warning_members or critical_members)
         has_oc_issues = bool(oc_warning or oc_critical)
+        has_left = bool(left_faction)
 
         # Only ping management if there's something to report
-        if MANAGEMENT_PING_ROLE_ID and (has_inactivity or has_oc_issues):
+        if MANAGEMENT_PING_ROLE_ID and (has_inactivity or has_oc_issues or has_left):
             await channel.send(f'<@&{MANAGEMENT_PING_ROLE_ID}>')
 
         # If everyone is active on both checks, post a positive summary
-        if not warning_members and not critical_members and not oc_warning and not oc_critical:
+        if not warning_members and not critical_members and not oc_warning and not oc_critical and not left_faction:
             active_embed = create_embed(
                 title='✅ Daily Inactivity Check',
-                description=f'All **{total_faction_members}** faction members are active!\n\nNo inactivity or OC issues found.',
+                description=f'All **{total_faction_members}** faction members are active!\n\nNo inactivity, OC, or left-faction issues found.',
                 color=EMBED_COLOR_SUCCESS
             )
             await channel.send(embed=active_embed)
@@ -534,6 +620,36 @@ class InactivityTracker:
                 embed = create_embed(title=title, description=chunk.strip(), color=EMBED_COLOR_WARNING)
                 await channel.send(embed=embed)
             print(f'Sent OC warning alert for {len(oc_warning)} members')
+
+        # ── Left-faction alerts ──────────────────────────────────────────────
+        if left_faction:
+            guild = self.bot.get_guild(GUILD_ID)
+            lines = []
+            for data in left_faction:
+                discord_id = data['discord_id']
+                torn_name = data['torn_name']
+                days_gone = data['days_gone']
+                # Try to mention the Discord member
+                discord_member = guild.get_member(int(discord_id)) if guild else None
+                mention = discord_member.mention if discord_member else f'(ID:{discord_id})'
+                lines.append(f'**{torn_name}** {mention} — {days_gone:.0f}d since leaving faction')
+
+            header = f'**{len(left_faction)} verified Discord member(s)** have not returned to the faction in {LEFT_FACTION_ALERT_DAYS}+ days:\n\n'
+            chunks = []
+            current = header
+            for line in lines:
+                if len(current) + len(line) + 2 > 4000:
+                    chunks.append(current)
+                    current = ''
+                current += line + '\n'
+            if current:
+                chunks.append(current)
+
+            for i, chunk in enumerate(chunks):
+                title = '👋 Left Faction Alert' if i == 0 else '👋 Left Faction (continued)'
+                embed = create_embed(title=title, description=chunk.strip(), color=EMBED_COLOR_WARNING)
+                await channel.send(embed=embed)
+            print(f'Sent left-faction alert for {len(left_faction)} members')
 
     def get_all_mappings(self):
         """

@@ -66,6 +66,9 @@ OC_WARNING_DAYS = int(os.getenv("OC_WARNING_DAYS", "2"))
 OC_CRITICAL_DAYS = int(os.getenv("OC_CRITICAL_DAYS", "4"))
 OC_NEW_MEMBER_GRACE_DAYS = int(os.getenv("OC_NEW_MEMBER_GRACE_DAYS", "3"))
 
+# Left-faction alert threshold (days before alerting about a verified member not in faction)
+LEFT_FACTION_ALERT_DAYS = int(os.getenv("LEFT_FACTION_ALERT_DAYS", "7"))
+
 # Embed color (Discord color codes)
 EMBED_COLOR_INFO = 0x3498db     # Blue for info messages
 EMBED_COLOR_WARNING = 0xf39c12  # Orange for warnings
