@@ -987,8 +987,15 @@ class WarTracker:
         enemy_score = enemy_faction_data.get('score', 0) if enemy_faction_data else 0
         enemy_name = enemy_faction_data.get('name', 'Unknown') if enemy_faction_data else 'Unknown'
 
-        result = '🏆 VICTORY' if our_score > enemy_score else '❌ DEFEAT'
-        color = EMBED_COLOR_SUCCESS if our_score > enemy_score else EMBED_COLOR_CRITICAL
+        if our_score > enemy_score:
+            result = '🏆 VICTORY'
+            color = EMBED_COLOR_SUCCESS
+        elif enemy_score > our_score:
+            result = '❌ DEFEAT'
+            color = EMBED_COLOR_CRITICAL
+        else:
+            result = '🤝 DRAW'
+            color = EMBED_COLOR_WARNING
 
         # Build management embeds (may need multiple to stay under Discord limits)
         embeds = []
@@ -1184,7 +1191,7 @@ class WarTracker:
         if len(detail_text) <= 1024:
             embed.add_field(name='War History', value=detail_text, inline=False)
         else:
-            chunks = self._chunk_text(detail_text, 1024)
+            chunks = self._chunk_text(lines, 1024)
             for idx, chunk in enumerate(chunks):
                 label = 'War History' if idx == 0 else 'War History (cont.)'
                 embed.add_field(name=label, value=chunk, inline=False)
@@ -1208,6 +1215,14 @@ class WarTracker:
 
         # Detect war END (was active, now not)
         if self.was_war_active and not war_info:
+            # Before declaring the war over, verify the API actually responded.
+            # If the API fails/returns nothing, get_current_war() also returns None —
+            # we must not confuse an API outage with the war genuinely ending.
+            raw_data = await fetch_faction_data('rankedwars')
+            if raw_data is None:
+                print('War: API unavailable, skipping war-end detection to prevent false announcement')
+                return
+
             print('War ended! Posting war results...')
 
             # Get final war stats from history
