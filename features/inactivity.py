@@ -252,6 +252,9 @@ class InactivityTracker:
             if tid and name:
                 torn_id_to_name[tid] = name
 
+        LEFT_FACTION_REPEAT_DAYS = 7   # Re-alert at most once per week
+        LEFT_FACTION_MAX_DAYS = 30     # Stop tracking after 30 days (clearly not returning)
+
         for discord_id, torn_id in self.user_mapping.items():
             tid = str(torn_id)
 
@@ -268,18 +271,34 @@ class InactivityTracker:
                         'first_gone': now,
                         'torn_name': torn_name,
                         'discord_id': discord_id,
+                        'last_alerted': None,
                     }
                     data_updated = True
 
                 entry = self.left_faction[tid]
                 days_gone = (now - entry['first_gone']) / 86400
+
+                # Auto-remove after 30 days — they're clearly not coming back
+                if days_gone >= LEFT_FACTION_MAX_DAYS:
+                    del self.left_faction[tid]
+                    data_updated = True
+                    print(f'Left-faction: Auto-removed {entry["torn_name"]} after {days_gone:.0f}d')
+                    continue
+
                 if days_gone >= LEFT_FACTION_ALERT_DAYS:
-                    alerts.append({
-                        'torn_id': tid,
-                        'torn_name': entry['torn_name'],
-                        'discord_id': entry['discord_id'],
-                        'days_gone': round(days_gone, 1),
-                    })
+                    last_alerted = entry.get('last_alerted')
+                    days_since_alert = (now - last_alerted) / 86400 if last_alerted else None
+
+                    # Only alert if never alerted before, or it's been >= 7 days since last alert
+                    if last_alerted is None or days_since_alert >= LEFT_FACTION_REPEAT_DAYS:
+                        alerts.append({
+                            'torn_id': tid,
+                            'torn_name': entry['torn_name'],
+                            'discord_id': entry['discord_id'],
+                            'days_gone': round(days_gone, 1),
+                        })
+                        entry['last_alerted'] = now
+                        data_updated = True
 
         return alerts, data_updated
 
