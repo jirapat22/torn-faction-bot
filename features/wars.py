@@ -1129,6 +1129,73 @@ class WarTracker:
         )
         return embed
 
+    async def format_war_trends_embed(self):
+        """
+        Faction-wide war trends: overall W-L record, win rate, and top
+        contributors sorted by total score across all recorded wars.
+        """
+        wars = self.war_member_stats.get('wars', [])
+        if not wars:
+            return create_embed(
+                title='No War History',
+                description='No per-member war data has been recorded yet.\nData is saved automatically when a war ends.',
+                color=EMBED_COLOR_INFO
+            )
+
+        total = len(wars)
+        wins = sum(1 for w in wars if w['result'] == 'victory')
+        losses = total - wins
+        win_rate = (wins / total * 100) if total > 0 else 0
+
+        # All wars listed (most recent first, up to 10)
+        war_lines = []
+        for w in reversed(wars[-10:]):
+            icon = '✅' if w['result'] == 'victory' else '❌'
+            war_lines.append(
+                f'{icon} vs **{w["enemy_name"]}** — {w["our_score"]}-{w["enemy_score"]}'
+                f' ({format_timestamp(w["timestamp"], "R")})'
+            )
+
+        # Aggregate all members across all wars
+        member_totals = {}
+        for w in wars:
+            for uid, mdata in w.get('members', {}).items():
+                if uid not in member_totals:
+                    member_totals[uid] = {
+                        'name': mdata['name'],
+                        'total_attacks': 0,
+                        'total_score': 0,
+                        'wars_played': 0,
+                    }
+                member_totals[uid]['total_attacks'] += mdata.get('attacks', 0)
+                member_totals[uid]['total_score'] += mdata.get('score', 0)
+                member_totals[uid]['wars_played'] += 1
+                member_totals[uid]['name'] = mdata['name']  # keep name up to date
+
+        sorted_members = sorted(member_totals.values(), key=lambda x: x['total_score'], reverse=True)
+
+        top_text = '\n'.join([
+            f'{i+1}. **{m["name"]}** — {m["total_score"]} score, '
+            f'{m["total_attacks"]} attacks ({m["wars_played"]}/{total} wars)'
+            for i, m in enumerate(sorted_members[:10])
+        ]) or 'No data'
+
+        description = (
+            f'**Record:** {wins}W — {losses}L ({win_rate:.0f}% win rate)\n'
+            f'**Wars tracked:** {total}\n\n'
+            + '\n'.join(war_lines)
+        )
+
+        embed = create_embed(
+            title='War Trends',
+            description=description,
+            color=EMBED_COLOR_SUCCESS if wins >= losses else EMBED_COLOR_WARNING,
+            fields=[
+                {'name': 'Top Contributors (all-time score)', 'value': top_text, 'inline': False},
+            ]
+        )
+        return embed
+
     async def format_warstats_member_embed(self, torn_id, member_name=None):
         """Individual member's war history for last 5 wars."""
         wars = self.war_member_stats.get('wars', [])

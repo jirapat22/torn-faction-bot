@@ -27,6 +27,7 @@ class ChainTracker:
     def __init__(self, bot):
         self.bot = bot
         self.last_chain_count = 0
+        self.last_chain_start = 0  # Start timestamp of the chain we're currently tracking
         self.was_chain_active = False  # Track if chain was active in last check
         self.chain_data_file = 'data/chain_history.json'
         self.chain_state_file = 'data/chain_state.json'
@@ -44,6 +45,7 @@ class ChainTracker:
         state = load_json(self.chain_state_file, default={})
         self.last_reported_chain_id = state.get('last_reported_chain_id')
         self.last_chain_count = state.get('last_chain_count', 0)
+        self.last_chain_start = state.get('last_chain_start', 0)
 
         print(f'Loaded chain history with {len(self.chain_history)} records')
         if self.last_reported_chain_id:
@@ -608,7 +610,8 @@ class ChainTracker:
                     self.last_reported_chain_id = chain_id
                     save_json(self.chain_state_file, {
                         'last_reported_chain_id': chain_id,
-                        'last_chain_count': self.last_chain_count
+                        'last_chain_count': self.last_chain_count,
+                        'last_chain_start': self.last_chain_start,
                     })
                 else:
                     print(f'Chain #{chain_id} already reported, skipping duplicate')
@@ -632,18 +635,28 @@ class ChainTracker:
             return
 
         # Mark chain as active if this is first detection with 10+ hits
+        chain_start = chain.get('start', 0)
         if not self.was_chain_active:
             self.was_chain_active = True
 
-            # Check if this is a genuinely new chain or a continuation after API glitch
-            if current_count < self.last_chain_count:
-                # New chain (count is lower than before) - reset tracking
+            # Use start timestamp to distinguish a genuinely new chain from an API glitch.
+            # If start differs from what we were tracking, it's a new chain → reset count.
+            # If start matches, it's the same chain resuming after a glitch → keep count
+            # so we don't re-announce milestones we've already posted.
+            if chain_start and self.last_chain_start and chain_start != self.last_chain_start:
                 self.last_chain_count = 0
-                print(f'New chain detected with {current_count} hits')
+                print(f'New chain detected (start={chain_start}) with {current_count} hits')
+            elif current_count < self.last_chain_count:
+                # No start timestamps to compare — fall back to count heuristic.
+                # A count lower than last known is likely a new chain.
+                self.last_chain_count = 0
+                print(f'New chain detected (count reset) with {current_count} hits')
             else:
-                # Continuation after API glitch - keep last_chain_count
-                # to avoid re-announcing old milestones (10, 25, 50, etc.)
                 print(f'Chain resumed at {current_count} hits (was tracking at {self.last_chain_count})')
+
+        # Always keep last_chain_start in sync
+        if chain_start:
+            self.last_chain_start = chain_start
 
         # Only post at bonus milestones
         should_post = False
@@ -668,7 +681,8 @@ class ChainTracker:
         self.last_chain_count = current_count
         save_json(self.chain_state_file, {
             'last_reported_chain_id': self.last_reported_chain_id,
-            'last_chain_count': self.last_chain_count
+            'last_chain_count': self.last_chain_count,
+            'last_chain_start': self.last_chain_start,
         })
 
         # Save chain data to history (keep last 100 entries max)

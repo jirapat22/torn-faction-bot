@@ -69,6 +69,11 @@ class EnemyWatchlist:
     async def load_watchlist(self):
         """Load watchlist from JSON file"""
         self.watchlist = load_json(self.watchlist_file, default={})
+        # Restore previous_statuses from stored last_status so a restart
+        # doesn't cause every enemy to appear as a "status change"
+        for tid, data in self.watchlist.items():
+            if data.get('last_status'):
+                self.previous_statuses[tid] = data['last_status']
         print(f'Loaded {len(self.watchlist)} enemies in watchlist')
 
     async def save_watchlist(self):

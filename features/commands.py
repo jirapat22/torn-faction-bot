@@ -265,13 +265,14 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
             app_commands.Choice(name='Board - War participation leaderboard (Management)', value='board'),
             app_commands.Choice(name='Xan - Xanax calculation (Management)', value='xan'),
             app_commands.Choice(name='History - War performance across wars (Management)', value='history'),
+            app_commands.Choice(name='Trends - Faction W/L record and top contributors (Management)', value='trends'),
         ])
         async def war(interaction: discord.Interaction, view: app_commands.Choice[str] = None, member: discord.Member = None):
             """Unified war command with multiple views"""
             view_value = view.value if view else 'status'
 
-            # Board, xan, and history views require management
-            if view_value in ('board', 'xan', 'history') and not is_management(interaction):
+            # Board, xan, history, and trends views require management
+            if view_value in ('board', 'xan', 'history', 'trends') and not is_management(interaction):
                 await interaction.response.send_message(
                     embed=create_embed(
                         title='Permission Denied',
@@ -315,6 +316,10 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
                     embed = await war_tracker.format_warstats_member_embed(torn_id, member.display_name)
                 else:
                     embed = await war_tracker.format_warstats_overview_embed()
+                await interaction.followup.send(embed=embed)
+
+            elif view_value == 'trends':
+                embed = await war_tracker.format_war_trends_embed()
                 await interaction.followup.send(embed=embed)
 
             else:  # status (default)
