@@ -587,7 +587,7 @@ class StakeoutManager:
 
         for i, record in enumerate(history):
             status = record['status']
-            is_offline = status in [STATUS_OFFLINE, STATUS_IDLE]
+            is_offline = status == STATUS_OFFLINE
 
             if is_offline:
                 if current_streak_start is None:
