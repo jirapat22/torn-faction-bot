@@ -225,7 +225,7 @@ class InactivityTracker:
 
         return oc_warning, oc_critical, data_updated
 
-    def _get_left_faction_status(self, torn_members):
+    def _get_left_faction_status(self, torn_members, guild_member_ids=None):
         """
         Detect verified Discord members who are no longer in the Torn faction.
 
@@ -252,7 +252,6 @@ class InactivityTracker:
             if tid and name:
                 torn_id_to_name[tid] = name
 
-        LEFT_FACTION_REPEAT_DAYS = 7   # Re-alert at most once per week
         LEFT_FACTION_MAX_DAYS = 30     # Stop tracking after 30 days (clearly not returning)
 
         for discord_id, torn_id in self.user_mapping.items():
@@ -265,13 +264,22 @@ class InactivityTracker:
                     data_updated = True
             else:
                 # Not in faction
+
+                # Stop tracking if they've left the Discord server
+                if guild_member_ids is not None and discord_id not in guild_member_ids:
+                    if tid in self.left_faction:
+                        torn_name = self.left_faction[tid].get('torn_name', tid)
+                        del self.left_faction[tid]
+                        data_updated = True
+                        print(f'Left-faction: Removed {torn_name} — no longer in Discord server')
+                    continue
+
                 if tid not in self.left_faction:
                     torn_name = torn_id_to_name.get(tid, f'ID:{tid}')
                     self.left_faction[tid] = {
                         'first_gone': now,
                         'torn_name': torn_name,
                         'discord_id': discord_id,
-                        'last_alerted': None,
                     }
                     data_updated = True
 
@@ -286,19 +294,12 @@ class InactivityTracker:
                     continue
 
                 if days_gone >= LEFT_FACTION_ALERT_DAYS:
-                    last_alerted = entry.get('last_alerted')
-                    days_since_alert = (now - last_alerted) / 86400 if last_alerted else None
-
-                    # Only alert if never alerted before, or it's been >= 7 days since last alert
-                    if last_alerted is None or days_since_alert >= LEFT_FACTION_REPEAT_DAYS:
-                        alerts.append({
-                            'torn_id': tid,
-                            'torn_name': entry['torn_name'],
-                            'discord_id': entry['discord_id'],
-                            'days_gone': round(days_gone, 1),
-                        })
-                        entry['last_alerted'] = now
-                        data_updated = True
+                    alerts.append({
+                        'torn_id': tid,
+                        'torn_name': entry['torn_name'],
+                        'discord_id': entry['discord_id'],
+                        'days_gone': round(days_gone, 1),
+                    })
 
         return alerts, data_updated
 
@@ -405,7 +406,8 @@ class InactivityTracker:
         print(f'OC check: {len(oc_warning)} warning, {len(oc_critical)} critical out of {len(torn_members)} total')
 
         # Left-faction check (verified Discord members no longer in Torn faction)
-        left_alerts, left_updated = self._get_left_faction_status(torn_members)
+        guild_member_ids = {str(m.id) for m in guild.members} if guild else None
+        left_alerts, left_updated = self._get_left_faction_status(torn_members, guild_member_ids)
         if left_updated:
             await self.save_left_faction_data()
         print(f'Left-faction check: {len(left_alerts)} alert(s), tracking {len(self.left_faction)} members')
@@ -458,7 +460,9 @@ class InactivityTracker:
         if oc_updated:
             await self.save_oc_data()
 
-        left_alerts, left_updated = self._get_left_faction_status(torn_members)
+        guild = self.bot.get_guild(GUILD_ID)
+        guild_member_ids = {str(m.id) for m in guild.members} if guild else None
+        left_alerts, left_updated = self._get_left_faction_status(torn_members, guild_member_ids)
         if left_updated:
             await self.save_left_faction_data()
 
