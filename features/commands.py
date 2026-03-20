@@ -98,6 +98,13 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
         registered_members = inactivity_tracker.get_registered_count()
         unregistered_members = total_members - registered_members
 
+        # Calculate uptime
+        if hasattr(bot, 'start_time'):
+            delta = datetime.now(timezone.utc) - bot.start_time
+            uptime_str = str(delta).split('.')[0]  # Remove microseconds
+        else:
+            uptime_str = 'Unknown'
+
         # Build status message
         embed = create_embed(
             title='Bot Status',
@@ -107,6 +114,7 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
                 {'name': 'Total Discord Members', 'value': str(total_members), 'inline': True},
                 {'name': 'Registered Members', 'value': str(registered_members), 'inline': True},
                 {'name': 'Unregistered Members', 'value': str(unregistered_members), 'inline': True},
+                {'name': 'Uptime', 'value': uptime_str, 'inline': False},
                 {'name': 'Tracking Method', 'value': 'Torn API (last_action)', 'inline': False},
                 {'name': 'How to Register', 'value': 'Use `/register <torn_id>`', 'inline': False}
             ]
