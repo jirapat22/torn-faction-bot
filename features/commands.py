@@ -122,6 +122,22 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
 
         await interaction.followup.send(embed=embed)
 
+    @bot.tree.command(name='help', description='Show bot commands and usage')
+    async def help(interaction: discord.Interaction):
+        """Show available commands and basic help"""
+        embed = create_embed(
+            title='Ascended Punks Bot - Commands',
+            description='Use these slash commands to interact with the bot',
+            color=EMBED_COLOR_INFO,
+            fields=[
+                {'name': 'Member Commands', 'value': '`/ping` - Check bot status\n`/register <id>` - Link Torn account\n`/myactivity` - Check your activity\n`/status` - Bot stats\n`/unregister` - Unlink account', 'inline': False},
+                {'name': 'Chain & War', 'value': '`/chain` - Chain status & report\n`/war` - War status & board', 'inline': False},
+                {'name': 'Management', 'value': '`/announce` - Post announcement\n`/createevent` - Schedule event\n`/test` - Test features', 'inline': False},
+                {'name': 'More Info', 'value': 'Full command guide: check pinned messages or ask management', 'inline': False}
+            ]
+        )
+        await interaction.response.send_message(embed=embed)
+
     @bot.tree.command(name='myactivity', description='Check your Torn activity status')
     async def myactivity(interaction: discord.Interaction):
         """Show the user's own activity information from Torn"""
