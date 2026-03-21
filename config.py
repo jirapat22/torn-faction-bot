@@ -9,6 +9,9 @@ from dotenv import load_dotenv
 # Load .env file for local development (Railway ignores this)
 load_dotenv()
 
+# Bot version
+BOT_VERSION = "2.5.0"
+
 # ===== DISCORD BOT TOKEN =====
 # Get this from: https://discord.com/developers/applications
 BOT_TOKEN = os.getenv("DISCORD_TOKEN")

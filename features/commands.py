@@ -18,6 +18,7 @@ from config import (
     INACTIVITY_CRITICAL_DAYS,
     OC_WARNING_DAYS,
     OC_CRITICAL_DAYS,
+    BOT_VERSION,
 )
 
 
@@ -50,6 +51,20 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
             ]
         )
 
+        await interaction.response.send_message(embed=embed)
+
+    @bot.tree.command(name='version', description='Show bot version')
+    async def version(interaction: discord.Interaction):
+        """Show bot version"""
+        embed = create_embed(
+            title='Bot Version',
+            description=f'Ascended Punks Faction Bot',
+            color=EMBED_COLOR_INFO,
+            fields=[
+                {'name': 'Version', 'value': BOT_VERSION, 'inline': True},
+                {'name': 'Phase', 'value': '5 (Complete)', 'inline': True}
+            ]
+        )
         await interaction.response.send_message(embed=embed)
 
     # Note: /register command moved to features/verification.py for better verification system
