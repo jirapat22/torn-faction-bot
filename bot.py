@@ -75,6 +75,7 @@ async def on_ready():
 
         # Mark initialized early to prevent duplicate command registration on reconnect
         _initialized = True
+        bot.start_time = datetime.now(timezone.utc)
 
         # Ensure data directories exist
         ensure_data_directories()
