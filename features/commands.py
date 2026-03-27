@@ -18,6 +18,7 @@ from config import (
     INACTIVITY_CRITICAL_DAYS,
     OC_WARNING_DAYS,
     OC_CRITICAL_DAYS,
+    BOT_VERSION,
 )
 
 
@@ -50,6 +51,20 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
             ]
         )
 
+        await interaction.response.send_message(embed=embed)
+
+    @bot.tree.command(name='version', description='Show bot version')
+    async def version(interaction: discord.Interaction):
+        """Show bot version"""
+        embed = create_embed(
+            title='Bot Version',
+            description=f'Ascended Punks Faction Bot',
+            color=EMBED_COLOR_INFO,
+            fields=[
+                {'name': 'Version', 'value': BOT_VERSION, 'inline': True},
+                {'name': 'Phase', 'value': '5 (Complete)', 'inline': True}
+            ]
+        )
         await interaction.response.send_message(embed=embed)
 
     # Note: /register command moved to features/verification.py for better verification system
@@ -111,6 +126,7 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
             description='Torn faction inactivity tracking system',
             color=EMBED_COLOR_INFO,
             fields=[
+                {'name': 'Version', 'value': BOT_VERSION, 'inline': True},
                 {'name': 'Total Discord Members', 'value': str(total_members), 'inline': True},
                 {'name': 'Registered Members', 'value': str(registered_members), 'inline': True},
                 {'name': 'Unregistered Members', 'value': str(unregistered_members), 'inline': True},
@@ -130,7 +146,7 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
             description='Use these slash commands to interact with the bot',
             color=EMBED_COLOR_INFO,
             fields=[
-                {'name': 'Member Commands', 'value': '`/ping` - Check bot status\n`/register <id>` - Link Torn account\n`/myactivity` - Check your activity\n`/status` - Bot stats\n`/unregister` - Unlink account', 'inline': False},
+                {'name': 'Member Commands', 'value': '`/ping` - Check bot status\n`/register <id>` - Link Torn account\n`/myactivity` - Check your activity\n`/status` - Bot stats\n`/version` - Show bot version\n`/unregister` - Unlink account', 'inline': False},
                 {'name': 'Chain & War', 'value': '`/chain` - Chain status & report\n`/war` - War status & board', 'inline': False},
                 {'name': 'Management', 'value': '`/announce` - Post announcement\n`/createevent` - Schedule event\n`/test` - Test features', 'inline': False},
                 {'name': 'More Info', 'value': 'Full command guide: check pinned messages or ask management', 'inline': False}
