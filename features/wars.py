@@ -1282,13 +1282,28 @@ class WarTracker:
 
         # Detect war END (was active, now not)
         if self.was_war_active and not war_info:
-            # Before declaring the war over, verify the API actually responded.
-            # If the API fails/returns nothing, get_current_war() also returns None —
-            # we must not confuse an API outage with the war genuinely ending.
+            # Re-fetch raw rankedwars data to confirm the war is truly over.
+            # get_current_war() returning None can mean:
+            #   (a) API is down — raw_data is None
+            #   (b) Torn glitch — war entry temporarily has a non-zero end timestamp
+            #   (c) War genuinely ended — war entry has end <= now
+            # We only announce in case (c).
             raw_data = await fetch_faction_data('rankedwars')
             if raw_data is None:
                 print('War: API unavailable, skipping war-end detection to prevent false announcement')
                 return
+
+            rankedwars = raw_data.get('rankedwars', {})
+            now = get_current_timestamp()
+
+            if self.current_war_id and str(self.current_war_id) in rankedwars:
+                war_entry = rankedwars[str(self.current_war_id)]
+                war = war_entry.get('war', {})
+                end = war.get('end', 0)
+                if not end or end > now:
+                    # end is 0 or in the future — war is still active, Torn API glitch
+                    print(f'War: API returned end={end} for active war {self.current_war_id}, ignoring false end signal')
+                    return
 
             print('War ended! Posting war results...')
 
