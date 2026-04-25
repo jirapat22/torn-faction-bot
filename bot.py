@@ -63,6 +63,8 @@ _original_close = bot.close
 
 async def _bot_close():
     try:
+        if _healthcheck_runner is not None:
+            await _healthcheck_runner.cleanup()
         await close_session()
     finally:
         await _original_close()
@@ -82,6 +84,55 @@ event_reminder_manager = None
 stakeout_manager = None
 alliance_manager = None
 _initialized = False  # Prevent re-initialization on reconnect
+
+
+_healthcheck_runner = None
+
+
+async def _start_healthcheck_server():
+    """
+    Spin up a tiny aiohttp server on $PORT for Railway's healthcheck probe.
+    No-op if PORT isn't set (local development) or already running.
+    """
+    global _healthcheck_runner
+    if _healthcheck_runner is not None:
+        return
+    port_str = os.getenv('PORT')
+    if not port_str:
+        return  # local run — skip
+    try:
+        port = int(port_str)
+    except ValueError:
+        logger.warning(f'PORT env var is not numeric: {port_str!r}; skipping healthcheck')
+        return
+
+    from aiohttp import web
+
+    async def handle(request):
+        # Healthy = bot logged in AND every background loop still running
+        loops = [
+            daily_inactivity_check, chain_update_check, war_update_check,
+            role_sync_check, enemy_status_check, event_reminder_check,
+            stakeout_check, alliance_war_check, poll_end_check,
+        ]
+        all_running = bot.is_ready() and all(loop.is_running() for loop in loops)
+        body = {
+            'status': 'healthy' if all_running else 'degraded',
+            'discord_ready': bot.is_ready(),
+            'loops_running': sum(1 for loop in loops if loop.is_running()),
+            'loops_total': len(loops),
+        }
+        return web.json_response(body, status=200 if all_running else 503)
+
+    app = web.Application()
+    app.router.add_get('/', handle)
+    app.router.add_get('/health', handle)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    _healthcheck_runner = runner
+    logger.info(f'Healthcheck server listening on 0.0.0.0:{port}')
 
 
 @bot.event
@@ -235,6 +286,11 @@ async def on_ready():
 
         if not loop_watchdog.is_running():
             loop_watchdog.start()
+
+        # Healthcheck HTTP endpoint for Railway (only starts if PORT is set,
+        # so local runs aren't affected). Reports 200 if Discord is connected
+        # AND every background loop is running; 503 otherwise.
+        await _start_healthcheck_server()
 
         logger.info('Bot is ready!')
 

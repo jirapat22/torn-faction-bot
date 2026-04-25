@@ -26,6 +26,26 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+_DATE_FORMATS = ('%d-%m-%Y', '%Y-%m-%d', '%d/%m/%Y', '%Y/%m/%d')
+
+
+def _parse_event_datetime(date_str: str, time_str: str) -> datetime:
+    """Parse a date+time pair, accepting DD-MM-YYYY, YYYY-MM-DD, or slash variants.
+
+    Returns a UTC-aware datetime; raises ValueError if no format matches.
+    """
+    last_err = None
+    for fmt in _DATE_FORMATS:
+        try:
+            dt = datetime.strptime(f'{date_str} {time_str}', f'{fmt} %H:%M')
+            return dt.replace(tzinfo=timezone.utc)
+        except ValueError as e:
+            last_err = e
+    raise ValueError(f'Could not parse date/time. Accepted formats: '
+                     f'DD-MM-YYYY, YYYY-MM-DD, DD/MM/YYYY, YYYY/MM/DD. '
+                     f'Last error: {last_err}')
+
+
 async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracker=None, verification_system=None,
                          event_reminder_manager=None, role_sync_manager=None,
                          enemy_watchlist=None, stakeout_manager=None, alliance_manager=None):
@@ -535,8 +555,8 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
             self.event_type = event_type
 
         event_date = discord.ui.TextInput(
-            label='Date (DD-MM-YYYY format)',
-            placeholder='E.g., 25-01-2026',
+            label='Date (DD-MM-YYYY or YYYY-MM-DD)',
+            placeholder='E.g., 25-01-2026 or 2026-01-25',
             required=True,
             max_length=10
         )
@@ -569,10 +589,8 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
                 # Use user description if provided, otherwise use default
                 description = self.event_description.value.strip() if self.event_description.value.strip() else self.default_desc
 
-                # Parse date and time (TCT = UTC) - DD-MM-YYYY format
-                datetime_str = f'{date} {time}'
-                event_start = datetime.strptime(datetime_str, '%d-%m-%Y %H:%M')
-                event_start = event_start.replace(tzinfo=timezone.utc)
+                # Parse date and time (TCT = UTC) — accepts DD-MM-YYYY, YYYY-MM-DD, etc.
+                event_start = _parse_event_datetime(date, time)
 
                 # Calculate end time
                 from datetime import timedelta
@@ -620,9 +638,9 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
             except ValueError as e:
                 error_embed = create_embed(
                     title='Invalid Format',
-                    description='Please use the correct format:\n'
-                               '• Date: DD-MM-YYYY (e.g., 25-01-2026)\n'
-                               '• Time: HH:MM (e.g., 14:30)\n\n'
+                    description='Please use one of:\n'
+                               '• Date: DD-MM-YYYY (25-01-2026) or YYYY-MM-DD (2026-01-25)\n'
+                               '• Time: HH:MM (14:30) — TCT/UTC\n\n'
                                f'Error: {str(e)}',
                     color=EMBED_COLOR_CRITICAL
                 )
@@ -658,8 +676,8 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
         )
 
         event_date = discord.ui.TextInput(
-            label='Date (DD-MM-YYYY format)',
-            placeholder='E.g., 25-01-2026',
+            label='Date (DD-MM-YYYY or YYYY-MM-DD)',
+            placeholder='E.g., 25-01-2026 or 2026-01-25',
             required=True,
             max_length=10
         )
@@ -697,10 +715,8 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
                 duration = int(self.event_duration.value) if self.event_duration.value else self.default_duration
                 description = self.event_desc.value
 
-                # Parse date and time (TCT = UTC) - DD-MM-YYYY format
-                datetime_str = f'{date} {time}'
-                event_start = datetime.strptime(datetime_str, '%d-%m-%Y %H:%M')
-                event_start = event_start.replace(tzinfo=timezone.utc)
+                # Parse date and time (TCT = UTC) — accepts DD-MM-YYYY, YYYY-MM-DD, etc.
+                event_start = _parse_event_datetime(date, time)
 
                 # Calculate end time
                 from datetime import timedelta
@@ -754,9 +770,9 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
             except ValueError as e:
                 error_embed = create_embed(
                     title='Invalid Format',
-                    description='Please use the correct format:\n'
-                               '• Date: DD-MM-YYYY (e.g., 25-01-2026)\n'
-                               '• Time: HH:MM (e.g., 14:30)\n\n'
+                    description='Please use one of:\n'
+                               '• Date: DD-MM-YYYY (25-01-2026) or YYYY-MM-DD (2026-01-25)\n'
+                               '• Time: HH:MM (14:30) — TCT/UTC\n\n'
                                f'Error: {str(e)}',
                     color=EMBED_COLOR_CRITICAL
                 )

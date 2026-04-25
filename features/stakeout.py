@@ -844,23 +844,34 @@ class StakeoutManager:
         m = int(round((mag - h) * 60))
         return f'UTC{sign}{h:02d}:{m:02d}'
 
+    # Mapping from internal heatmap chars to Discord-native emoji blocks
+    _EMOJI_MAP = {
+        '█': '🟥',  # very active (≥70% online)
+        '▓': '🟧',  # active     (≥45%)
+        '▒': '🟨',  # sometimes  (≥20%)
+        '░': '🟩',  # rarely     (<20%)
+        '·': '⬛',  # no data
+    }
+
     def format_heatmap_text(self, report: Dict) -> str:
-        """Format heatmap as ASCII art"""
+        """
+        Format the heatmap as Discord-native colour emoji.
+
+        Returned as a markdown string (NOT a code block) so emoji render as glyphs.
+        Hour labels are kept in a separate monospace line below.
+        """
         heatmap = report['heatmap']
+        emoji_row = ''.join(self._EMOJI_MAP.get(c, '⬛') for c in heatmap)
 
-        lines = []
-        lines.append('Activity Heatmap (TCT/UTC hours)')
-        lines.append('█=Active ▓=Often ▒=Sometimes ░=Rarely ·=No data')
-        lines.append('')
+        # Hour scale: tick every 6 hours, in monospace so it lines up
+        scale = '`00      06      12      18      23`'
 
-        # Hour labels (0-23)
-        hour_labels_1 = ''.join([str(h // 10) if h >= 10 else ' ' for h in range(24)])
-        hour_labels_2 = ''.join([str(h % 10) for h in range(24)])
-
-        lines.append(f'Hour: {hour_labels_1}')
-        lines.append(f'      {hour_labels_2}')
-        lines.append(f'      {"".join(heatmap)}')
-
+        lines = [
+            '**Activity Heatmap (TCT hours):**',
+            emoji_row,
+            scale,
+            '🟥 Active ≥70% · 🟧 ≥45% · 🟨 ≥20% · 🟩 <20% · ⬛ No data',
+        ]
         return '\n'.join(lines)
 
 
@@ -1269,7 +1280,8 @@ async def setup_stakeout_commands(bot, manager: StakeoutManager):
             f"\n\n*Stakeout data: <t:{first_unix}:f> → <t:{last_unix}:f>*"
         )
 
-        await interaction.followup.send(content=f'```\n{heatmap_text}\n```', embed=embed)
+        # Heatmap as plain markdown so colour emoji render (no code block).
+        await interaction.followup.send(content=heatmap_text, embed=embed)
 
     @stakeout_group.command(name='test', description='[Management] Test API connectivity for stakeout')
     @app_commands.describe(torn_id='Optional: Test with a specific Torn player ID')
