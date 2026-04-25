@@ -27,6 +27,10 @@ from config import (
 )
 
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 class WarTracker:
     """Tracks faction wars and provides statistics"""
 
@@ -49,7 +53,7 @@ class WarTracker:
     async def load_war_history(self):
         """Load war history from JSON file"""
         self.war_history = load_json(self.war_data_file, default={})
-        print(f'Loaded war history with {len(self.war_history)} records')
+        logger.info(f'Loaded war history with {len(self.war_history)} records')
 
     async def save_war_history(self):
         """Save war history to JSON file"""
@@ -59,7 +63,7 @@ class WarTracker:
         """Load historical per-member war stats"""
         self.war_member_stats = load_json(self.war_member_stats_file, default={'wars': []})
         count = len(self.war_member_stats.get('wars', []))
-        print(f'Loaded war member stats with {count} war records')
+        logger.info(f'Loaded war member stats with {count} war records')
 
     async def save_war_member_stats(self):
         """Save historical per-member war stats"""
@@ -74,7 +78,7 @@ class WarTracker:
                 break
 
         if not our_members:
-            print('War member stats: No member data to save')
+            logger.info('War member stats: No member data to save')
             return
 
         from utils.torn_api import fetch_faction_members
@@ -107,7 +111,7 @@ class WarTracker:
             self.war_member_stats['wars'] = self.war_member_stats['wars'][-10:]
 
         await self.save_war_member_stats()
-        print(f'Saved war member stats for war {war_id} ({len(members_data)} members)')
+        logger.info(f'Saved war member stats for war {war_id} ({len(members_data)} members)')
 
     async def _fetch_rankedwars(self):
         """Fetch ranked wars data from Torn API (v1 - works for any faction)"""
@@ -144,7 +148,7 @@ class WarTracker:
                     for fid, fdata in factions.items():
                         if isinstance(fdata, dict):
                             members = fdata.get('members', {})
-                            print(f'War report: Faction {fid} ({fdata.get("name", "?")}) - {len(members)} members')
+                            logger.info(f'War report: Faction {fid} ({fdata.get("name", "?")}) - {len(members)} members')
                     # Cache the report with war_id for validation
                     cache_data = {'war_id': str(war_id) if war_id else None, 'report': report}
                     save_json(cache_file, cache_data)
@@ -156,13 +160,13 @@ class WarTracker:
             cached_war_id = cached.get('war_id')
             # Only use cache if it matches the current war (or no war_id to check)
             if war_id is None or cached_war_id is None or str(cached_war_id) == str(war_id):
-                print('War report: Using cached report (API no longer returning data)')
+                logger.info('War report: Using cached report (API no longer returning data)')
                 return cached['report']
             else:
-                print(f'War report: Cache is for war {cached_war_id}, current war is {war_id} — ignoring stale cache')
+                logger.info(f'War report: Cache is for war {cached_war_id}, current war is {war_id} — ignoring stale cache')
                 return None
 
-        print('War report: No data from API and no cache available')
+        logger.info('War report: No data from API and no cache available')
         return None
 
     async def get_current_war(self):
@@ -174,7 +178,7 @@ class WarTracker:
         """
         rankedwars = await self._fetch_rankedwars()
         if not rankedwars:
-            print('War: No ranked wars data found')
+            logger.info('War: No ranked wars data found')
             return None
 
         # Find active war - must have started and not ended
@@ -362,7 +366,7 @@ class WarTracker:
                 if ts > latest_timestamp:
                     latest_timestamp = ts
 
-            print(f'War attacks page {page + 1}: got {len(attacks)} attacks, {new_count} new (total: {len(all_attacks)})')
+            logger.info(f'War attacks page {page + 1}: got {len(attacks)} attacks, {new_count} new (total: {len(all_attacks)})')
 
             # If we got fewer than 90 attacks, we've likely reached the end
             # (API returns ~100, using 90 as threshold to account for variation)
@@ -377,7 +381,7 @@ class WarTracker:
             # Add 1 second to avoid re-fetching the same last attack
             current_from = latest_timestamp + 1
 
-        print(f'War: Fetched {len(all_attacks)} total attacks since war start')
+        logger.info(f'War: Fetched {len(all_attacks)} total attacks since war start')
         return all_attacks
 
     async def _get_war_attack_stats(self, enemy_faction_id, war_start):
@@ -467,7 +471,7 @@ class WarTracker:
                         stats[defender_id]['outside_incoming'] += 1
 
         except Exception as e:
-            print(f'War: Error computing attack stats: {e}')
+            logger.error(f'War: Error computing attack stats: {e}')
 
         return stats
 
@@ -574,7 +578,7 @@ class WarTracker:
             attack_stats = await self._get_war_attack_stats(enemy_faction_id, war_start)
 
         if our_war_members:
-            print(f'War: Using rankedwarreport data ({len(our_war_members)} members)')
+            logger.info(f'War: Using rankedwarreport data ({len(our_war_members)} members)')
             # Use rankedwarreport data (accurate and complete)
             for user_id, member_data in faction_members.items():
                 member_name = member_data.get('name', f'ID:{user_id}')
@@ -594,7 +598,7 @@ class WarTracker:
                     'score': war_stats.get('score', 0),
                 })
         else:
-            print('War: rankedwarreport not available, falling back to attacks log')
+            logger.info('War: rankedwarreport not available, falling back to attacks log')
             data_source = 'attacks'
             # Fall back to attacks log (paginated to fetch all war attacks)
             for user_id, member_data in faction_members.items():
@@ -1277,7 +1281,7 @@ class WarTracker:
         management_channel = self.bot.get_channel(WAR_MANAGEMENT_CHANNEL_ID) if WAR_MANAGEMENT_CHANNEL_ID != 0 else None
 
         if not channel:
-            print(f'Warning: Could not find #war channel (ID: {WAR_CHANNEL_ID})')
+            logger.warning(f'Warning: Could not find #war channel (ID: {WAR_CHANNEL_ID})')
             return
 
         # Detect war END (was active, now not)
@@ -1290,7 +1294,7 @@ class WarTracker:
             # We only announce in case (c).
             raw_data = await fetch_faction_data('rankedwars')
             if raw_data is None:
-                print('War: API unavailable, skipping war-end detection to prevent false announcement')
+                logger.info('War: API unavailable, skipping war-end detection to prevent false announcement')
                 return
 
             rankedwars = raw_data.get('rankedwars', {})
@@ -1302,10 +1306,10 @@ class WarTracker:
                 end = war.get('end', 0)
                 if not end or end > now:
                     # end is 0 or in the future — war is still active, Torn API glitch
-                    print(f'War: API returned end={end} for active war {self.current_war_id}, ignoring false end signal')
+                    logger.info(f'War: API returned end={end} for active war {self.current_war_id}, ignoring false end signal')
                     return
 
-            print('War ended! Posting war results...')
+            logger.info('War ended! Posting war results...')
 
             # Get final war stats from history
             if self.current_war_id and self.current_war_id in self.war_history:
@@ -1354,14 +1358,14 @@ class WarTracker:
                     ping_text = f'{faction_role.mention} '
 
                 await channel.send(f'{ping_text}🏁 **War Complete!**', embed=public_embed)
-                print('Posted war completion report to public channel')
+                logger.info('Posted war completion report to public channel')
 
                 # Auto-clear enemy watchlist
                 if self.enemy_watchlist:
                     cleared = self.enemy_watchlist.clear_all()
                     await self.enemy_watchlist.save_watchlist()
                     if cleared > 0:
-                        print(f'Auto-cleared {cleared} enemies from watchlist')
+                        logger.info(f'Auto-cleared {cleared} enemies from watchlist')
 
                 # Fetch rankedwarreport for management report + war stats history
                 report = await self._fetch_rankedwarreport(war_id=self.current_war_id)
@@ -1382,9 +1386,9 @@ class WarTracker:
                         for i, mgmt_embed in enumerate(management_embeds):
                             content = '📊 **War Management Report**' if i == 0 else None
                             await management_channel.send(content=content, embed=mgmt_embed)
-                        print('Posted detailed war report to management channel')
+                        logger.info('Posted detailed war report to management channel')
                 else:
-                    print('Warning: War management channel not configured')
+                    logger.warning('Warning: War management channel not configured')
 
                 # Save per-member war stats to history
                 if report_factions:
@@ -1410,7 +1414,7 @@ class WarTracker:
         if not self.was_war_active:
             self.was_war_active = True
             self.current_war_id = war_id
-            print(f'War detected: {war_id}')
+            logger.info(f'War detected: {war_id}')
 
         # Save war data to history (faction-level scores for final report)
         self.war_history[war_id] = {

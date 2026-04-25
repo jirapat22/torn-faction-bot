@@ -22,6 +22,10 @@ from config import (
 )
 
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracker=None, verification_system=None,
                          event_reminder_manager=None, role_sync_manager=None,
                          enemy_watchlist=None, stakeout_manager=None, alliance_manager=None):
@@ -58,11 +62,10 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
         """Show bot version"""
         embed = create_embed(
             title='Bot Version',
-            description=f'Ascended Punks Faction Bot',
+            description='Ascended Punks Faction Bot',
             color=EMBED_COLOR_INFO,
             fields=[
                 {'name': 'Version', 'value': BOT_VERSION, 'inline': True},
-                {'name': 'Phase', 'value': '5 (Complete)', 'inline': True}
             ]
         )
         await interaction.response.send_message(embed=embed)
@@ -146,10 +149,49 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
             description='Use these slash commands to interact with the bot',
             color=EMBED_COLOR_INFO,
             fields=[
-                {'name': 'Member Commands', 'value': '`/ping` - Check bot status\n`/register <id>` - Link Torn account\n`/myactivity` - Check your activity\n`/status` - Bot stats\n`/version` - Show bot version\n`/unregister` - Unlink account', 'inline': False},
-                {'name': 'Chain & War', 'value': '`/chain` - Chain status & report\n`/war` - War status & board', 'inline': False},
-                {'name': 'Management', 'value': '`/announce` - Post announcement\n`/createevent` - Schedule event\n`/test` - Test features', 'inline': False},
-                {'name': 'More Info', 'value': 'Full command guide: check pinned messages or ask management', 'inline': False}
+                {
+                    'name': 'Member',
+                    'value': (
+                        '`/ping` - Check bot status\n'
+                        '`/register <id>` - Link Torn account\n'
+                        '`/unregister` - Unlink account\n'
+                        '`/whois <user>` - Look up Torn ID\n'
+                        '`/myactivity` - Check your activity\n'
+                        '`/status` - Bot stats\n'
+                        '`/version` - Show bot version'
+                    ),
+                    'inline': False,
+                },
+                {
+                    'name': 'Chain & War',
+                    'value': (
+                        '`/chain` - Chain status / report / board\n'
+                        '`/war` - War status / board / xan / history / trends\n'
+                        '`/avail` - Availability polls (setup / summary / mine / list / delete)'
+                    ),
+                    'inline': False,
+                },
+                {
+                    'name': 'Intel (Management)',
+                    'value': (
+                        '`/faction compare|stats <id>` - Compare / analyse a faction\n'
+                        '`/enemy` - Enemy watchlist\n'
+                        '`/stakeout` - Track enemy activity\n'
+                        '`/alliance` - Ally faction war tracking'
+                    ),
+                    'inline': False,
+                },
+                {
+                    'name': 'Management',
+                    'value': (
+                        '`/announce` - Post announcement\n'
+                        '`/createevent` - Schedule event\n'
+                        '`/verify` - Verification tools\n'
+                        '`/rolesync` - Sync Torn positions to Discord roles\n'
+                        '`/test <feature>` - Manually trigger a background check'
+                    ),
+                    'inline': False,
+                },
             ]
         )
         await interaction.response.send_message(embed=embed)
@@ -367,9 +409,9 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
                 embed = await war_tracker.format_war_embed(war_info)
                 await interaction.followup.send(embed=embed)
 
-        print('War command registered (/war with status/board/xan/history views)')
+        logger.info('War command registered (/war with status/board/xan/history views)')
     else:
-        print('WARNING: war_tracker is None, war command NOT registered')
+        logger.warning('war_tracker is None, war command NOT registered')
 
     # ===== MANAGEMENT COMMANDS (Phase 5) =====
 
@@ -551,18 +593,20 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
                     location='Torn City'
                 )
 
-                # Confirm to user
+                # Confirm to user (Discord <t:...> renders in viewer's local TZ)
+                start_unix = int(event_start.timestamp())
+                time_line = f'🕐 Time: <t:{start_unix}:f> ({time} TCT)'
                 if self.manual_end:
                     confirm_desc = (f'**{name}**\n\n'
                                    f'📅 Date: {date}\n'
-                                   f'🕐 Time: {time} TCT (UTC)\n'
+                                   f'{time_line}\n'
                                    f'⏱️ Duration: Until manually ended\n\n'
                                    f'⚠️ Right-click event → End Event when war completes\n\n'
                                    f'Event ID: {event.id}')
                 else:
                     confirm_desc = (f'**{name}**\n\n'
                                    f'📅 Date: {date}\n'
-                                   f'🕐 Time: {time} TCT (UTC)\n'
+                                   f'{time_line}\n'
                                    f'⏱️ Duration: {duration} hour(s)\n\n'
                                    f'Event ID: {event.id}')
 
@@ -682,11 +726,13 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
                     location='Torn City'
                 )
 
-                # Confirm to user
+                # Confirm to user (Discord <t:...> renders in viewer's local TZ)
+                start_unix = int(event_start.timestamp())
+                time_line = f'🕐 Time: <t:{start_unix}:f> ({time} TCT)'
                 if self.manual_end:
                     confirm_desc = (f'**{name}**\n\n'
                                    f'📅 Date: {date}\n'
-                                   f'🕐 Time: {time} TCT (UTC)\n'
+                                   f'{time_line}\n'
                                    f'⏱️ Duration: {duration} hour(s) (placeholder)\n\n'
                                    f'⚠️ **Manual End Event**\n'
                                    f'Right-click event → End Event when complete\n\n'
@@ -694,7 +740,7 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
                 else:
                     confirm_desc = (f'**{name}**\n\n'
                                    f'📅 Date: {date}\n'
-                                   f'🕐 Time: {time} TCT (UTC)\n'
+                                   f'{time_line}\n'
                                    f'⏱️ Duration: {duration} hour(s)\n\n'
                                    f'Event ID: {event.id}')
 
@@ -941,5 +987,5 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
                 ephemeral=True
             )
 
-    print('Management commands registered (/announce, /createevent, /test)')
-    print('Slash commands registered')
+    logger.info('Management commands registered (/announce, /createevent, /test)')
+    logger.info('Slash commands registered')

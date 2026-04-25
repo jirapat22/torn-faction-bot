@@ -20,16 +20,21 @@ from discord import app_commands
 from datetime import datetime, timezone
 from typing import Optional, Dict, List
 
-from utils.helpers import load_json, save_json, create_embed, is_management
+from utils.helpers import load_json, save_json, create_embed, is_management, format_time_dual
 from utils.torn_api import fetch_any_faction_data
 from config import (
     EMBED_COLOR_INFO,
     EMBED_COLOR_SUCCESS,
     EMBED_COLOR_WARNING,
     EMBED_COLOR_CRITICAL,
-    GUILD_ID
+    GUILD_ID,
+    ALLIANCE_CHANNEL_ID,
 )
 
+
+import logging
+
+logger = logging.getLogger(__name__)
 
 class AllianceManager:
     """Manages alliance faction war tracking"""
@@ -46,24 +51,22 @@ class AllianceManager:
 
     async def load_data(self):
         """Load alliance data from JSON"""
-        # Default channel: alliance-monitor-beta
-        DEFAULT_ALLIANCE_CHANNEL = 1468903679040950427
-
         data = load_json(self.data_file, default={
             'allies': {},
-            'channel_id': DEFAULT_ALLIANCE_CHANNEL,
+            'channel_id': ALLIANCE_CHANNEL_ID,
             'active_wars': {},
             'announced_wars': [],
             'announced_scheduled': [],
             'announced_24h': []
         })
         self.allies = data.get('allies', {})
-        self.channel_id = data.get('channel_id', DEFAULT_ALLIANCE_CHANNEL) or DEFAULT_ALLIANCE_CHANNEL
+        # Stored channel wins; fall back to env-configured default if unset.
+        self.channel_id = data.get('channel_id') or ALLIANCE_CHANNEL_ID
         self.active_wars = data.get('active_wars', {})
         self.announced_wars = set(data.get('announced_wars', []))
         self.announced_scheduled = set(data.get('announced_scheduled', []))
         self.announced_24h = set(data.get('announced_24h', []))
-        print(f'Loaded {len(self.allies)} alliance factions to track')
+        logger.info(f'Loaded {len(self.allies)} alliance factions to track')
 
     async def save_data(self):
         """Save alliance data to JSON"""
@@ -148,7 +151,7 @@ class AllianceManager:
         """Fetch faction info from Torn API using shared API layer"""
         data = await fetch_any_faction_data(faction_id, selections='basic')
         if not data:
-            print(f'Alliance: Could not fetch faction {faction_id}')
+            logger.warning(f'Alliance: Could not fetch faction {faction_id}')
         return data
 
     async def _fetch_faction_wars(self, faction_id: str) -> Optional[Dict]:
@@ -157,7 +160,7 @@ class AllianceManager:
         the API key owner's faction wars."""
         data = await fetch_any_faction_data(faction_id, selections='basic,rankedwars')
         if not data:
-            print(f'Alliance: Could not fetch wars for faction {faction_id}')
+            logger.warning(f'Alliance: Could not fetch wars for faction {faction_id}')
             return None
 
         # Convert v1 rankedwars format to the wars format we expect
@@ -236,7 +239,7 @@ class AllianceManager:
 
         channel = self.bot.get_channel(self.channel_id)
         if not channel:
-            print(f'Alliance: Could not find channel {self.channel_id}')
+            logger.warning(f'Alliance: Could not find channel {self.channel_id}')
             return
 
         for faction_id, ally_info in self.allies.items():
@@ -245,13 +248,13 @@ class AllianceManager:
             try:
                 faction_data = await self._fetch_faction_wars(faction_id)
                 if not faction_data:
-                    print(f'Alliance: No data returned for {ally_name} [{faction_id}]')
+                    logger.info(f'Alliance: No data returned for {ally_name} [{faction_id}]')
                     continue
 
                 wars = faction_data.get('wars', {})
 
                 # Debug: log the structure we received
-                print(f'Alliance: {ally_name} wars data type: {type(wars)}, keys: {wars.keys() if isinstance(wars, dict) else "N/A"}')
+                logger.info(f'Alliance: {ally_name} wars data type: {type(wars)}, keys: {wars.keys() if isinstance(wars, dict) else "N/A"}')
 
                 # Handle empty wars dict - war may have ended
                 if not wars:
@@ -276,7 +279,7 @@ class AllianceManager:
                             await self._process_war_v2(channel, faction_id, ally_name, war_id, war_item)
 
             except Exception as e:
-                print(f'Alliance: Error checking wars for {ally_name}: {e}')
+                logger.error(f'Alliance: Error checking wars for {ally_name}: {e}')
                 import traceback
                 traceback.print_exc()
 
@@ -289,7 +292,7 @@ class AllianceManager:
         end_time = war_item.get('end', 0)
         now = datetime.now(timezone.utc).timestamp()
 
-        print(f'Alliance v2: Processing war {war_id} for {ally_name} - start: {start_time}, end: {end_time}, now: {now}')
+        logger.info(f'Alliance v2: Processing war {war_id} for {ally_name} - start: {start_time}, end: {end_time}, now: {now}')
 
         # Get enemy faction info from war data
         factions = war_item.get('factions', [])
@@ -306,7 +309,7 @@ class AllianceManager:
                     break
 
             if not ally_in_war:
-                print(f'Alliance: War {war_id} does not involve {ally_name} [{faction_id}], skipping')
+                logger.info(f'Alliance: War {war_id} does not involve {ally_name} [{faction_id}], skipping')
                 return
 
             for fdata in factions:
@@ -320,7 +323,7 @@ class AllianceManager:
             ally_in_war = str(faction_id) in [str(k) for k in factions.keys()]
 
             if not ally_in_war:
-                print(f'Alliance: War {war_id} does not involve {ally_name} [{faction_id}], skipping')
+                logger.info(f'Alliance: War {war_id} does not involve {ally_name} [{faction_id}], skipping')
                 return
 
             for fid, fdata in factions.items():
@@ -363,81 +366,21 @@ class AllianceManager:
             if faction_id in self.active_wars:
                 await self._handle_war_ended(channel, faction_id, ally_name, war_item)
 
-    async def _process_war(self, channel, faction_id: str, ally_name: str, war_id: str, war_data: Dict):
-        """Process a single war and send appropriate announcements (v1 format)"""
-        war = war_data.get('war', {})
-        start_time = war.get('start', 0)
-        end_time = war.get('end', 0)
-        now = datetime.now(timezone.utc).timestamp()
-
-        # Debug logging
-        print(f'Alliance v1: Processing war {war_id} for {ally_name} - start: {start_time}, end: {end_time}, now: {now}')
-
-        # Get enemy faction info
-        factions = war_data.get('factions', {})
-        enemy_name = 'Unknown Faction'
-        enemy_id = None
-
-        for fid, fdata in factions.items():
-            if str(fid) != str(faction_id):
-                enemy_name = fdata.get('name', f'Faction {fid}')
-                enemy_id = fid
-                break
-
-        # War hasn't started yet - announce scheduled and 24h reminder
-        if start_time > now:
-            hours_until = (start_time - now) / 3600
-
-            # Announce immediately when war is first detected
-            if war_id not in self.announced_scheduled:
-                await self._announce_war_scheduled(channel, ally_name, enemy_name, start_time, hours_until)
-                self.announced_scheduled.add(war_id)
-
-            # 24-hour reminder (within 22-26 hour window to catch it reliably)
-            if war_id not in self.announced_24h and 22 <= hours_until <= 26:
-                await self._announce_war_24h_reminder(channel, ally_name, enemy_name, start_time)
-                self.announced_24h.add(war_id)
-
-        # War is active (started but not ended)
-        # end_time can be None or 0 for ongoing wars
-        elif start_time <= now and (end_time is None or end_time == 0 or now < end_time):
-            # Announce war start
-            if war_id not in self.announced_wars:
-                await self._announce_war_started(channel, ally_name, enemy_name)
-                self.announced_wars.add(war_id)
-
-            # Track active war for end detection
-            self.active_wars[faction_id] = {
-                'war_id': war_id,
-                'enemy_name': enemy_name,
-                'enemy_id': enemy_id,
-                'start_time': start_time,
-                'factions': factions
-            }
-
-        # War ended (only if end_time is set and has passed)
-        elif end_time and end_time > 0 and now >= end_time:
-            if faction_id in self.active_wars:
-                await self._handle_war_ended(channel, faction_id, ally_name, war_data)
-
     async def _announce_war_scheduled(self, channel, ally_name: str, enemy_name: str, start_time: int, hours_until: float):
         """Announce a scheduled war"""
-        start_dt = datetime.fromtimestamp(start_time, tz=timezone.utc)
-        date_str = start_dt.strftime('%H:%M %d-%m-%Y TCT')
-
         embed = create_embed(
             title='⚔️ Alliance War Scheduled',
             description=(
                 f"**{ally_name}** is starting a war with **{enemy_name}**\n\n"
                 f"**Starts in:** {hours_until:.1f} hours\n"
-                f"**Start time:** {date_str}\n"
+                f"**Start time:** {format_time_dual(start_time, date=True)}\n"
                 f"**Countdown:** <t:{int(start_time)}:R>"
             ),
             color=EMBED_COLOR_WARNING
         )
 
         await channel.send(embed=embed)
-        print(f'Alliance: Announced scheduled war - {ally_name} vs {enemy_name}')
+        logger.info(f'Alliance: Announced scheduled war - {ally_name} vs {enemy_name}')
 
     async def _announce_war_24h_reminder(self, channel, ally_name: str, enemy_name: str, start_time: int):
         """Announce 24-hour reminder for upcoming war"""
@@ -452,7 +395,7 @@ class AllianceManager:
         )
 
         await channel.send(embed=embed)
-        print(f'Alliance: Announced 24h reminder - {ally_name} vs {enemy_name}')
+        logger.info(f'Alliance: Announced 24h reminder - {ally_name} vs {enemy_name}')
 
     async def _announce_war_started(self, channel, ally_name: str, enemy_name: str):
         """Announce a war has started"""
@@ -463,7 +406,7 @@ class AllianceManager:
         )
 
         await channel.send(embed=embed)
-        print(f'Alliance: Announced war start - {ally_name} vs {enemy_name}')
+        logger.info(f'Alliance: Announced war start - {ally_name} vs {enemy_name}')
 
     async def _handle_war_ended(self, channel, faction_id: str, ally_name: str, war_data: Dict = None):
         """Handle war end and announce result"""
@@ -530,7 +473,7 @@ class AllianceManager:
             self.announced_scheduled.discard(war_id)
             self.announced_24h.discard(war_id)
 
-        print(f'Alliance: Announced war {result} - {ally_name} vs {enemy_name}')
+        logger.info(f'Alliance: Announced war {result} - {ally_name} vs {enemy_name}')
 
 
 async def setup_alliance_commands(bot, manager: AllianceManager):
@@ -799,4 +742,4 @@ async def setup_alliance_commands(bot, manager: AllianceManager):
 
     # Add group to bot
     bot.tree.add_command(alliance_group)
-    print('Alliance commands registered (/alliance add, remove, list, setchannel, check)')
+    logger.info('Alliance commands registered (/alliance add, remove, list, setchannel, check)')

@@ -4,18 +4,38 @@ Handles all API calls to Torn.com
 """
 
 import aiohttp
+import asyncio
 import time
-from config import TORN_API_KEY, TORN_PERSONAL_API_KEY, TORN_FACTION_ID, TORN_API_CACHE_SECONDS
+from collections import deque
+from config import (
+    TORN_API_KEY,
+    TORN_PERSONAL_API_KEY,
+    TORN_FACTION_ID,
+    TORN_API_CACHE_SECONDS,
+    TORN_API_MAX_REQUESTS_PER_MINUTE,
+)
 
+import logging
+
+logger = logging.getLogger(__name__)
 # API cache to prevent rate limiting
 # Format: {cache_key: {'data': data, 'timestamp': timestamp}}
 api_cache = {}
+
+# Separate FFScouter cache — keyed by sorted target ID list
+# Format: {cache_key: {'data': data, 'timestamp': timestamp}}
+_ffscouter_cache = {}
+FFSCOUTER_CACHE_SECONDS = 900  # 15 minutes — estimates don't change fast
 
 # Torn API base URL
 TORN_API_BASE = "https://api.torn.com"
 
 # Reusable aiohttp session (created on first request)
 _session = None
+
+# Rolling-window rate limiter for Torn API
+_rate_window = deque()
+_rate_lock = asyncio.Lock()
 
 
 async def _get_session():
@@ -24,6 +44,36 @@ async def _get_session():
     if _session is None or _session.closed:
         _session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10))
     return _session
+
+
+async def close_session():
+    """Close the shared aiohttp session (called on bot shutdown)"""
+    global _session
+    if _session is not None and not _session.closed:
+        await _session.close()
+        _session = None
+
+
+async def _wait_rate_limit():
+    """
+    Block until a Torn API request slot is available within the configured
+    per-minute budget. Uses a rolling 60s window.
+    """
+    if TORN_API_MAX_REQUESTS_PER_MINUTE <= 0:
+        return
+    async with _rate_lock:
+        now = time.monotonic()
+        # Drop entries older than 60s
+        while _rate_window and now - _rate_window[0] >= 60:
+            _rate_window.popleft()
+        if len(_rate_window) >= TORN_API_MAX_REQUESTS_PER_MINUTE:
+            sleep_for = 60 - (now - _rate_window[0])
+            if sleep_for > 0:
+                await asyncio.sleep(sleep_for)
+            now = time.monotonic()
+            while _rate_window and now - _rate_window[0] >= 60:
+                _rate_window.popleft()
+        _rate_window.append(now)
 
 
 def _prune_cache():
@@ -58,7 +108,7 @@ async def _make_api_request(endpoint, params=None, use_personal_key=False):
         if TORN_PERSONAL_API_KEY:
             params['key'] = TORN_PERSONAL_API_KEY
         else:
-            print(f'WARNING: TORN_PERSONAL_API_KEY not set, falling back to faction key for {endpoint}')
+            logger.warning(f'TORN_PERSONAL_API_KEY not set, falling back to faction key for {endpoint}')
             params['key'] = TORN_API_KEY
     else:
         params['key'] = TORN_API_KEY
@@ -68,7 +118,7 @@ async def _make_api_request(endpoint, params=None, use_personal_key=False):
         cached = api_cache[cache_key]
         age = time.time() - cached['timestamp']
         if age < TORN_API_CACHE_SECONDS:
-            print(f'Using cached data for {endpoint} (age: {age:.1f}s)')
+            logger.info(f'Using cached data for {endpoint} (age: {age:.1f}s)')
             return cached['data']
 
     # Periodically prune expired cache entries
@@ -79,10 +129,11 @@ async def _make_api_request(endpoint, params=None, use_personal_key=False):
     url = f"{TORN_API_BASE}/{endpoint}"
 
     try:
+        await _wait_rate_limit()
         session = await _get_session()
         async with session.get(url, params=params) as response:
             if response.status != 200:
-                print(f'Torn API error: HTTP {response.status}')
+                logger.error(f'Torn API error: HTTP {response.status}')
                 return None
 
             data = await response.json()
@@ -91,7 +142,7 @@ async def _make_api_request(endpoint, params=None, use_personal_key=False):
             if 'error' in data:
                 error_code = data['error'].get('code', 'unknown')
                 error_msg = data['error'].get('error', 'Unknown error')
-                print(f'Torn API error {error_code}: {error_msg}')
+                logger.error(f'Torn API error {error_code}: {error_msg}')
                 return None
 
             # Cache the response
@@ -103,10 +154,10 @@ async def _make_api_request(endpoint, params=None, use_personal_key=False):
             return data
 
     except aiohttp.ClientError as e:
-        print(f'Network error accessing Torn API: {e}')
+        logger.error(f'Network error accessing Torn API: {e}')
         return None
     except Exception as e:
-        print(f'Unexpected error with Torn API: {e}')
+        logger.error(f'Unexpected error with Torn API: {e}')
         return None
 
 
@@ -127,7 +178,7 @@ async def fetch_faction_members():
         return None
 
     members = data.get('members', {})
-    print(f'Fetched data for {len(members)} faction members from Torn API')
+    logger.info(f'Fetched data for {len(members)} faction members from Torn API')
     return members
 
 
@@ -382,14 +433,23 @@ async def fetch_ffscouter_stats(torn_ids: list) -> dict:
     """
     from config import FFSCOUTER_API_KEY
     if not FFSCOUTER_API_KEY:
-        print('FFScouter: FFSCOUTER_API_KEY not set — skipping stat lookup')
+        logger.info('FFScouter: FFSCOUTER_API_KEY not set — skipping stat lookup')
         return {}
 
     if not torn_ids:
         return {}
 
     # Cap at 205 per request (API limit)
-    targets = ','.join(str(tid) for tid in torn_ids[:205])
+    capped_ids = torn_ids[:205]
+    targets = ','.join(str(tid) for tid in capped_ids)
+
+    # Check FFScouter cache (keyed by sorted target list)
+    cache_key = ','.join(sorted(str(tid) for tid in capped_ids))
+    cached = _ffscouter_cache.get(cache_key)
+    if cached and time.time() - cached['timestamp'] < FFSCOUTER_CACHE_SECONDS:
+        age = time.time() - cached['timestamp']
+        logger.info(f'FFScouter: using cached data (age: {age:.1f}s, {len(cached["data"])} players)')
+        return cached['data']
 
     try:
         session = await _get_session()
@@ -398,14 +458,14 @@ async def fetch_ffscouter_stats(torn_ids: list) -> dict:
 
         async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=15)) as response:
             if response.status != 200:
-                print(f'FFScouter API error: HTTP {response.status}')
+                logger.error(f'FFScouter API error: HTTP {response.status}')
                 return {}
 
             data = await response.json()
 
             # Handle error responses
             if isinstance(data, dict) and 'error' in data:
-                print(f'FFScouter error: {data["error"]}')
+                logger.error(f'FFScouter error: {data["error"]}')
                 return {}
 
             # Normalise to {torn_id_str: player_obj}
@@ -423,9 +483,14 @@ async def fetch_ffscouter_stats(torn_ids: list) -> dict:
                     if isinstance(p, dict):
                         result[str(pid)] = p
 
-            print(f'FFScouter: fetched stats for {len(result)}/{len(torn_ids)} players')
+            logger.info(f'FFScouter: fetched stats for {len(result)}/{len(torn_ids)} players')
+            _ffscouter_cache[cache_key] = {'data': result, 'timestamp': time.time()}
+            # Prune any cache entries older than 2x TTL
+            cutoff = time.time() - (FFSCOUTER_CACHE_SECONDS * 2)
+            for k in [k for k, v in _ffscouter_cache.items() if v['timestamp'] < cutoff]:
+                del _ffscouter_cache[k]
             return result
 
     except Exception as e:
-        print(f'FFScouter request failed: {e}')
+        logger.error(f'FFScouter request failed: {e}')
         return {}

@@ -22,6 +22,10 @@ from config import (
 )
 
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 class EventReminderManager:
     """Manages 35-hour advance event reminders"""
 
@@ -34,7 +38,7 @@ class EventReminderManager:
         """Load announced event IDs from JSON"""
         data = load_json(self.data_file, default={'announced': []})
         self.announced_events = set(data.get('announced', []))
-        print(f'Loaded {len(self.announced_events)} announced event IDs')
+        logger.info(f'Loaded {len(self.announced_events)} announced event IDs')
 
     async def save_data(self):
         """Save announced event IDs to JSON"""
@@ -87,7 +91,7 @@ class EventReminderManager:
         """
         guild = self.bot.get_guild(GUILD_ID)
         if not guild:
-            print(f'Event reminders: Could not find guild (ID: {GUILD_ID})')
+            logger.warning(f'Event reminders: Could not find guild (ID: {GUILD_ID})')
             return {'checked': 0, 'announced': 0, 'upcoming': []}
 
         now = datetime.now(timezone.utc)
@@ -96,7 +100,7 @@ class EventReminderManager:
         try:
             events = await guild.fetch_scheduled_events()
         except Exception as e:
-            print(f'Event reminders: Failed to fetch events: {e}')
+            logger.error(f'Event reminders: Failed to fetch events: {e}')
             return {'checked': 0, 'announced': 0, 'upcoming': []}
 
         checked = 0
@@ -134,7 +138,7 @@ class EventReminderManager:
         channel = self.bot.get_channel(channel_id)
 
         if not channel:
-            print(f'Event reminders: Could not find channel (ID: {channel_id}) for event "{event.name}"')
+            logger.warning(f'Event reminders: Could not find channel (ID: {channel_id}) for event "{event.name}"')
             return
 
         # Build the message
@@ -165,9 +169,9 @@ class EventReminderManager:
 
         try:
             await channel.send(embed=embed)
-            print(f'Event reminder posted for "{event.name}" in channel {channel_id}')
+            logger.info(f'Event reminder posted for "{event.name}" in channel {channel_id}')
         except Exception as e:
-            print(f'Event reminders: Failed to post reminder for "{event.name}": {e}')
+            logger.error(f'Event reminders: Failed to post reminder for "{event.name}": {e}')
 
     async def _cleanup_old_events(self, current_events: list):
         """Remove event IDs that no longer exist in Discord."""
@@ -177,4 +181,4 @@ class EventReminderManager:
         if old_ids:
             self.announced_events -= old_ids
             await self.save_data()
-            print(f'Event reminders: Cleaned up {len(old_ids)} old event IDs')
+            logger.info(f'Event reminders: Cleaned up {len(old_ids)} old event IDs')

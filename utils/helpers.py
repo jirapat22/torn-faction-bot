@@ -12,17 +12,21 @@ from datetime import datetime, timezone
 import discord
 from config import EMBED_COLOR_INFO, EMBED_COLOR_WARNING, EMBED_COLOR_CRITICAL, EMBED_COLOR_SUCCESS, MANAGEMENT_ROLE_IDS
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 # File lock to prevent concurrent JSON writes from corrupting data
 _json_lock = threading.Lock()
 
 
 def ensure_data_directories():
     """Create data directories if they don't exist"""
-    directories = ['data', 'utils', 'features']
+    directories = ['data']
     for directory in directories:
         if not os.path.exists(directory):
             os.makedirs(directory)
-            print(f'Created directory: {directory}')
+            logger.info(f'Created directory: {directory}')
 
 
 def load_json(file_path, default=None):
@@ -42,11 +46,11 @@ def load_json(file_path, default=None):
             save_json(file_path, default)
             return default
     except json.JSONDecodeError:
-        print(f'Warning: {file_path} is corrupt, resetting to default')
+        logger.warning(f'Warning: {file_path} is corrupt, resetting to default')
         save_json(file_path, default)
         return default
     except Exception as e:
-        print(f'Error loading {file_path}: {e}')
+        logger.error(f'Error loading {file_path}: {e}')
         return default
 
 
@@ -80,7 +84,7 @@ def save_json(file_path, data):
 
         return True
     except Exception as e:
-        print(f'Error saving {file_path}: {e}')
+        logger.error(f'Error saving {file_path}: {e}')
         return False
 
 
@@ -138,9 +142,7 @@ def format_timestamp(timestamp, format_type='F', show_tct=False):
     discord_time = f'<t:{int(timestamp)}:{format_type}>'
 
     if show_tct:
-        # Convert to TCT (UTC)
-        from datetime import datetime
-        utc_time = datetime.utcfromtimestamp(int(timestamp))
+        utc_time = datetime.fromtimestamp(int(timestamp), tz=timezone.utc)
         tct_str = utc_time.strftime('%H:%M:%S TCT')
         return f'{discord_time} ({tct_str})'
 
@@ -159,6 +161,54 @@ def format_timestamp_with_tct(timestamp, format_type='f'):
         String like "<t:timestamp:f> (16:20:30 TCT)"
     """
     return format_timestamp(timestamp, format_type, show_tct=True)
+
+
+def format_time_dual(timestamp, date=False):
+    """
+    Standard dual-time display: viewer's local time + TCT.
+
+    Discord auto-renders <t:...> in each viewer's local timezone, so pair it
+    with a TCT (UTC) suffix to give a universal anchor that's the same for
+    everyone in the server.
+
+    Args:
+        timestamp: Unix timestamp (seconds since epoch)
+        date: If True, include the date (HH:MM DD-MM-YYYY); otherwise just HH:MM.
+
+    Returns:
+        e.g.  "<t:1714000000:t> (14:30 TCT)"             when date=False
+              "<t:1714000000:f> (14:30 03-04-2025 TCT)"   when date=True
+    """
+    ts = int(timestamp)
+    utc = datetime.fromtimestamp(ts, tz=timezone.utc)
+    if date:
+        tct_str = utc.strftime('%H:%M %d-%m-%Y TCT')
+        return f'<t:{ts}:f> ({tct_str})'
+    tct_str = utc.strftime('%H:%M TCT')
+    return f'<t:{ts}:t> ({tct_str})'
+
+
+def next_occurrence_of_hour(hour, minute=0):
+    """
+    Return Unix timestamp of the next occurrence of HH:MM in TCT (UTC).
+
+    Useful for displaying recurring "hour-of-day" windows (e.g. a target's sleep
+    window) as a Discord relative timestamp so each user sees when it next hits
+    in their local time.
+
+    Args:
+        hour: 0-23
+        minute: 0-59 (default 0)
+
+    Returns:
+        int Unix timestamp
+    """
+    now = datetime.now(timezone.utc)
+    candidate = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if candidate <= now:
+        from datetime import timedelta
+        candidate = candidate + timedelta(days=1)
+    return int(candidate.timestamp())
 
 
 def get_days_since(timestamp):
@@ -183,7 +233,7 @@ def get_current_timestamp():
     Returns:
         Current timestamp as integer
     """
-    return int(datetime.now().timestamp())
+    return int(datetime.now(timezone.utc).timestamp())
 
 
 def is_management(interaction: discord.Interaction) -> bool:

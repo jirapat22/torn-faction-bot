@@ -34,6 +34,7 @@ HAPPY_JUMP_CHANNEL_ID = int(os.getenv("HAPPY_JUMP_CHANNEL_ID", "0"))
 WELCOME_CHANNEL_ID = int(os.getenv("WELCOME_CHANNEL_ID", "0"))  # welcome-pit channel
 RULES_CHANNEL_ID = int(os.getenv("RULES_CHANNEL_ID", "0"))  # faction-edicts
 GENERAL_CHANNEL_ID = int(os.getenv("GENERAL_CHANNEL_ID", "0"))  # punk-plaza
+ALLIANCE_CHANNEL_ID = int(os.getenv("ALLIANCE_CHANNEL_ID", "0"))  # ally faction war alerts
 
 # ===== TORN API SETTINGS =====
 # Get your Torn API key from: https://www.torn.com/preferences.php#tab=api

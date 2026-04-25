@@ -20,6 +20,10 @@ from config import (
 )
 
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 def _format_number(n) -> str:
     try:
         return f'{int(n):,}'
@@ -671,4 +675,4 @@ async def setup_faction_commands(bot):
             )
             await interaction.followup.send(embed=threat_embed)
 
-    print('Faction commands registered (/faction compare, /faction stats)')
+    logger.info('Faction commands registered (/faction compare, /faction stats)')

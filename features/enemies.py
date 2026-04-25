@@ -27,6 +27,10 @@ from config import (
 )
 
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 class EnemyWatchlist:
     """Manages enemy player tracking during war"""
 
@@ -63,7 +67,7 @@ class EnemyWatchlist:
 
             return False
         except Exception as e:
-            print(f'Error checking war events: {e}')
+            logger.error(f'Error checking war events: {e}')
             return False
 
     async def load_watchlist(self):
@@ -74,7 +78,7 @@ class EnemyWatchlist:
         for tid, data in self.watchlist.items():
             if data.get('last_status'):
                 self.previous_statuses[tid] = data['last_status']
-        print(f'Loaded {len(self.watchlist)} enemies in watchlist')
+        logger.info(f'Loaded {len(self.watchlist)} enemies in watchlist')
 
     async def save_watchlist(self):
         """Save watchlist to JSON file"""
@@ -199,7 +203,7 @@ class EnemyWatchlist:
 
         channel = self.bot.get_channel(WAR_CHANNEL_ID)
         if not channel and post_updates:
-            print('Enemy watchlist: Could not find war channel')
+            logger.warning('Enemy watchlist: Could not find war channel')
             return
 
         # Only post updates if there's an active war event in Discord
@@ -270,7 +274,7 @@ class EnemyWatchlist:
                 )
                 await channel.send(embed=embed)
 
-            print(f'Posted {len(status_changes)} enemy status changes')
+            logger.info(f'Posted {len(status_changes)} enemy status changes')
 
     async def format_watchlist_embed(self) -> discord.Embed:
         """Create embed showing all enemies and their status"""
@@ -450,4 +454,4 @@ async def setup_enemy_commands(bot, enemy_watchlist: EnemyWatchlist):
             )
             await interaction.followup.send(embed=embed, ephemeral=True)
 
-    print('Enemy watchlist commands registered (/enemy)')
+    logger.info('Enemy watchlist commands registered (/enemy)')

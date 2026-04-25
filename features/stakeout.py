@@ -23,7 +23,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, List
 from collections import defaultdict
 
-from utils.helpers import load_json, save_json, create_embed, is_management
+from utils.helpers import load_json, save_json, create_embed, is_management, next_occurrence_of_hour
 from utils.torn_api import fetch_player_data
 from config import (
     EMBED_COLOR_INFO,
@@ -33,6 +33,9 @@ from config import (
 )
 
 
+import logging
+
+logger = logging.getLogger(__name__)
 # Status codes for logging
 STATUS_ONLINE = 'online'
 STATUS_OFFLINE = 'offline'
@@ -95,7 +98,7 @@ class StakeoutManager:
         # Clean up expired stakeouts
         await self._cleanup_expired()
 
-        print(f'Loaded {len(self.stakeouts)} active stakeouts')
+        logger.info(f'Loaded {len(self.stakeouts)} active stakeouts')
 
     async def save_data(self):
         """Save stakeout data to JSON"""
@@ -118,7 +121,7 @@ class StakeoutManager:
         for torn_id in expired:
             del self.stakeouts[torn_id]
             # Keep history for reports even after stakeout ends
-            print(f'Stakeout expired for {torn_id}')
+            logger.info(f'Stakeout expired for {torn_id}')
 
         # Purge history for targets no longer active and older than 7 days
         stale_history = []
@@ -135,7 +138,7 @@ class StakeoutManager:
 
         for torn_id in stale_history:
             del self.history[torn_id]
-            print(f'Stakeout history purged for {torn_id}')
+            logger.info(f'Stakeout history purged for {torn_id}')
 
         if expired or stale_history:
             await self.save_data()
@@ -191,7 +194,7 @@ class StakeoutManager:
         await self._record_status(torn_id, player_data)
 
         await self.save_data()
-        print(f'Stakeout added: {torn_id} ({player_name})')
+        logger.info(f'Stakeout added: {torn_id} ({player_name})')
 
         return True, f'Now watching **{player_name}** [{torn_id}] for {duration_hours} hours.', player_name
 
@@ -301,10 +304,10 @@ class StakeoutManager:
         data = await fetch_player_data(torn_id, selections='profile,travel')
         if not data:
             # Fallback to just profile if travel selection fails
-            print(f'Stakeout: Retrying {torn_id} without travel selection')
+            logger.info(f'Stakeout: Retrying {torn_id} without travel selection')
             data = await fetch_player_data(torn_id, selections='profile')
         if not data:
-            print(f'Stakeout: Failed to fetch player {torn_id} - check TORN_PERSONAL_API_KEY')
+            logger.error(f'Stakeout: Failed to fetch player {torn_id} - check TORN_PERSONAL_API_KEY')
         return data
 
     def _determine_status(self, player_data: Dict) -> tuple:
@@ -393,7 +396,7 @@ class StakeoutManager:
             await self._record_status(torn_id)
 
         await self.save_data()
-        print(f'Stakeout check: recorded status for {len(self.stakeouts)} targets')
+        logger.info(f'Stakeout check: recorded status for {len(self.stakeouts)} targets')
 
     def get_active_stakeouts(self) -> List[Dict]:
         """Get list of active stakeout configs"""
@@ -430,10 +433,9 @@ class StakeoutManager:
         config = self.stakeouts.get(torn_id, {})
         name = config.get('name', torn_id)
 
-        # Calculate hourly activity counts
+        # Hourly counts — only online vs offline matter for coordination decisions
         hourly_online = defaultdict(int)
         hourly_offline = defaultdict(int)
-        hourly_hospital = defaultdict(int)
         hourly_total = defaultdict(int)
 
         # Weekday vs weekend patterns (0-4 = weekday, 5-6 = weekend)
@@ -442,95 +444,93 @@ class StakeoutManager:
         weekend_online = defaultdict(int)
         weekend_total = defaultdict(int)
 
-        # Day of week patterns
         daily_online = defaultdict(int)
         daily_total = defaultdict(int)
 
         status_counts = defaultdict(int)
-        attackable_count = 0
 
         for record in history:
             hour = record['hour']
             status = record['status']
-            weekday = record.get('weekday', 0)  # Default to Monday for old records
+            weekday = record.get('weekday', 0)
 
             hourly_total[hour] += 1
             status_counts[status] += 1
 
-            # Track attackable (not in hospital/jail/traveling)
-            if record.get('attackable', status in [STATUS_ONLINE, STATUS_OFFLINE, STATUS_IDLE]):
-                attackable_count += 1
-
-            # Hourly patterns
-            if status in [STATUS_ONLINE, STATUS_IDLE]:
+            # "Watching us" = online or idle. Everything else (offline, hospital,
+            # jail, traveling) means they can't see/react to our chain.
+            is_online = status in (STATUS_ONLINE, STATUS_IDLE)
+            if is_online:
                 hourly_online[hour] += 1
-            elif status == STATUS_OFFLINE:
+            else:
                 hourly_offline[hour] += 1
-            elif status == STATUS_HOSPITAL:
-                hourly_hospital[hour] += 1
 
-            # Weekday vs weekend
-            if weekday < 5:  # Monday-Friday
+            if weekday < 5:
                 weekday_total[hour] += 1
-                if status in [STATUS_ONLINE, STATUS_IDLE]:
+                if is_online:
                     weekday_online[hour] += 1
-            else:  # Saturday-Sunday
+            else:
                 weekend_total[hour] += 1
-                if status in [STATUS_ONLINE, STATUS_IDLE]:
+                if is_online:
                     weekend_online[hour] += 1
 
-            # Daily patterns
             daily_total[weekday] += 1
-            if status in [STATUS_ONLINE, STATUS_IDLE]:
+            if is_online:
                 daily_online[weekday] += 1
 
-        # Generate heatmap (24 hours)
+        # Smoothed per-hour online/offline probability (Laplace +1/+2)
+        hour_stats = self._compute_hour_stats(hourly_online, hourly_offline, hourly_total)
+
+        # Heatmap driven by smoothed online probability
         heatmap = []
         for hour in range(24):
             total = hourly_total.get(hour, 0)
-            online = hourly_online.get(hour, 0)
-
             if total == 0:
-                heatmap.append('·')  # No data
+                heatmap.append('·')
+                continue
+            ratio = hour_stats[hour]['online_p']
+            if ratio >= 0.70:
+                heatmap.append('█')
+            elif ratio >= 0.45:
+                heatmap.append('▓')
+            elif ratio >= 0.20:
+                heatmap.append('▒')
             else:
-                ratio = online / total
-                if ratio >= 0.75:
-                    heatmap.append('█')  # Very active
-                elif ratio >= 0.5:
-                    heatmap.append('▓')  # Active
-                elif ratio >= 0.25:
-                    heatmap.append('▒')  # Sometimes active
-                else:
-                    heatmap.append('░')  # Rarely active
+                heatmap.append('░')
 
-        # Find sleep window using consecutive offline detection
-        sleep_window = self._find_sleep_window_consecutive(history)
+        # Sleep / offline window — primary: streak-based; fallback: hourly search
+        sleep_window = self._find_sleep_window_streaks(history)
         if not sleep_window:
-            # Fallback to hourly average method
-            sleep_window = self._find_sleep_window(hourly_online, hourly_total)
+            sleep_window = self._find_sleep_window(hour_stats)
 
-        # Find safe windows (hours with lowest online ratio - when they're offline)
-        safe_windows = self._find_attack_windows(hourly_online, hourly_total)
+        # Peak-online window — the hours they're most reliably watching
+        peak_online_window = self._find_peak_online_window(hour_stats)
 
-        # Find danger windows (hours with highest online ratio - when they're active)
-        danger_windows = self._find_danger_windows(hourly_online, hourly_total)
+        # Secondary: ranked hour lists (kept for backward-compat callers)
+        safe_windows = self._find_safe_hours(hour_stats)
+        danger_windows = self._find_danger_hours(hour_stats)
 
-        # Estimate timezone
+        # Grouped contiguous blocks for display
+        safe_blocks = self._group_contiguous(
+            [h for h, _ in safe_windows if hour_stats[h]['offline_p'] >= 0.60]
+        )
+        danger_blocks = self._group_contiguous(
+            [h for h, _ in danger_windows if hour_stats[h]['online_p'] >= 0.55]
+        )
+
         estimated_tz = self._estimate_timezone(sleep_window)
 
         # Calculate overall stats
         total_checks = len(history)
         online_pct = (status_counts[STATUS_ONLINE] + status_counts[STATUS_IDLE]) / total_checks * 100 if total_checks > 0 else 0
-        hospital_pct = status_counts[STATUS_HOSPITAL] / total_checks * 100 if total_checks > 0 else 0
-        attackable_pct = attackable_count / total_checks * 100 if total_checks > 0 else 0
 
-        # Weekday vs weekend activity rates
+        # Weekday vs weekend online rates
         weekday_checks = sum(weekday_total.values())
         weekend_checks = sum(weekend_total.values())
         weekday_online_pct = sum(weekday_online.values()) / weekday_checks * 100 if weekday_checks > 0 else 0
         weekend_online_pct = sum(weekend_online.values()) / weekend_checks * 100 if weekend_checks > 0 else 0
 
-        # Find most/least active days
+        # Most/least active days
         day_names = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
         day_activity = []
         for day in range(7):
@@ -538,8 +538,10 @@ class StakeoutManager:
             if total >= 2:
                 rate = daily_online.get(day, 0) / total * 100
                 day_activity.append((day_names[day], rate, total))
-
         day_activity.sort(key=lambda x: x[1], reverse=True)
+
+        # Coverage — how much of the 24h clock we've actually sampled
+        hours_covered = sum(1 for h in range(24) if hourly_total.get(h, 0) > 0)
 
         # Time range
         first_check = datetime.fromtimestamp(history[0]['timestamp'], tz=timezone.utc)
@@ -550,224 +552,297 @@ class StakeoutManager:
             'torn_id': torn_id,
             'name': name,
             'total_checks': total_checks,
+            'hours_covered': hours_covered,
             'duration_hours': duration.total_seconds() / 3600,
             'first_check': first_check,
             'last_check': last_check,
             'heatmap': heatmap,
             'sleep_window': sleep_window,
+            'peak_online_window': peak_online_window,
             'safe_windows': safe_windows,
             'danger_windows': danger_windows,
-            'attack_windows': safe_windows,  # Backwards compatibility
+            'safe_blocks': safe_blocks,
+            'danger_blocks': danger_blocks,
             'estimated_tz': estimated_tz,
             'online_pct': online_pct,
-            'hospital_pct': hospital_pct,
-            'attackable_pct': attackable_pct,
             'weekday_online_pct': weekday_online_pct,
             'weekend_online_pct': weekend_online_pct,
             'day_activity': day_activity,
             'status_counts': dict(status_counts),
             'hourly_online': dict(hourly_online),
-            'hourly_total': dict(hourly_total)
+            'hourly_total': dict(hourly_total),
+            'hour_stats': hour_stats,
         }
 
-    def _find_sleep_window_consecutive(self, history: List[Dict]) -> Optional[tuple]:
+    @staticmethod
+    def _compute_hour_stats(hourly_online: Dict, hourly_offline: Dict,
+                            hourly_total: Dict) -> Dict[int, Dict]:
         """
-        Find sleep window by analyzing actual consecutive offline periods.
-        More accurate than hourly averages.
+        Per-hour smoothed probabilities using Laplace add-one smoothing.
+        Returns {hour: {online_p, offline_p, samples}}.
+        Unused hours get a neutral prior (0.5) so low-sample hours never rank as extreme.
+        """
+        stats = {}
+        for hour in range(24):
+            n = hourly_total.get(hour, 0)
+            online = hourly_online.get(hour, 0)
+            offline = hourly_offline.get(hour, 0)
+            stats[hour] = {
+                'online_p': (online + 1) / (n + 2),
+                'offline_p': (offline + 1) / (n + 2),
+                'samples': n,
+            }
+        return stats
 
-        Returns (start_hour, end_hour, confidence) or None
+    def _find_peak_online_window(self, hour_stats: Dict) -> Optional[tuple]:
         """
-        if len(history) < 8:  # Need at least 2 hours of data
+        Find the contiguous window of hours when the target is most reliably online
+        (watching). Mirror of _find_sleep_window but for online_p.
+
+        Returns (start_hour, end_hour, confidence) or None.
+        """
+        covered = sum(1 for h in range(24) if hour_stats[h]['samples'] > 0)
+        if covered < 8:
             return None
 
-        # Find all offline streaks (consecutive offline records)
+        best = None  # (score, start, length, strength)
+        for length in range(3, 9):  # 3–8h peak windows
+            for start in range(24):
+                window = [(start + k) % 24 for k in range(length)]
+                outside = [h for h in range(24) if h not in window]
+                inside_on = sum(hour_stats[h]['online_p'] for h in window) / length
+                outside_on = sum(hour_stats[h]['online_p'] for h in outside) / max(len(outside), 1)
+                inside_samples = sum(hour_stats[h]['samples'] for h in window)
+                weight = min(1.0, inside_samples / (length * 5))
+                score = (inside_on - outside_on) * weight
+                if best is None or score > best[0]:
+                    best = (score, start, length, inside_on - outside_on)
+
+        if best is None or best[0] <= 0:
+            return None
+        _, start, length, strength = best
+        end = (start + length) % 24
+        confidence = max(0.0, min(1.0, strength))
+        return (start, end, confidence)
+
+    def _find_sleep_window_streaks(self, history: List[Dict]) -> Optional[tuple]:
+        """
+        Detect sleep window by clustering long offline streaks on the 24h circle.
+        Returns (start_hour, end_hour, confidence) or None.
+
+        Improvements over naive approach:
+        - Streaks must be at least 3 hours (12 records at 15-min) to qualify as sleep.
+        - Cluster by circular mean (not exact-hour bucketing), so 22:45 and 23:30 sleep
+          starts aren't treated as unrelated.
+        - Confidence reflects both the count of aligned streaks and how tight the
+          cluster is (low circular variance = high confidence).
+        """
+        import math
+
+        if len(history) < 12:
+            return None
+
+        # Collect offline streaks: each streak = (start_ts, start_hour_frac, duration_records)
         streaks = []
-        current_streak_start = None
-        current_streak_records = 0
-
-        for i, record in enumerate(history):
-            status = record['status']
-            is_offline = status == STATUS_OFFLINE
-
+        curr_start = None
+        curr_len = 0
+        for rec in history:
+            is_offline = rec['status'] == STATUS_OFFLINE
             if is_offline:
-                if current_streak_start is None:
-                    current_streak_start = record
-                current_streak_records += 1
+                if curr_start is None:
+                    curr_start = rec
+                curr_len += 1
             else:
-                if current_streak_start is not None and current_streak_records >= 4:
-                    # Streak ended - record it (at least 1 hour = 4 checks at 15min)
-                    streak_start_hour = current_streak_start['hour']
-                    streak_end_hour = history[i-1]['hour'] if i > 0 else streak_start_hour
-                    duration_mins = current_streak_records * 15
-                    streaks.append({
-                        'start_hour': streak_start_hour,
-                        'end_hour': streak_end_hour,
-                        'duration_mins': duration_mins,
-                        'records': current_streak_records
-                    })
-                current_streak_start = None
-                current_streak_records = 0
-
-        # Don't forget ongoing streak at end
-        if current_streak_start is not None and current_streak_records >= 4:
-            streak_start_hour = current_streak_start['hour']
-            streak_end_hour = history[-1]['hour']
-            duration_mins = current_streak_records * 15
-            streaks.append({
-                'start_hour': streak_start_hour,
-                'end_hour': streak_end_hour,
-                'duration_mins': duration_mins,
-                'records': current_streak_records
-            })
+                if curr_start is not None and curr_len >= 12:  # ≥3h
+                    streaks.append(self._streak_record(curr_start, curr_len))
+                curr_start = None
+                curr_len = 0
+        if curr_start is not None and curr_len >= 12:
+            streaks.append(self._streak_record(curr_start, curr_len))
 
         if not streaks:
             return None
 
-        # Find most common sleep start hour (looking for pattern)
-        start_hour_counts = defaultdict(int)
-        for streak in streaks:
-            if streak['duration_mins'] >= 120:  # At least 2 hours
-                start_hour_counts[streak['start_hour']] += 1
+        # Circular mean of streak start hours (convert hours to angles)
+        sin_sum = sum(math.sin(2 * math.pi * s['start_frac'] / 24) for s in streaks)
+        cos_sum = sum(math.cos(2 * math.pi * s['start_frac'] / 24) for s in streaks)
+        mean_angle = math.atan2(sin_sum, cos_sum)
+        mean_start = (mean_angle * 24 / (2 * math.pi)) % 24
 
-        if not start_hour_counts:
+        # Circular variance R = sqrt(sin²+cos²)/n — 1.0 = perfectly aligned, 0 = random
+        R = math.hypot(sin_sum, cos_sum) / len(streaks)
+
+        # Keep streaks within ±2h of mean_start (circular distance)
+        def circ_dist(a, b):
+            d = abs(a - b) % 24
+            return min(d, 24 - d)
+
+        aligned = [s for s in streaks if circ_dist(s['start_frac'], mean_start) <= 2]
+        if not aligned:
             return None
 
-        # Get most common start hour
-        most_common_start = max(start_hour_counts.keys(), key=lambda h: start_hour_counts[h])
+        avg_duration_h = sum(s['duration_mins'] for s in aligned) / len(aligned) / 60
+        # Cap at 12h (longer than that is not a sleep window)
+        avg_duration_h = min(avg_duration_h, 12)
 
-        # Calculate average duration for streaks starting near that hour
-        relevant_streaks = [s for s in streaks if abs(s['start_hour'] - most_common_start) <= 2 or
-                           abs(s['start_hour'] - most_common_start) >= 22]  # Handle midnight wrap
+        start_h = int(round(mean_start)) % 24
+        end_h = int(round(mean_start + avg_duration_h)) % 24
 
-        if not relevant_streaks:
+        # Confidence: combines alignment (R) and sample count
+        confidence = R * min(len(aligned) / 3, 1.0)
+        return (start_h, end_h, confidence)
+
+    @staticmethod
+    def _streak_record(start_rec: Dict, records_count: int) -> Dict:
+        """Turn a streak into {start_frac, duration_mins}.
+        start_frac = hour + minute/60 for finer alignment than integer hours."""
+        ts = start_rec['timestamp']
+        dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+        start_frac = dt.hour + dt.minute / 60
+        return {
+            'start_frac': start_frac,
+            'duration_mins': records_count * 15,
+        }
+
+    def _find_sleep_window(self, hour_stats: Dict) -> Optional[tuple]:
+        """
+        Fallback sleep-window search using smoothed hourly probabilities.
+        Sliding circular window of length 4-10h; score = mean(offline_p inside)
+        − max(online_p outside). Tolerates single noisy hours.
+
+        Returns (start_hour, end_hour, confidence) or None.
+        """
+        # Require at least half the hours to have any samples
+        covered = sum(1 for h in range(24) if hour_stats[h]['samples'] > 0)
+        if covered < 12:
             return None
 
-        avg_duration = sum(s['duration_mins'] for s in relevant_streaks) / len(relevant_streaks)
-        end_hour = (most_common_start + int(avg_duration / 60)) % 24
+        best = None  # (score, start, length, confidence)
+        for length in range(4, 11):
+            for start in range(24):
+                window = [(start + k) % 24 for k in range(length)]
+                outside = [h for h in range(24) if h not in window]
+                inside_off = sum(hour_stats[h]['offline_p'] for h in window) / length
+                outside_on = max((hour_stats[h]['online_p'] for h in outside), default=0.5)
+                # Weight by sample count inside the window (logistic saturates at ~20 samples)
+                inside_samples = sum(hour_stats[h]['samples'] for h in window)
+                weight = min(1.0, inside_samples / (length * 5))
+                score = (inside_off - outside_on) * weight
+                if best is None or score > best[0]:
+                    best = (score, start, length, inside_off - outside_on)
 
-        # Confidence based on consistency
-        confidence = min(len(relevant_streaks) / 3, 1.0)  # More streaks = more confident
-
-        return (most_common_start, end_hour, confidence)
-
-    def _find_sleep_window(self, hourly_online: Dict, hourly_total: Dict) -> Optional[tuple]:
-        """
-        Find likely sleep window (consecutive hours with low activity)
-
-        Returns (start_hour, end_hour, confidence) or None
-        """
-        # Calculate offline ratio for each hour
-        ratios = {}
-        for hour in range(24):
-            total = hourly_total.get(hour, 0)
-            online = hourly_online.get(hour, 0)
-            if total >= 2:  # Need at least 2 data points
-                ratios[hour] = 1 - (online / total)  # Offline ratio
-
-        if len(ratios) < 12:  # Need at least half a day of data
+        if best is None or best[0] <= 0:
             return None
 
-        # Find longest stretch of hours with >60% offline
-        best_start = None
-        best_length = 0
-        best_confidence = 0
+        _, start, length, confidence = best
+        end = (start + length) % 24
+        # Normalize confidence to [0,1]
+        confidence = max(0.0, min(1.0, confidence))
+        return (start, end, confidence)
 
-        for start in range(24):
-            length = 0
-            total_confidence = 0
-
-            for offset in range(24):
-                hour = (start + offset) % 24
-                if hour in ratios and ratios[hour] >= 0.6:
-                    length += 1
-                    total_confidence += ratios[hour]
-                else:
-                    break
-
-            if length >= 4 and length > best_length:  # At least 4 hours
-                best_start = start
-                best_length = length
-                best_confidence = total_confidence / length if length > 0 else 0
-
-        if best_start is not None:
-            end_hour = (best_start + best_length) % 24
-            return (best_start, end_hour, best_confidence)
-
-        return None
-
-    def _find_attack_windows(self, hourly_online: Dict, hourly_total: Dict) -> List[tuple]:
+    def _find_safe_hours(self, hour_stats: Dict) -> List[tuple]:
         """
-        Find safe windows (hours with lowest online ratio) - when target is likely offline
-
-        Returns list of (hour, offline_ratio) tuples, top 5
+        Rank hours by smoothed offline probability (target least likely to be watching).
+        Returns list of (hour, offline_p) — top 6.
         """
-        windows = []
-
-        for hour in range(24):
-            total = hourly_total.get(hour, 0)
-            online = hourly_online.get(hour, 0)
-
-            if total >= 2:
-                offline_ratio = 1 - (online / total)
-                windows.append((hour, offline_ratio))
-
-        # Sort by offline ratio descending (safest hours first)
+        windows = [(h, hour_stats[h]['offline_p']) for h in range(24)
+                   if hour_stats[h]['samples'] > 0]
         windows.sort(key=lambda x: x[1], reverse=True)
+        return windows[:6]
 
-        return windows[:5]  # Top 5 safest hours
-
-    def _find_danger_windows(self, hourly_online: Dict, hourly_total: Dict) -> List[tuple]:
+    def _find_danger_hours(self, hour_stats: Dict) -> List[tuple]:
         """
-        Find danger windows (hours with highest online ratio) - when target is most active
-
-        Returns list of (hour, online_ratio) tuples, top 5
+        Rank hours by smoothed online probability (most active).
+        Returns list of (hour, online_p) — top 6.
         """
-        windows = []
-
-        for hour in range(24):
-            total = hourly_total.get(hour, 0)
-            online = hourly_online.get(hour, 0)
-
-            if total >= 2:
-                online_ratio = online / total
-                windows.append((hour, online_ratio))
-
-        # Sort by online ratio descending (most dangerous first)
+        windows = [(h, hour_stats[h]['online_p']) for h in range(24)
+                   if hour_stats[h]['samples'] > 0]
         windows.sort(key=lambda x: x[1], reverse=True)
+        return windows[:6]
 
-        return windows[:5]  # Top 5 most dangerous hours
+    @staticmethod
+    def _group_contiguous(hours: List[int]) -> List[tuple]:
+        """
+        Group a list of hours into contiguous blocks on the 24h circle.
+        Returns list of (start_hour, end_hour_exclusive) tuples, sorted by length desc.
+        Handles midnight wrap: [22,23,0,1] -> [(22, 2)].
+        """
+        if not hours:
+            return []
+        present = sorted(set(h % 24 for h in hours))
+        if len(present) == 24:
+            return [(0, 0)]  # full day — represent as 0-0
+
+        # Find gaps to determine where blocks start
+        blocks = []
+        start = present[0]
+        prev = present[0]
+        for h in present[1:]:
+            if h == prev + 1:
+                prev = h
+                continue
+            blocks.append((start, (prev + 1) % 24))
+            start = h
+            prev = h
+        blocks.append((start, (prev + 1) % 24))
+
+        # Merge wrap-around: if block ends at 24 (=0) and another starts at 0
+        if len(blocks) >= 2 and blocks[0][0] == 0 and blocks[-1][1] == 0:
+            first = blocks.pop(0)
+            last = blocks.pop(-1)
+            blocks.append((last[0], first[1]))
+
+        def length(b):
+            s, e = b
+            return (e - s) % 24 or 24
+
+        blocks.sort(key=length, reverse=True)
+        return blocks
 
     def _estimate_timezone(self, sleep_window: Optional[tuple]) -> Optional[str]:
         """
-        Estimate timezone based on sleep window
+        Estimate timezone from sleep window.
 
-        Assumes typical sleep is 00:00-08:00 local time
+        Assumes mid-sleep = 03:30 local (empirically a better average than 04:00
+        for gamers). Returns nearest half-hour offset label.
         """
         if not sleep_window:
             return None
 
         start_hour, end_hour, _ = sleep_window
 
-        # Assume mid-sleep is around 04:00 local time
+        # Compute sleep length (handle wrap)
         if end_hour < start_hour:
-            # Sleep crosses midnight
             sleep_length = (24 - start_hour) + end_hour
+        elif end_hour == start_hour:
+            sleep_length = 8  # default when start==end
         else:
             sleep_length = end_hour - start_hour
 
-        mid_sleep_utc = (start_hour + sleep_length // 2) % 24
+        mid_sleep_utc = (start_hour + sleep_length / 2) % 24
 
-        # If mid-sleep is at hour X UTC, and we assume it's 04:00 local...
-        # local = utc + offset
-        # 4 = mid_sleep_utc + offset
-        # offset = 4 - mid_sleep_utc
-        offset = 4 - mid_sleep_utc
-        if offset > 12:
+        # Target local mid-sleep = 03:30
+        offset = (3.5 - mid_sleep_utc)
+        # Normalize to [-12, 12]
+        while offset > 12:
             offset -= 24
-        elif offset < -12:
+        while offset < -12:
             offset += 24
 
-        return TIMEZONE_NAMES.get(offset, f'UTC{offset:+d}')
+        # Snap to half-hour grid
+        offset = round(offset * 2) / 2
+        # Prefer whole-hour label if available, else fall back
+        label = TIMEZONE_NAMES.get(offset)
+        if label:
+            return label
+        label = TIMEZONE_NAMES.get(int(offset))
+        if label:
+            return label
+        sign = '+' if offset >= 0 else '-'
+        mag = abs(offset)
+        h = int(mag)
+        m = int(round((mag - h) * 60))
+        return f'UTC{sign}{h:02d}:{m:02d}'
 
     def format_heatmap_text(self, report: Dict) -> str:
         """Format heatmap as ASCII art"""
@@ -1097,108 +1172,84 @@ async def setup_stakeout_commands(bot, manager: StakeoutManager):
             color=EMBED_COLOR_INFO
         )
 
-        # Stats row 1
+        # Coverage / overall online rate
         embed.add_field(
             name='Data Collected',
-            value=f"{report['total_checks']} checks over {report['duration_hours']:.1f}h",
-            inline=True
+            value=f"{report['total_checks']} checks over {report['duration_hours']:.1f}h "
+                  f"({report.get('hours_covered', 0)}/24h sampled)",
+            inline=False
         )
         embed.add_field(
             name='Online Rate',
-            value=f"{report['online_pct']:.0f}%",
-            inline=True
-        )
-        embed.add_field(
-            name='Attackable',
-            value=f"{report.get('attackable_pct', 100):.0f}%",
+            value=f"{report['online_pct']:.0f}% overall",
             inline=True
         )
 
-        # Stats row 2 - Weekday vs Weekend
         weekday_pct = report.get('weekday_online_pct', 0)
         weekend_pct = report.get('weekend_online_pct', 0)
         if weekday_pct > 0 or weekend_pct > 0:
             embed.add_field(
-                name='Weekday Activity',
+                name='Weekday',
                 value=f"{weekday_pct:.0f}% online",
                 inline=True
             )
             embed.add_field(
-                name='Weekend Activity',
+                name='Weekend',
                 value=f"{weekend_pct:.0f}% online",
                 inline=True
             )
-            embed.add_field(
-                name='Hospital Rate',
-                value=f"{report['hospital_pct']:.0f}%",
-                inline=True
-            )
-        else:
-            embed.add_field(
-                name='Hospital Rate',
-                value=f"{report['hospital_pct']:.0f}%",
-                inline=True
-            )
 
-        # Day of week breakdown
+        # Day of week breakdown — most/least active
         day_activity = report.get('day_activity', [])
         if len(day_activity) >= 3:
             most_active = day_activity[0]
             least_active = day_activity[-1]
             embed.add_field(
-                name='⚠️ Most Dangerous Day',
-                value=f"**{most_active[0]}** ({most_active[1]:.0f}% active)",
+                name='⚠️ Most Active Day',
+                value=f"**{most_active[0]}** ({most_active[1]:.0f}% online)",
                 inline=True
             )
             embed.add_field(
-                name='✅ Safest Day',
-                value=f"**{least_active[0]}** ({least_active[1]:.0f}% active)",
+                name='✅ Least Active Day',
+                value=f"**{least_active[0]}** ({least_active[1]:.0f}% online)",
                 inline=True
             )
 
-        # Sleep window (when they're safest)
-        if report['sleep_window']:
-            start, end, confidence = report['sleep_window']
-            sleep_text = f"**{start:02d}:00 - {end:02d}:00 TCT** ({confidence*100:.0f}% confidence)"
+        # PRIMARY OUTPUT 1: peak-online window (avoid chaining here)
+        peak = report.get('peak_online_window')
+        if peak:
+            s, e, conf = peak
+            next_start = next_occurrence_of_hour(s)
+            avoid_text = (
+                f"🔴 **{s:02d}:00 – {e:02d}:00 TCT** "
+                f"(your time: <t:{next_start}:t> next at <t:{next_start}:R>)\n"
+                f"Don't chain or long-attack — target is most likely watching.\n"
+                f"Confidence: {conf*100:.0f}%"
+            )
         else:
-            sleep_text = 'Not enough data yet'
-
+            avoid_text = 'Not enough data yet — keep stakeout running.'
         embed.add_field(
-            name='💤 Likely Sleep Window',
-            value=sleep_text,
+            name='🚫 Avoid Window (they\'re watching)',
+            value=avoid_text,
             inline=False
         )
 
-        # Danger windows (when they're most active - WATCH OUT)
-        danger_windows = report.get('danger_windows', [])
-        if danger_windows:
-            danger_text = '\n'.join([
-                f"🔴 **{hour:02d}:00 TCT** - {ratio*100:.0f}% active"
-                for hour, ratio in danger_windows[:3]
-            ])
+        # PRIMARY OUTPUT 2: sleep window (green light for chains)
+        if report['sleep_window']:
+            s, e, conf = report['sleep_window']
+            next_start = next_occurrence_of_hour(s)
+            sleep_text = (
+                f"🟢 **{s:02d}:00 – {e:02d}:00 TCT** "
+                f"(your time: <t:{next_start}:t> next at <t:{next_start}:R>)\n"
+                f"Safe to coordinate chains / long attacks — target is offline.\n"
+                f"Confidence: {conf*100:.0f}%"
+            )
         else:
-            danger_text = 'Not enough data yet'
-
+            sleep_text = 'Not enough data yet — keep stakeout running.'
         embed.add_field(
-            name='⚠️ Peak Activity (Danger)',
-            value=danger_text,
-            inline=True
-        )
-
-        # Safe windows (when they're offline)
-        safe_windows = report.get('safe_windows', report.get('attack_windows', []))
-        if safe_windows:
-            safe_text = '\n'.join([
-                f"🟢 **{hour:02d}:00 TCT** - {ratio*100:.0f}% offline"
-                for hour, ratio in safe_windows[:3]
-            ])
-        else:
-            safe_text = 'Not enough data yet'
-
-        embed.add_field(
-            name='✅ Safe Windows',
-            value=safe_text,
-            inline=True
+            name='💤 Sleep Window (chain safely)',
+            value=sleep_text,
+            inline=False
         )
 
         # Timezone estimate
@@ -1212,7 +1263,11 @@ async def setup_stakeout_commands(bot, manager: StakeoutManager):
         # Heatmap as code block
         heatmap_text = manager.format_heatmap_text(report)
 
-        embed.set_footer(text=f"Data from {report['first_check'].strftime('%d-%m %H:%M')} to {report['last_check'].strftime('%d-%m %H:%M')} TCT")
+        first_unix = int(report['first_check'].timestamp())
+        last_unix = int(report['last_check'].timestamp())
+        embed.description = (embed.description or '') + (
+            f"\n\n*Stakeout data: <t:{first_unix}:f> → <t:{last_unix}:f>*"
+        )
 
         await interaction.followup.send(content=f'```\n{heatmap_text}\n```', embed=embed)
 
@@ -1265,4 +1320,4 @@ async def setup_stakeout_commands(bot, manager: StakeoutManager):
 
     # Add group to bot
     bot.tree.add_command(stakeout_group)
-    print('Stakeout commands registered (/stakeout add, stop, extend, status, list, report, clear, test)')
+    logger.info('Stakeout commands registered (/stakeout add, stop, extend, status, list, report, clear, test)')

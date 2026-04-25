@@ -26,6 +26,10 @@ from config import (
 )
 
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 class VerificationSystem:
     """Handles member verification and role assignment"""
 
@@ -56,7 +60,7 @@ class VerificationSystem:
                 self.config[key] = value
 
         self.verified_users = load_json(self.verified_users_file, default={})
-        print(f'Loaded verification config, {len(self.verified_users)} verified users')
+        logger.info(f'Loaded verification config, {len(self.verified_users)} verified users')
 
     async def save_config(self):
         """Save verification config to JSON file"""
@@ -671,4 +675,4 @@ async def setup_verification_commands(bot, verification_system: VerificationSyst
             )
             await interaction.followup.send(embed=embed, ephemeral=True)
 
-    print('Verification commands registered (/register, /whois, /verify)')
+    logger.info('Verification commands registered (/register, /whois, /verify)')

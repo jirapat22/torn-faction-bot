@@ -26,6 +26,9 @@ from config import (
 )
 
 
+import logging
+
+logger = logging.getLogger(__name__)
 # Block labels (A-X for up to 24 blocks)
 BLOCK_LABELS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L',
                 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X']
@@ -67,7 +70,7 @@ class AvailabilityManager:
         """Load polls and availability data from JSON files"""
         self.polls = load_json(self.polls_file, default={})
         self.data = load_json(self.data_file, default={})
-        print(f'Loaded {len(self.polls)} availability polls')
+        logger.info(f'Loaded {len(self.polls)} availability polls')
         # Auto-cleanup polls older than 7 days
         await self.cleanup_old_polls()
 
@@ -99,7 +102,7 @@ class AvailabilityManager:
                 self.data.pop(poll_id, None)
             await self.save_polls()
             await self.save_data()
-            print(f'Availability: Cleaned up {len(expired)} poll(s) older than {max_age_days} days')
+            logger.info(f'Availability: Cleaned up {len(expired)} poll(s) older than {max_age_days} days')
 
     def create_poll(self, start_date: str, end_date: str, channel_id: int, message_id: int,
                     start_time: str, end_time: str, block_length: int) -> tuple:
@@ -411,7 +414,7 @@ class AvailabilityManager:
                 channel_id = poll.get('channel_id')
                 channel = self.bot.get_channel(channel_id) if channel_id else None
                 if not channel:
-                    print(f'Availability: Could not find channel {channel_id} for poll {poll_id}')
+                    logger.warning(f'Availability: Could not find channel {channel_id} for poll {poll_id}')
                     # Mark closed so we don't retry forever for a missing channel
                     poll['closed'] = True
                     await self.save_polls()
@@ -492,15 +495,15 @@ class AvailabilityManager:
                             )
                             await msg.edit(embed=closed_embed, view=None)
                     except Exception as e:
-                        print(f'Availability: Could not edit poll message: {e}')
+                        logger.warning(f'Availability: Could not edit poll message: {e}')
 
                 # Mark closed AFTER results are successfully posted
                 poll['closed'] = True
                 await self.save_polls()
-                print(f'Availability: Poll {poll_id} closed, results posted')
+                logger.info(f'Availability: Poll {poll_id} closed, results posted')
 
             except Exception as e:
-                print(f'Availability: Error closing poll {poll_id}: {e}')
+                logger.error(f'Availability: Error closing poll {poll_id}: {e}')
 
 
 class AvailabilityView(discord.ui.View):
@@ -603,7 +606,7 @@ class AvailabilityButton(discord.ui.Button):
                 "This availability poll no longer exists.", ephemeral=True
             )
         except Exception as e:
-            print(f'Error in availability button callback: {e}')
+            logger.error(f'Error in availability button callback: {e}')
             if not interaction.response.is_done():
                 await interaction.response.send_message(
                     "Something went wrong. Please try again.", ephemeral=True
@@ -792,7 +795,7 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
 
             manager.polls[poll_id]['message_id'] = message.id
             await manager.save_polls()
-            print(f'Availability poll created: {poll_id} with {len(blocks)} blocks')
+            logger.info(f'Availability poll created: {poll_id} with {len(blocks)} blocks')
 
         # ── Summary ──
         elif action_value == 'summary':
@@ -1010,7 +1013,7 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
 
         await interaction.response.send_message(embed=embed)
 
-    print('Availability commands registered (/avail, /tct_now)')
+    logger.info('Availability commands registered (/avail, /tct_now)')
 
 
 async def restore_availability_views(bot, manager: AvailabilityManager, verified_role_name: str):
@@ -1037,7 +1040,7 @@ async def restore_availability_views(bot, manager: AvailabilityManager, verified
             # Re-create view and add to bot
             view = AvailabilityView(manager, poll_id, blocks, verified_role_name)
             bot.add_view(view, message_id=message_id)
-            print(f'Restored availability view for {poll_id}')
+            logger.info(f'Restored availability view for {poll_id}')
 
         except Exception as e:
-            print(f'Failed to restore availability view for {poll_id}: {e}')
+            logger.error(f'Failed to restore availability view for {poll_id}: {e}')

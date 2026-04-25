@@ -3,7 +3,7 @@ Timestamp utilities for Discord bot
 Handles converting between human-readable times and Unix timestamps
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import time
 
 
@@ -35,7 +35,7 @@ def timestamp_to_datetime(timestamp):
     Returns:
         datetime object
     """
-    return datetime.fromtimestamp(timestamp)
+    return datetime.fromtimestamp(timestamp, tz=timezone.utc)
 
 
 def hours_from_now(hours):
@@ -48,7 +48,7 @@ def hours_from_now(hours):
     Returns:
         Unix timestamp (int)
     """
-    future_time = datetime.now() + timedelta(hours=hours)
+    future_time = datetime.now(timezone.utc) + timedelta(hours=hours)
     return datetime_to_timestamp(future_time)
 
 
@@ -62,7 +62,7 @@ def days_from_now(days):
     Returns:
         Unix timestamp (int)
     """
-    future_time = datetime.now() + timedelta(days=days)
+    future_time = datetime.now(timezone.utc) + timedelta(days=days)
     return datetime_to_timestamp(future_time)
 
 

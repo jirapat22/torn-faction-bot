@@ -14,6 +14,11 @@ from utils.helpers import load_json, save_json
 from utils.torn_api import fetch_faction_members
 from config import GUILD_ID
 
+import logging
+
+logger = logging.getLogger(__name__)
+
+
 
 class RoleSyncManager:
     """Manages automatic role sync between Torn and Discord"""
@@ -42,7 +47,7 @@ class RoleSyncManager:
                 self.position_roles[pos] = [int(v) for v in val if v]
             else:
                 self.position_roles[pos] = [int(val)]
-        print(f'Loaded role sync config with {len(self.position_roles)} position mappings')
+        logger.info(f'Loaded role sync config with {len(self.position_roles)} position mappings')
 
     async def save_config(self):
         """Save role sync config to JSON file"""
@@ -127,7 +132,7 @@ class RoleSyncManager:
         except discord.Forbidden:
             return False  # Can't modify this member's roles
         except Exception as e:
-            print(f'Error syncing role for {discord_member.name}: {e}')
+            logger.error(f'Error syncing role for {discord_member.name}: {e}')
             return False
 
     async def sync_all_members(self):
@@ -143,13 +148,13 @@ class RoleSyncManager:
 
         guild = self.bot.get_guild(GUILD_ID)
         if not guild:
-            print('Role sync: Could not find guild')
+            logger.warning('Role sync: Could not find guild')
             return
 
         # Fetch faction members from Torn
         faction_members = await fetch_faction_members()
         if not faction_members:
-            print('Role sync: Could not fetch faction members')
+            logger.warning('Role sync: Could not fetch faction members')
             return
 
         # Load verified users to get Discord ID -> Torn ID mapping
@@ -187,7 +192,7 @@ class RoleSyncManager:
                 synced_count += 1
 
         if synced_count > 0:
-            print(f'Role sync: Updated roles for {synced_count} members')
+            logger.info(f'Role sync: Updated roles for {synced_count} members')
 
         # Update last sync time
         from utils.helpers import get_current_timestamp
@@ -463,4 +468,4 @@ async def setup_rolesync_commands(bot, role_sync_manager: RoleSyncManager):
             )
             await interaction.followup.send(embed=embed, ephemeral=True)
 
-    print('Role sync commands registered (/rolesync)')
+    logger.info('Role sync commands registered (/rolesync)')

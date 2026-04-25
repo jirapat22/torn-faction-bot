@@ -21,6 +21,10 @@ from config import (
 )
 
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 class ChainTracker:
     """Tracks faction chains and provides statistics"""
 
@@ -47,11 +51,11 @@ class ChainTracker:
         self.last_chain_count = state.get('last_chain_count', 0)
         self.last_chain_start = state.get('last_chain_start', 0)
 
-        print(f'Loaded chain history with {len(self.chain_history)} records')
+        logger.info(f'Loaded chain history with {len(self.chain_history)} records')
         if self.last_reported_chain_id:
-            print(f'Last reported chain: #{self.last_reported_chain_id}')
+            logger.info(f'Last reported chain: #{self.last_reported_chain_id}')
         if self.last_chain_count > 0:
-            print(f'Restored last chain count: {self.last_chain_count}')
+            logger.info(f'Restored last chain count: {self.last_chain_count}')
 
     async def save_chain_history(self):
         """Save chain history to JSON file"""
@@ -62,7 +66,7 @@ class ChainTracker:
         data = load_json(self.chain_session_file, default={'chains': [], 'version': 2})
         # Clear v1 data (had broken chainId fetch producing duplicate member data)
         if data.get('version', 1) < 2:
-            print('Clearing stale chain session data (v1 format)')
+            logger.info('Clearing stale chain session data (v1 format)')
             self.chain_session = {'chains': [], 'version': 2}
             await self.save_chain_session()
             return
@@ -72,7 +76,7 @@ class ChainTracker:
         chains = [c for c in chains if now - c.get('timestamp', 0) < 86400]
         self.chain_session = {'chains': chains, 'version': 2}
         if chains:
-            print(f'Loaded chain session with {len(chains)} chain(s) in last 24h')
+            logger.info(f'Loaded chain session with {len(chains)} chain(s) in last 24h')
 
     async def save_chain_session(self):
         """Save chain session data to disk"""
@@ -105,7 +109,7 @@ class ChainTracker:
         })
 
         await self.save_chain_session()
-        print(f'Saved chain #{chain_id} member data to session ({len(members)} members)')
+        logger.info(f'Saved chain #{chain_id} member data to session ({len(members)} members)')
 
     async def _fetch_chains_list(self):
         """Fetch list of completed chains from Torn API."""
@@ -557,7 +561,7 @@ class ChainTracker:
 
             return False
         except Exception as e:
-            print(f'Error checking chain events: {e}')
+            logger.error(f'Error checking chain events: {e}')
             return False
 
     async def check_chain_update(self):
@@ -575,20 +579,20 @@ class ChainTracker:
         channel = self.bot.get_channel(CHAINING_CHANNEL_ID)
 
         if not channel:
-            print(f'Warning: Could not find #chaining channel (ID: {CHAINING_CHANNEL_ID})')
+            logger.warning(f'Warning: Could not find #chaining channel (ID: {CHAINING_CHANNEL_ID})')
             return
 
         # Detect chain END (was active, now not)
         # Require 3 consecutive "no chain" checks to prevent false completion from API glitches
         if self.was_chain_active and not chain:
             self.chain_end_checks += 1
-            print(f'Chain not detected, check {self.chain_end_checks}/3...')
+            logger.info(f'Chain not detected, check {self.chain_end_checks}/3...')
 
             if self.chain_end_checks < 3:
                 # Wait for more checks before declaring chain ended
                 return
 
-            print('Chain confirmed ended after 3 checks. Posting report...')
+            logger.info('Chain confirmed ended after 3 checks. Posting report...')
 
             # Get chain report
             chainreport = await self.get_chain_report()
@@ -604,7 +608,7 @@ class ChainTracker:
                     report_embed = await self.format_chainreport_embed(chainreport)
 
                     await channel.send('🏁 **Chain Complete!**', embed=report_embed)
-                    print(f'Posted chain completion report for chain #{chain_id}')
+                    logger.info(f'Posted chain completion report for chain #{chain_id}')
 
                     # Save this as last reported chain
                     self.last_reported_chain_id = chain_id
@@ -614,7 +618,7 @@ class ChainTracker:
                         'last_chain_start': self.last_chain_start,
                     })
                 else:
-                    print(f'Chain #{chain_id} already reported, skipping duplicate')
+                    logger.info(f'Chain #{chain_id} already reported, skipping duplicate')
 
             # Reset state - keep last_chain_count so if chain comes back
             # after an API glitch, we don't re-announce old milestones
@@ -645,14 +649,14 @@ class ChainTracker:
             # so we don't re-announce milestones we've already posted.
             if chain_start and self.last_chain_start and chain_start != self.last_chain_start:
                 self.last_chain_count = 0
-                print(f'New chain detected (start={chain_start}) with {current_count} hits')
+                logger.info(f'New chain detected (start={chain_start}) with {current_count} hits')
             elif current_count < self.last_chain_count:
                 # No start timestamps to compare — fall back to count heuristic.
                 # A count lower than last known is likely a new chain.
                 self.last_chain_count = 0
-                print(f'New chain detected (count reset) with {current_count} hits')
+                logger.info(f'New chain detected (count reset) with {current_count} hits')
             else:
-                print(f'Chain resumed at {current_count} hits (was tracking at {self.last_chain_count})')
+                logger.info(f'Chain resumed at {current_count} hits (was tracking at {self.last_chain_count})')
 
         # Always keep last_chain_start in sync
         if chain_start:
@@ -675,7 +679,7 @@ class ChainTracker:
             # Post update to #chaining channel (no ping for regular updates)
             embed = await self.format_chain_embed(chain, display_count=display_count)
             await channel.send(f'**Chain Update: {display_count} hits!**', embed=embed)
-            print(f'Posted chain update: {display_count} hits (actual: {current_count})')
+            logger.info(f'Posted chain update: {display_count} hits (actual: {current_count})')
 
         # Update last count and persist to disk (survives restarts)
         self.last_chain_count = current_count
