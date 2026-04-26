@@ -331,6 +331,25 @@ class WarTracker:
         else:
             fields.append({'name': 'Status', 'value': 'In Progress', 'inline': True})
 
+        # Friendly-hosp tally — quick read on how much defensive cover we're running
+        try:
+            enemy_fid = None
+            for fid in factions.keys():
+                if str(fid) != str(TORN_FACTION_ID):
+                    enemy_fid = str(fid)
+                    break
+            if enemy_fid and start_time:
+                attack_stats = await self._get_war_attack_stats(enemy_fid, start_time)
+                hosp_count = len(attack_stats.get('_friendly_hosps', [])) if isinstance(attack_stats, dict) else 0
+                if hosp_count:
+                    fields.append({
+                        'name': '🏥 Friendly Hosps',
+                        'value': str(hosp_count),
+                        'inline': True,
+                    })
+        except Exception as e:
+            logger.error(f'War status: friendly hosp count failed: {e}')
+
         # Build embed
         embed = create_embed(
             title=f'Ranked War vs {enemy_name}',
@@ -516,106 +535,6 @@ class WarTracker:
         # Attach raw friendly-hosp log under a non-uid key so callers can render it
         stats['_friendly_hosps'] = sorted(friendly_hosps, key=lambda h: h.get('timestamp', 0))
         return stats
-
-    async def format_hosps_embed(self, war_info):
-        """Render the friendly-hosp log + leaderboard for the current/most-recent war."""
-        # If we have an active/recent war, recompute live from attack log.
-        # Otherwise fall back to the most recent saved war record.
-        friendly_hosps = []
-        title_suffix = ''
-        war_start = 0
-        enemy_fid = None
-        if war_info and war_info.get('data'):
-            data = war_info['data']
-            war_start = data.get('war', {}).get('start', 0)
-            for fid in data.get('factions', {}).keys():
-                if str(fid) != str(TORN_FACTION_ID):
-                    enemy_fid = str(fid)
-                    break
-        if war_start and enemy_fid:
-            attack_stats = await self._get_war_attack_stats(enemy_fid, war_start)
-            friendly_hosps = attack_stats.get('_friendly_hosps', []) if isinstance(attack_stats, dict) else []
-            title_suffix = ' (current war)' if war_info.get('is_active') else ' (latest war)'
-        else:
-            wars = self.war_member_stats.get('wars', [])
-            if wars:
-                last = wars[-1]
-                friendly_hosps = last.get('friendly_hosps', [])
-                title_suffix = f' (last war vs {last.get("enemy_name", "?")})'
-
-        if not friendly_hosps:
-            return create_embed(
-                title='Friendly Hospitalisations',
-                description='No friendly hospitalisations recorded yet.',
-                color=EMBED_COLOR_INFO,
-            )
-
-        # Aggregate
-        givers = {}
-        receivers = {}
-        pairs = {}  # (giver_name, receiver_name) -> count
-        for ev in friendly_hosps:
-            a_name = ev.get('attacker_name') or ev['attacker_id']
-            d_name = ev.get('defender_name') or ev['defender_id']
-            givers[a_name] = givers.get(a_name, 0) + 1
-            receivers[d_name] = receivers.get(d_name, 0) + 1
-            pair_key = (a_name, d_name)
-            pairs[pair_key] = pairs.get(pair_key, 0) + 1
-
-        top_givers = sorted(givers.items(), key=lambda x: x[1], reverse=True)[:10]
-        top_receivers = sorted(receivers.items(), key=lambda x: x[1], reverse=True)[:10]
-        top_pairs = sorted(pairs.items(), key=lambda x: x[1], reverse=True)[:5]
-
-        # Recent log (last 15)
-        recent = friendly_hosps[-15:]
-
-        embed = create_embed(
-            title=f'🏥 Friendly Hospitalisations{title_suffix}',
-            description=f'**Total events:** {len(friendly_hosps)}',
-            color=EMBED_COLOR_INFO,
-        )
-
-        # Top hospitalizers
-        givers_text = '\n'.join(f'{i+1}. **{n}** — {c}x' for i, (n, c) in enumerate(top_givers))
-        embed.add_field(
-            name='🛡️ Top Hospitalizers (kept teammates safe)',
-            value=givers_text or '—',
-            inline=True,
-        )
-
-        # Top recipients (members most often kept safe)
-        recv_text = '\n'.join(f'{i+1}. **{n}** — {c}x' for i, (n, c) in enumerate(top_receivers))
-        embed.add_field(
-            name='💤 Most Protected (most often hosped by team)',
-            value=recv_text or '—',
-            inline=True,
-        )
-
-        # Top pairs (recurring buddy-hosp dynamics)
-        if top_pairs:
-            pairs_text = '\n'.join(f'**{a}** → **{d}** ({c}x)' for (a, d), c in top_pairs)
-            embed.add_field(
-                name='👥 Frequent Pairs',
-                value=pairs_text,
-                inline=False,
-            )
-
-        # Recent log
-        log_lines = []
-        for ev in recent:
-            ts = ev.get('timestamp', 0)
-            a = ev.get('attacker_name') or ev['attacker_id']
-            d = ev.get('defender_name') or ev['defender_id']
-            ts_str = f'<t:{int(ts)}:R>' if ts else ''
-            log_lines.append(f'**{a}** → **{d}** {ts_str}')
-        if log_lines:
-            embed.add_field(
-                name=f'🕐 Recent ({len(recent)} of {len(friendly_hosps)})',
-                value='\n'.join(log_lines)[:1000],
-                inline=False,
-            )
-
-        return embed
 
     def _chunk_text(self, lines, max_length=1024):
         """Split lines into chunks that fit within Discord's field limit"""
@@ -1252,26 +1171,31 @@ class WarTracker:
 
         last_5 = wars[-5:]
 
-        # War summary
+        # War summary — annotate each with friendly-hosp count when present
         war_lines = []
         for w in reversed(last_5):
             icon = '✅' if w['result'] == 'victory' else '❌'
+            hosp_n = len(w.get('friendly_hosps', []))
+            hosp_tag = f' · 🏥 {hosp_n}' if hosp_n else ''
             war_lines.append(
                 f'{icon} vs **{w["enemy_name"]}** — {w["our_score"]}-{w["enemy_score"]} '
-                f'({format_timestamp(w["timestamp"], "R")})'
+                f'({format_timestamp(w["timestamp"], "R")}){hosp_tag}'
             )
 
-        # Aggregate member performance
+        # Aggregate member performance (incl. friendly hosps)
         member_totals = {}
         for w in last_5:
             for uid, mdata in w.get('members', {}).items():
                 if uid not in member_totals:
                     member_totals[uid] = {
                         'name': mdata['name'], 'total_attacks': 0,
-                        'total_score': 0, 'wars_played': 0
+                        'total_score': 0, 'wars_played': 0,
+                        'hosps_given': 0, 'hosps_received': 0,
                     }
                 member_totals[uid]['total_attacks'] += mdata.get('attacks', 0)
                 member_totals[uid]['total_score'] += mdata.get('score', 0)
+                member_totals[uid]['hosps_given'] += mdata.get('hosps_given', 0)
+                member_totals[uid]['hosps_received'] += mdata.get('hosps_received', 0)
                 member_totals[uid]['wars_played'] += 1
                 member_totals[uid]['name'] = mdata['name']
 
@@ -1295,6 +1219,16 @@ class WarTracker:
             for m in reversed(bottom_5)
         ]) or 'Not enough data (need 2+ wars)'
 
+        # Top defensive players (most friendly hosps given across last 5 wars)
+        sorted_by_hosps = sorted(
+            (m for m in member_totals.values() if m['hosps_given'] > 0),
+            key=lambda x: x['hosps_given'], reverse=True,
+        )[:5]
+        hosps_text = '\n'.join([
+            f'{i+1}. **{m["name"]}** — {m["hosps_given"]} hosps given ({m["wars_played"]} wars)'
+            for i, m in enumerate(sorted_by_hosps)
+        ]) or 'No friendly hospitalisations recorded'
+
         embed = create_embed(
             title='War Stats History',
             description=f'**Last {len(last_5)} Wars:**\n' + '\n'.join(war_lines),
@@ -1302,6 +1236,7 @@ class WarTracker:
             fields=[
                 {'name': 'Top Performers (by avg score)', 'value': top_text, 'inline': False},
                 {'name': 'Lowest Performers (2+ wars)', 'value': bottom_text, 'inline': False},
+                {'name': '🛡️ Top Hospitalizers (kept teammates safe)', 'value': hosps_text, 'inline': False},
             ]
         )
         return embed
@@ -1396,6 +1331,8 @@ class WarTracker:
                     'attacks': mdata.get('attacks', 0),
                     'defends': mdata.get('defends', 0),
                     'score': mdata.get('score', 0),
+                    'hosps_given': mdata.get('hosps_given', 0),
+                    'hosps_received': mdata.get('hosps_received', 0),
                     'name': mdata.get('name', 'Unknown')
                 })
 
@@ -1412,23 +1349,36 @@ class WarTracker:
         lines = []
         for w in reversed(last_5):
             icon = '✅' if w['result'] == 'victory' else '❌'
+            hosp_tag = ''
+            if w['hosps_given'] or w['hosps_received']:
+                hosp_tag = f' | 🏥 gave {w["hosps_given"]} / received {w["hosps_received"]}'
             lines.append(
                 f'{icon} **vs {w["enemy_name"]}** ({format_timestamp(w["timestamp"], "R")})\n'
-                f'   Attacks: {w["attacks"]} | Defends: {w["defends"]} | Score: {w["score"]}'
+                f'   Attacks: {w["attacks"]} | Defends: {w["defends"]} | Score: {w["score"]}{hosp_tag}'
             )
 
         avg_attacks = sum(w['attacks'] for w in last_5) / len(last_5)
         avg_score = sum(w['score'] for w in last_5) / len(last_5)
+        total_hosps_given = sum(w['hosps_given'] for w in member_wars)
+        total_hosps_received = sum(w['hosps_received'] for w in member_wars)
+
+        fields = [
+            {'name': 'Avg Attacks', 'value': f'{avg_attacks:.1f}', 'inline': True},
+            {'name': 'Avg Score', 'value': f'{avg_score:.1f}', 'inline': True},
+            {'name': 'Wars Recorded', 'value': str(len(member_wars)), 'inline': True},
+        ]
+        if total_hosps_given or total_hosps_received:
+            fields.append({
+                'name': '🏥 Friendly Hosps (all-time)',
+                'value': f'Gave: **{total_hosps_given}** · Received: **{total_hosps_received}**',
+                'inline': False,
+            })
 
         embed = create_embed(
             title=f'War Stats — {display_name}',
             description=f'Showing last {len(last_5)} of {len(member_wars)} recorded wars',
             color=EMBED_COLOR_INFO,
-            fields=[
-                {'name': 'Avg Attacks', 'value': f'{avg_attacks:.1f}', 'inline': True},
-                {'name': 'Avg Score', 'value': f'{avg_score:.1f}', 'inline': True},
-                {'name': 'Wars Recorded', 'value': str(len(member_wars)), 'inline': True},
-            ]
+            fields=fields,
         )
 
         detail_text = '\n\n'.join(lines)
