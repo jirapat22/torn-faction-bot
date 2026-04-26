@@ -71,19 +71,19 @@ class WarTracker:
 
     async def _save_war_member_data(self, war_id, report_factions, our_score, enemy_score,
                                      enemy_name, friendly_hosps=None):
-        """Save per-member war data from rankedwarreport to persistent history. Keeps last 10 wars."""
+        """Save per-member war data + friendly-hosp log to persistent history. Keeps last 10 wars.
+
+        Saves even if rankedwarreport member data is missing — the friendly-hosp
+        event log alone is still valuable to preserve.
+        """
         our_members = {}
-        for fid, fdata in report_factions.items():
+        for fid, fdata in (report_factions or {}).items():
             if str(fid) == str(TORN_FACTION_ID):
                 our_members = fdata.get('members', {})
                 break
 
-        if not our_members:
-            logger.info('War member stats: No member data to save')
-            return
-
         from utils.torn_api import fetch_faction_members
-        faction_members = await fetch_faction_members()
+        faction_members = await fetch_faction_members() if our_members else {}
 
         # Per-member friendly hosp counts (gave / received)
         hosps_given = {}
@@ -105,6 +105,11 @@ class WarTracker:
                 'hosps_given': hosps_given.get(str(user_id), 0),
                 'hosps_received': hosps_received.get(str(user_id), 0),
             }
+
+        # Skip the save only if there's truly nothing to record
+        if not members_data and not friendly_hosps:
+            logger.info('War member stats: nothing to save (no members and no friendly hosps)')
+            return
 
         war_record = {
             'war_id': str(war_id),
@@ -331,24 +336,9 @@ class WarTracker:
         else:
             fields.append({'name': 'Status', 'value': 'In Progress', 'inline': True})
 
-        # Friendly-hosp tally — quick read on how much defensive cover we're running
-        try:
-            enemy_fid = None
-            for fid in factions.keys():
-                if str(fid) != str(TORN_FACTION_ID):
-                    enemy_fid = str(fid)
-                    break
-            if enemy_fid and start_time:
-                attack_stats = await self._get_war_attack_stats(enemy_fid, start_time)
-                hosp_count = len(attack_stats.get('_friendly_hosps', [])) if isinstance(attack_stats, dict) else 0
-                if hosp_count:
-                    fields.append({
-                        'name': '🏥 Friendly Hosps',
-                        'value': str(hosp_count),
-                        'inline': True,
-                    })
-        except Exception as e:
-            logger.error(f'War status: friendly hosp count failed: {e}')
+        # Note: friendly-hosp count is shown in /war board (which already
+        # paginates the attack log). Don't recompute it here — /war status
+        # should stay a fast, glanceable read.
 
         # Build embed
         embed = create_embed(
@@ -1550,10 +1540,12 @@ class WarTracker:
                     except Exception as e:
                         logger.error(f'War end: failed to collect friendly hosps: {e}')
 
-                # Save per-member war stats to history
-                if report_factions:
+                # Save per-member war stats + friendly-hosp log. Save even when
+                # report_factions is empty so the friendly-hosp event log alone
+                # still gets preserved.
+                if report_factions or friendly_hosps:
                     await self._save_war_member_data(
-                        self.current_war_id, report_factions,
+                        self.current_war_id, report_factions or {},
                         our_score, enemy_score, enemy_name,
                         friendly_hosps=friendly_hosps,
                     )
