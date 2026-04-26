@@ -656,6 +656,7 @@ class WarTracker:
                     'outside_hits': log_stats.get('outside_hits', 0),
                     'war_incoming': war_inc,
                     'outside_incoming': outside_inc,
+                    'hosps_given': log_stats.get('hosps_given', 0),
                     'score': war_stats.get('score', 0),
                 })
         else:
@@ -672,6 +673,7 @@ class WarTracker:
                     'outside_hits': stats.get('outside_hits', 0),
                     'war_incoming': stats.get('war_incoming', 0),
                     'outside_incoming': stats.get('outside_incoming', 0),
+                    'hosps_given': stats.get('hosps_given', 0),
                     'score': 0,
                 })
 
@@ -723,7 +725,8 @@ class WarTracker:
         embeds = []
         legend = (
             '\n\n**War** = Hits on war opponent | **Out** = Hits outside war\n'
-            '**WHt** = Times hit by war opponent | **OHt** = Times hit by outsiders'
+            '**WHt** = Times hit by war opponent | **OHt** = Times hit by outsiders\n'
+            '**Hsp** = Friendly hospitalisations given (kept teammates safe)'
         )
         embed_fields = [
             {'name': 'War Attacks', 'value': str(total_war_hits), 'inline': True},
@@ -761,13 +764,18 @@ class WarTracker:
         max_name = min(max_name, 15)  # Cap at 15 chars to fit mobile
 
         # Build table lines
-        header = f'{"#":>2}  {"Name":<{max_name}}  War  Out  WHt  OHt'
+        header = f'{"#":>2}  {"Name":<{max_name}}  War  Out  WHt  OHt  Hsp'
         separator = '-' * len(header)
         table_lines = [header, separator]
 
         for i, m in enumerate(sorted_members):
             name = m['name'][:max_name]
-            line = f'{i+1:>2}  {name:<{max_name}}  {m["war_hits"]:>3}  {m["outside_hits"]:>3}  {m["war_incoming"]:>3}  {m["outside_incoming"]:>3}'
+            line = (
+                f'{i+1:>2}  {name:<{max_name}}  '
+                f'{m["war_hits"]:>3}  {m["outside_hits"]:>3}  '
+                f'{m["war_incoming"]:>3}  {m["outside_incoming"]:>3}  '
+                f'{m["hosps_given"]:>3}'
+            )
             table_lines.append(line)
 
         # Split table into code block chunks that fit Discord's 1024 char field limit
