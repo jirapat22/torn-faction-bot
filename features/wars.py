@@ -69,7 +69,8 @@ class WarTracker:
         """Save historical per-member war stats"""
         save_json(self.war_member_stats_file, self.war_member_stats)
 
-    async def _save_war_member_data(self, war_id, report_factions, our_score, enemy_score, enemy_name):
+    async def _save_war_member_data(self, war_id, report_factions, our_score, enemy_score,
+                                     enemy_name, friendly_hosps=None):
         """Save per-member war data from rankedwarreport to persistent history. Keeps last 10 wars."""
         our_members = {}
         for fid, fdata in report_factions.items():
@@ -84,6 +85,13 @@ class WarTracker:
         from utils.torn_api import fetch_faction_members
         faction_members = await fetch_faction_members()
 
+        # Per-member friendly hosp counts (gave / received)
+        hosps_given = {}
+        hosps_received = {}
+        for ev in (friendly_hosps or []):
+            hosps_given[ev['attacker_id']] = hosps_given.get(ev['attacker_id'], 0) + 1
+            hosps_received[ev['defender_id']] = hosps_received.get(ev['defender_id'], 0) + 1
+
         members_data = {}
         for user_id, stats in our_members.items():
             name = 'Unknown'
@@ -93,7 +101,9 @@ class WarTracker:
                 'name': name,
                 'attacks': stats.get('attacks', 0),
                 'defends': stats.get('defends', 0),
-                'score': stats.get('score', 0)
+                'score': stats.get('score', 0),
+                'hosps_given': hosps_given.get(str(user_id), 0),
+                'hosps_received': hosps_received.get(str(user_id), 0),
             }
 
         war_record = {
@@ -103,7 +113,8 @@ class WarTracker:
             'our_score': our_score,
             'enemy_score': enemy_score,
             'result': 'victory' if our_score > enemy_score else 'defeat',
-            'members': members_data
+            'members': members_data,
+            'friendly_hosps': friendly_hosps or [],
         }
 
         self.war_member_stats['wars'].append(war_record)
@@ -394,13 +405,23 @@ class WarTracker:
             war_start: War start timestamp to filter attacks
 
         Returns:
-            Dict of {user_id: {'war_hits': N, 'outside_hits': N, 'total_incoming': N, 'war_incoming': N, 'outside_incoming': N}}
+            Dict of {user_id: {'war_hits': N, 'outside_hits': N, 'total_incoming': N,
+                               'war_incoming': N, 'outside_incoming': N,
+                               'hosped_teammates': N, 'hosped_by_teammates': N}}.
+            A "_friendly_hosps" key is added at top level with the raw event log:
+              [{'timestamp', 'attacker_id', 'attacker_name',
+                'defender_id', 'defender_name'}, ...]
         """
         stats = {}
+        friendly_hosps = []  # ordered event log
 
         def _ensure(uid):
             if uid not in stats:
-                stats[uid] = {'war_hits': 0, 'outside_hits': 0, 'chain_outside_hits': 0, 'total_incoming': 0, 'war_incoming': 0, 'outside_incoming': 0}
+                stats[uid] = {
+                    'war_hits': 0, 'outside_hits': 0, 'chain_outside_hits': 0,
+                    'total_incoming': 0, 'war_incoming': 0, 'outside_incoming': 0,
+                    'hosped_teammates': 0, 'hosped_by_teammates': 0,
+                }
 
         try:
             attacks = await self._fetch_all_attacks_since(war_start)
@@ -440,6 +461,25 @@ class WarTracker:
                 defender_faction = str(attack.get('defender_faction', 0))
                 result = attack.get('result', '')
 
+                # Friendly hospitalization — teammate hosps teammate to keep them
+                # safe from enemy attacks. Tracked separately from war/outside hits.
+                if (attacker_faction == our_faction
+                        and defender_faction == our_faction
+                        and attacker_id != defender_id
+                        and result == 'Hospitalized'):
+                    _ensure(attacker_id)
+                    _ensure(defender_id)
+                    stats[attacker_id]['hosped_teammates'] += 1
+                    stats[defender_id]['hosped_by_teammates'] += 1
+                    friendly_hosps.append({
+                        'timestamp': attack.get('timestamp_ended') or attack.get('timestamp_started', 0),
+                        'attacker_id': attacker_id,
+                        'attacker_name': attack.get('attacker_name', ''),
+                        'defender_id': defender_id,
+                        'defender_name': attack.get('defender_name', ''),
+                    })
+                    continue  # don't double-count as a war/outside hit
+
                 # Our member attacked someone (successful attacks only)
                 if attacker_faction == our_faction:
                     if result not in ('Attacked', 'Mugged', 'Hospitalized', 'Special'):
@@ -473,7 +513,109 @@ class WarTracker:
         except Exception as e:
             logger.error(f'War: Error computing attack stats: {e}')
 
+        # Attach raw friendly-hosp log under a non-uid key so callers can render it
+        stats['_friendly_hosps'] = sorted(friendly_hosps, key=lambda h: h.get('timestamp', 0))
         return stats
+
+    async def format_hosps_embed(self, war_info):
+        """Render the friendly-hosp log + leaderboard for the current/most-recent war."""
+        # If we have an active/recent war, recompute live from attack log.
+        # Otherwise fall back to the most recent saved war record.
+        friendly_hosps = []
+        title_suffix = ''
+        war_start = 0
+        enemy_fid = None
+        if war_info and war_info.get('data'):
+            data = war_info['data']
+            war_start = data.get('war', {}).get('start', 0)
+            for fid in data.get('factions', {}).keys():
+                if str(fid) != str(TORN_FACTION_ID):
+                    enemy_fid = str(fid)
+                    break
+        if war_start and enemy_fid:
+            attack_stats = await self._get_war_attack_stats(enemy_fid, war_start)
+            friendly_hosps = attack_stats.get('_friendly_hosps', []) if isinstance(attack_stats, dict) else []
+            title_suffix = ' (current war)' if war_info.get('is_active') else ' (latest war)'
+        else:
+            wars = self.war_member_stats.get('wars', [])
+            if wars:
+                last = wars[-1]
+                friendly_hosps = last.get('friendly_hosps', [])
+                title_suffix = f' (last war vs {last.get("enemy_name", "?")})'
+
+        if not friendly_hosps:
+            return create_embed(
+                title='Friendly Hospitalisations',
+                description='No friendly hospitalisations recorded yet.',
+                color=EMBED_COLOR_INFO,
+            )
+
+        # Aggregate
+        givers = {}
+        receivers = {}
+        pairs = {}  # (giver_name, receiver_name) -> count
+        for ev in friendly_hosps:
+            a_name = ev.get('attacker_name') or ev['attacker_id']
+            d_name = ev.get('defender_name') or ev['defender_id']
+            givers[a_name] = givers.get(a_name, 0) + 1
+            receivers[d_name] = receivers.get(d_name, 0) + 1
+            pair_key = (a_name, d_name)
+            pairs[pair_key] = pairs.get(pair_key, 0) + 1
+
+        top_givers = sorted(givers.items(), key=lambda x: x[1], reverse=True)[:10]
+        top_receivers = sorted(receivers.items(), key=lambda x: x[1], reverse=True)[:10]
+        top_pairs = sorted(pairs.items(), key=lambda x: x[1], reverse=True)[:5]
+
+        # Recent log (last 15)
+        recent = friendly_hosps[-15:]
+
+        embed = create_embed(
+            title=f'🏥 Friendly Hospitalisations{title_suffix}',
+            description=f'**Total events:** {len(friendly_hosps)}',
+            color=EMBED_COLOR_INFO,
+        )
+
+        # Top hospitalizers
+        givers_text = '\n'.join(f'{i+1}. **{n}** — {c}x' for i, (n, c) in enumerate(top_givers))
+        embed.add_field(
+            name='🛡️ Top Hospitalizers (kept teammates safe)',
+            value=givers_text or '—',
+            inline=True,
+        )
+
+        # Top recipients (members most often kept safe)
+        recv_text = '\n'.join(f'{i+1}. **{n}** — {c}x' for i, (n, c) in enumerate(top_receivers))
+        embed.add_field(
+            name='💤 Most Protected (most often hosped by team)',
+            value=recv_text or '—',
+            inline=True,
+        )
+
+        # Top pairs (recurring buddy-hosp dynamics)
+        if top_pairs:
+            pairs_text = '\n'.join(f'**{a}** → **{d}** ({c}x)' for (a, d), c in top_pairs)
+            embed.add_field(
+                name='👥 Frequent Pairs',
+                value=pairs_text,
+                inline=False,
+            )
+
+        # Recent log
+        log_lines = []
+        for ev in recent:
+            ts = ev.get('timestamp', 0)
+            a = ev.get('attacker_name') or ev['attacker_id']
+            d = ev.get('defender_name') or ev['defender_id']
+            ts_str = f'<t:{int(ts)}:R>' if ts else ''
+            log_lines.append(f'**{a}** → **{d}** {ts_str}')
+        if log_lines:
+            embed.add_field(
+                name=f'🕐 Recent ({len(recent)} of {len(friendly_hosps)})',
+                value='\n'.join(log_lines)[:1000],
+                inline=False,
+            )
+
+        return embed
 
     def _chunk_text(self, lines, max_length=1024):
         """Split lines into chunks that fit within Discord's field limit"""
@@ -627,6 +769,20 @@ class WarTracker:
         total_outside_incoming = sum(m['outside_incoming'] for m in member_list)
         participants = len([m for m in member_list if m['war_hits'] > 0])
 
+        # Friendly hospitalisations — teammates protecting teammates from enemy hits
+        friendly_hosps = attack_stats.get('_friendly_hosps', []) if isinstance(attack_stats, dict) else []
+        total_friendly_hosps = len(friendly_hosps)
+        # Top hospitalizers (members who keep teammates safe most often)
+        hospitalizer_counts = {}
+        for ev in friendly_hosps:
+            aid = ev['attacker_id']
+            if aid not in hospitalizer_counts:
+                hospitalizer_counts[aid] = {'name': ev.get('attacker_name') or aid, 'count': 0}
+            hospitalizer_counts[aid]['count'] += 1
+        top_hospitalizers = sorted(
+            hospitalizer_counts.values(), key=lambda x: x['count'], reverse=True
+        )[:5]
+
         # War status header
         enemy_name = enemy_faction_data.get('name', 'Unknown') if enemy_faction_data else 'Unknown'
         our_score = our_faction_data.get('score', 0) if our_faction_data else 0
@@ -650,18 +806,35 @@ class WarTracker:
             '\n\n**War** = Hits on war opponent | **Out** = Hits outside war\n'
             '**WHt** = Times hit by war opponent | **OHt** = Times hit by outsiders'
         )
+        embed_fields = [
+            {'name': 'War Attacks', 'value': str(total_war_hits), 'inline': True},
+            {'name': 'Outside Hits', 'value': str(total_outside), 'inline': True},
+            {'name': 'War Incoming', 'value': str(total_war_incoming), 'inline': True},
+            {'name': 'Outside Incoming', 'value': str(total_outside_incoming), 'inline': True},
+            {'name': 'Participated', 'value': f'{participants}/{len(member_list)}', 'inline': True},
+        ]
+        if total_friendly_hosps:
+            embed_fields.append({
+                'name': '🏥 Friendly Hosps',
+                'value': str(total_friendly_hosps),
+                'inline': True,
+            })
         embed = create_embed(
             title='War Participation Report',
             description=description + legend,
             color=color,
-            fields=[
-                {'name': 'War Attacks', 'value': str(total_war_hits), 'inline': True},
-                {'name': 'Outside Hits', 'value': str(total_outside), 'inline': True},
-                {'name': 'War Incoming', 'value': str(total_war_incoming), 'inline': True},
-                {'name': 'Outside Incoming', 'value': str(total_outside_incoming), 'inline': True},
-                {'name': 'Participated', 'value': f'{participants}/{len(member_list)}', 'inline': True},
-            ]
+            fields=embed_fields,
         )
+        if top_hospitalizers:
+            top_text = '\n'.join(
+                f'{i+1}. **{h["name"]}** — {h["count"]}x'
+                for i, h in enumerate(top_hospitalizers)
+            )
+            embed.add_field(
+                name='🛡️ Top Hospitalizers (kept teammates safe)',
+                value=top_text,
+                inline=False,
+            )
 
         # Build monospace table for clean alignment
         # Find the longest name to set column width
@@ -1390,11 +1563,24 @@ class WarTracker:
                 else:
                     logger.warning('Warning: War management channel not configured')
 
+                # Compute friendly hospitalisations from the attack log
+                friendly_hosps = []
+                war_start_ts = final_war_data.get('start', 0)
+                enemy_fid = final_war_data.get('enemy_faction_id')
+                if war_start_ts and enemy_fid:
+                    try:
+                        attack_stats = await self._get_war_attack_stats(enemy_fid, war_start_ts)
+                        friendly_hosps = attack_stats.get('_friendly_hosps', [])
+                        logger.info(f'War end: collected {len(friendly_hosps)} friendly hosp event(s)')
+                    except Exception as e:
+                        logger.error(f'War end: failed to collect friendly hosps: {e}')
+
                 # Save per-member war stats to history
                 if report_factions:
                     await self._save_war_member_data(
                         self.current_war_id, report_factions,
-                        our_score, enemy_score, enemy_name
+                        our_score, enemy_score, enemy_name,
+                        friendly_hosps=friendly_hosps,
                     )
 
             # Reset state
@@ -1417,9 +1603,19 @@ class WarTracker:
             logger.info(f'War detected: {war_id}')
 
         # Save war data to history (faction-level scores for final report)
+        # Persist start/enemy_faction_id so the war-end handler can compute
+        # friendly-hosp stats without a second rankedwars fetch.
+        war_data = war_info.get('data', {})
+        enemy_faction_id = None
+        for fid in war_data.get('factions', {}).keys():
+            if str(fid) != str(TORN_FACTION_ID):
+                enemy_faction_id = str(fid)
+                break
         self.war_history[war_id] = {
             'timestamp': get_current_timestamp(),
-            'factions': war_info['data'].get('factions', {})
+            'factions': war_data.get('factions', {}),
+            'start': war_data.get('war', {}).get('start', 0),
+            'enemy_faction_id': enemy_faction_id,
         }
 
         # Prune old war entries (keep last 20)
