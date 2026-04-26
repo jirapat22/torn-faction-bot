@@ -763,6 +763,23 @@ class WarTracker:
         max_name = max((len(m['name']) for m in sorted_members), default=10)
         max_name = min(max_name, 15)  # Cap at 15 chars to fit mobile
 
+        # ANSI colour highlights — Discord renders these inside ```ansi blocks.
+        # Top-3 distinct War hits → green; top-3 distinct WHt → red. Ties keep
+        # everyone on the boundary highlighted.
+        GREEN = '[32m'
+        RED = '[31m'
+        RESET = '[0m'
+        top3_war = sorted({m['war_hits'] for m in sorted_members if m['war_hits'] > 0}, reverse=True)[:3]
+        top3_wht = sorted({m['war_incoming'] for m in sorted_members if m['war_incoming'] > 0}, reverse=True)[:3]
+
+        def _war_cell(v):
+            cell = f'{v:>3}'
+            return f'{GREEN}{cell}{RESET}' if v in top3_war else cell
+
+        def _wht_cell(v):
+            cell = f'{v:>3}'
+            return f'{RED}{cell}{RESET}' if v in top3_wht else cell
+
         # Build table lines
         header = f'{"#":>2}  {"Name":<{max_name}}  War  Out  WHt  OHt  Hsp'
         separator = '-' * len(header)
@@ -772,22 +789,22 @@ class WarTracker:
             name = m['name'][:max_name]
             line = (
                 f'{i+1:>2}  {name:<{max_name}}  '
-                f'{m["war_hits"]:>3}  {m["outside_hits"]:>3}  '
-                f'{m["war_incoming"]:>3}  {m["outside_incoming"]:>3}  '
+                f'{_war_cell(m["war_hits"])}  {m["outside_hits"]:>3}  '
+                f'{_wht_cell(m["war_incoming"])}  {m["outside_incoming"]:>3}  '
                 f'{m["hosps_given"]:>3}'
             )
             table_lines.append(line)
 
-        # Split table into code block chunks that fit Discord's 1024 char field limit
-        # Each line is wrapped in a code block, so account for ``` markers (8 chars)
+        # Split table into ansi code-block chunks that fit Discord's 1024 char field limit.
+        # ```ansi ... ``` lets Discord render the embedded ANSI colour escapes.
+        # Reserve 12 chars for the ```ansi\n ... \n``` wrappers.
         table_chunks = []
         current_chunk = []
         current_length = 0
 
         for line in table_lines:
-            # +1 for newline, +8 for ``` markers
-            if current_length + len(line) + 1 > 1024 - 8 and current_chunk:
-                table_chunks.append('```\n' + '\n'.join(current_chunk) + '\n```')
+            if current_length + len(line) + 1 > 1024 - 12 and current_chunk:
+                table_chunks.append('```ansi\n' + '\n'.join(current_chunk) + '\n```')
                 current_chunk = [line]
                 current_length = len(line)
             else:
@@ -795,7 +812,7 @@ class WarTracker:
                 current_length += len(line) + 1
 
         if current_chunk:
-            table_chunks.append('```\n' + '\n'.join(current_chunk) + '\n```')
+            table_chunks.append('```ansi\n' + '\n'.join(current_chunk) + '\n```')
 
         for idx, chunk in enumerate(table_chunks):
             if idx == 0:
