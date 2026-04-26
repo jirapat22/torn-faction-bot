@@ -426,7 +426,7 @@ class WarTracker:
         Returns:
             Dict of {user_id: {'war_hits': N, 'outside_hits': N, 'total_incoming': N,
                                'war_incoming': N, 'outside_incoming': N,
-                               'hosped_teammates': N, 'hosped_by_teammates': N}}.
+                               'hosps_given': N, 'hosps_received': N}}.
             A "_friendly_hosps" key is added at top level with the raw event log:
               [{'timestamp', 'attacker_id', 'attacker_name',
                 'defender_id', 'defender_name'}, ...]
@@ -439,7 +439,7 @@ class WarTracker:
                 stats[uid] = {
                     'war_hits': 0, 'outside_hits': 0, 'chain_outside_hits': 0,
                     'total_incoming': 0, 'war_incoming': 0, 'outside_incoming': 0,
-                    'hosped_teammates': 0, 'hosped_by_teammates': 0,
+                    'hosps_given': 0, 'hosps_received': 0,
                 }
 
         try:
@@ -488,8 +488,8 @@ class WarTracker:
                         and result == 'Hospitalized'):
                     _ensure(attacker_id)
                     _ensure(defender_id)
-                    stats[attacker_id]['hosped_teammates'] += 1
-                    stats[defender_id]['hosped_by_teammates'] += 1
+                    stats[attacker_id]['hosps_given'] += 1
+                    stats[defender_id]['hosps_received'] += 1
                     friendly_hosps.append({
                         'timestamp': attack.get('timestamp_ended') or attack.get('timestamp_started', 0),
                         'attacker_id': attacker_id,
