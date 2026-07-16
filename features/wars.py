@@ -41,6 +41,8 @@ class WarTracker:
         self.war_data_file = 'data/war_history.json'
         self.war_history = {}
         self.enemy_watchlist = None  # Set by bot.py for auto-clear
+        self.pending_wars_file = 'data/pending_wars.json'
+        self.announced_pending_wars = set()  # war_ids already announced during their notice window
         self.war_member_stats_file = 'data/war_member_stats.json'
         self.war_member_stats = {'wars': []}
         # Track attacks during active war
@@ -58,6 +60,16 @@ class WarTracker:
     async def save_war_history(self):
         """Save war history to JSON file"""
         save_json(self.war_data_file, self.war_history)
+
+    async def load_pending_wars(self):
+        """Load the set of already-announced pending (declared-but-unstarted) war IDs"""
+        data = load_json(self.pending_wars_file, default={'announced': []})
+        self.announced_pending_wars = set(str(w) for w in data.get('announced', []))
+        logger.info(f'Loaded {len(self.announced_pending_wars)} announced pending-war ID(s)')
+
+    async def save_pending_wars(self):
+        """Save the set of already-announced pending war IDs"""
+        save_json(self.pending_wars_file, {'announced': list(self.announced_pending_wars)})
 
     async def load_war_member_stats(self):
         """Load historical per-member war stats"""
@@ -1407,12 +1419,72 @@ class WarTracker:
 
         return embed
 
+    async def check_pending_war(self):
+        """
+        Detect a ranked war that's been declared but hasn't started yet — Torn
+        gives a multi-day notice window between declaration and start.
+
+        DRY-RUN STAGE: only logs the raw payload and posts a plain notice embed.
+        Deliberately NOT wired up to auto-create an availability poll or
+        auto-populate the enemy watchlist yet — that comes after we've
+        inspected a real declaration's data shape from the logged payload.
+        """
+        rankedwars = await self._fetch_rankedwars()
+        if not rankedwars:
+            return
+
+        now = get_current_timestamp()
+        updated = False
+
+        for war_id, war_data in rankedwars.items():
+            war = war_data.get('war', {})
+            start = war.get('start', 0)
+
+            if not start or start <= now:
+                continue  # already started, or no start time yet
+
+            war_id_str = str(war_id)
+            if war_id_str in self.announced_pending_wars:
+                continue  # already announced this one
+
+            logger.info(f'PENDING WAR DETECTED (raw payload for inspection): war_id={war_id} data={war_data}')
+
+            factions = war_data.get('factions', {})
+            enemy_name = 'Unknown'
+            for fid, fdata in factions.items():
+                if str(fid) != str(TORN_FACTION_ID):
+                    enemy_name = fdata.get('name', 'Unknown')
+
+            channel = self.bot.get_channel(WAR_CHANNEL_ID)
+            if channel:
+                embed = create_embed(
+                    title='⚔️ War Declared',
+                    description=(
+                        f'A ranked war against **{enemy_name}** has been declared.\n'
+                        f'Starts {format_timestamp(start, "R")} ({format_timestamp(start, "F")}).'
+                    ),
+                    color=EMBED_COLOR_WARNING
+                )
+                await channel.send(embed=embed)
+                logger.info(f'Posted pending-war notice for war {war_id}')
+            else:
+                logger.warning(f'Could not post pending-war notice — war channel not found (ID: {WAR_CHANNEL_ID})')
+
+            self.announced_pending_wars.add(war_id_str)
+            updated = True
+
+        if updated:
+            await self.save_pending_wars()
+
     async def check_war_update(self):
         """
         Check if war status changed and post update if needed
         Auto-posts war results when war ends
         Called by the background task every minute
         """
+        # Check for a declared-but-not-yet-started war (dry-run notice only)
+        await self.check_pending_war()
+
         # Get current war
         war_info = await self.get_current_war()
         channel = self.bot.get_channel(WAR_CHANNEL_ID)

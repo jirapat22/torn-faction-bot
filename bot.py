@@ -185,6 +185,7 @@ async def on_ready():
         war_tracker = WarTracker(bot)
         await war_tracker.load_war_history()
         await war_tracker.load_war_member_stats()
+        await war_tracker.load_pending_wars()
 
         # Initialize verification system
         verification_system = VerificationSystem(bot)
