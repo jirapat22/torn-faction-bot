@@ -199,6 +199,147 @@ class VerificationSystem:
 
         return True, f'Successfully verified as **{player_info["name"]}** [{torn_id}]\n\n{status_msg}'
 
+    async def bulksync_members(self, guild, confident_only=False):
+        """
+        Match unverified Discord members to Torn faction members and register them.
+
+        Two match tiers:
+          - exact: nickname carries a "[12345]" Torn ID that's a real faction member
+          - fuzzy: no ID in the name, matched by display-name text alone (can be wrong)
+
+        Args:
+            confident_only: if True, only exact matches are registered; fuzzy matches
+                are returned in 'needs_review' for a human to confirm instead of being
+                silently applied. Used by the unattended daily cron.
+
+        Returns:
+            {'synced', 'already_verified', 'not_matched', 'needs_review'} or None if
+            the Torn API call failed. 'needs_review' is a list of dicts:
+            {discord_id, discord_name, torn_id, torn_name}.
+        """
+        import re
+        from utils.torn_api import fetch_faction_members
+
+        faction_members = await fetch_faction_members()
+        if not faction_members:
+            return None
+
+        torn_lookup = {}
+        name_lookup = {}  # torn_name_lower -> {torn_id, data}
+        for tid, mdata in faction_members.items():
+            torn_lookup[tid] = mdata
+            name_lookup[mdata.get('name', '').lower()] = {'torn_id': tid, 'data': mdata}
+
+        synced = 0
+        already_verified = 0
+        not_matched = []
+        needs_review = []
+
+        for discord_member in guild.members:
+            if discord_member.bot:
+                continue
+
+            discord_id = str(discord_member.id)
+
+            if discord_id in self.verified_users:
+                already_verified += 1
+                continue
+
+            display = discord_member.nick or discord_member.display_name
+            id_match = re.search(r'\[(\d+)\]', display)
+
+            matched_tid = None
+            matched_data = None
+            is_exact = False
+
+            if id_match:
+                potential_tid = id_match.group(1)
+                if potential_tid in torn_lookup:
+                    matched_tid = potential_tid
+                    matched_data = torn_lookup[potential_tid]
+                    is_exact = True
+
+            if not matched_tid:
+                clean_name = re.sub(r'\s*\[\d+\]', '', display).strip().lower()
+                if clean_name in name_lookup:
+                    matched_tid = name_lookup[clean_name]['torn_id']
+                    matched_data = name_lookup[clean_name]['data']
+
+            if not (matched_tid and matched_data):
+                not_matched.append(discord_member.display_name)
+                continue
+
+            # Fuzzy match under confident_only: defer to human review, don't apply
+            if confident_only and not is_exact:
+                needs_review.append({
+                    'discord_id': discord_id,
+                    'discord_name': discord_member.display_name,
+                    'torn_id': matched_tid,
+                    'torn_name': matched_data.get('name', ''),
+                })
+                continue
+
+            self.verified_users[discord_id] = {
+                'torn_id': int(matched_tid),
+                'torn_name': matched_data.get('name', ''),
+                'faction_id': int(TORN_FACTION_ID),
+                'faction_name': '',  # Not available from faction members endpoint
+                'verified_at': datetime.now(timezone.utc).isoformat(),
+                'verified_by': 'bulksync'
+            }
+            if self.inactivity_tracker:
+                self.inactivity_tracker.user_mapping[discord_id] = matched_tid
+            synced += 1
+
+        await self.save_verified_users()
+        if self.inactivity_tracker:
+            await self.inactivity_tracker.save_user_mapping()
+
+        return {
+            'synced': synced,
+            'already_verified': already_verified,
+            'not_matched': not_matched,
+            'needs_review': needs_review,
+        }
+
+    async def fixrole_members(self, guild):
+        """
+        Give the configured verified role to any already-registered member missing it.
+
+        Returns:
+            {'fixed': int, 'already_has_role': int, 'failed': int, 'role': discord.Role}
+            or None if no verified role is configured / it no longer exists.
+        """
+        verified_role_id = self.config.get('verified_role_id')
+        if not verified_role_id:
+            return None
+
+        role = guild.get_role(verified_role_id)
+        if not role:
+            return None
+
+        fixed_count = 0
+        failed_count = 0
+        already_has_role = 0
+
+        for discord_id in self.verified_users:
+            try:
+                member_obj = guild.get_member(int(discord_id))
+                if not member_obj:
+                    continue
+
+                if role in member_obj.roles:
+                    already_has_role += 1
+                    continue
+
+                await member_obj.add_roles(role)
+                fixed_count += 1
+                await asyncio.sleep(1)  # Rate limit: avoid hitting Discord API limits
+            except Exception:
+                failed_count += 1
+
+        return {'fixed': fixed_count, 'already_has_role': already_has_role, 'failed': failed_count, 'role': role}
+
     async def unregister_user(self, discord_id: str, guild=None):
         """Remove a user's verification from all databases"""
         removed = False
@@ -524,124 +665,31 @@ async def setup_verification_commands(bot, verification_system: VerificationSyst
             await interaction.followup.send(embed=embed, ephemeral=True)
 
         elif action == 'fixrole':
-            # Give verified role to all registered users who don't have it
-            verified_role_id = verification_system.config.get('verified_role_id')
-            if not verified_role_id:
+            if not verification_system.config.get('verified_role_id'):
                 await interaction.followup.send('No verified role is configured. Use `/verify setrole` first.', ephemeral=True)
                 return
 
-            role = guild.get_role(verified_role_id)
-            if not role:
+            result = await verification_system.fixrole_members(guild)
+            if result is None:
                 await interaction.followup.send('Verified role not found. It may have been deleted.', ephemeral=True)
                 return
 
-            fixed_count = 0
-            failed_count = 0
-            already_has_role = 0
-
-            for discord_id, data in verification_system.verified_users.items():
-                try:
-                    member_obj = guild.get_member(int(discord_id))
-                    if not member_obj:
-                        continue
-
-                    if role in member_obj.roles:
-                        already_has_role += 1
-                        continue
-
-                    await member_obj.add_roles(role)
-                    fixed_count += 1
-                    await asyncio.sleep(1)  # Rate limit: avoid hitting Discord API limits
-                except Exception:
-                    failed_count += 1
-
             embed = create_embed(
                 title='✅ Role Fix Complete',
-                description=f'**Fixed:** {fixed_count} members given the {role.mention} role\n'
-                           f'**Already had role:** {already_has_role}\n'
-                           f'**Failed:** {failed_count}',
+                description=f"**Fixed:** {result['fixed']} members given the {result['role'].mention} role\n"
+                           f"**Already had role:** {result['already_has_role']}\n"
+                           f"**Failed:** {result['failed']}",
                 color=EMBED_COLOR_SUCCESS
             )
             await interaction.followup.send(embed=embed, ephemeral=True)
 
         elif action == 'bulksync':
-            # Re-verify members by matching Discord nicknames to Torn faction members
-            import re
-            from utils.torn_api import fetch_faction_members
-
-            faction_members = await fetch_faction_members()
-            if not faction_members:
+            result = await verification_system.bulksync_members(guild)
+            if result is None:
                 await interaction.followup.send('Could not fetch faction members from Torn API.', ephemeral=True)
                 return
 
-            # Build lookup: torn_id -> member_data
-            torn_lookup = {}
-            name_lookup = {}  # torn_name_lower -> {torn_id, data}
-            for tid, mdata in faction_members.items():
-                torn_lookup[tid] = mdata
-                name_lookup[mdata.get('name', '').lower()] = {'torn_id': tid, 'data': mdata}
-
-            synced = 0
-            already_verified = 0
-            not_matched = []
-
-            for discord_member in guild.members:
-                if discord_member.bot:
-                    continue
-
-                discord_id = str(discord_member.id)
-
-                # Skip if already verified
-                if discord_id in verification_system.verified_users:
-                    already_verified += 1
-                    continue
-
-                # Try to extract Torn ID from nickname like "Name [12345]"
-                display = discord_member.nick or discord_member.display_name
-                id_match = re.search(r'\[(\d+)\]', display)
-
-                matched_tid = None
-                matched_data = None
-
-                if id_match:
-                    potential_tid = id_match.group(1)
-                    if potential_tid in torn_lookup:
-                        matched_tid = potential_tid
-                        matched_data = torn_lookup[potential_tid]
-
-                # Fallback: try matching by name
-                if not matched_tid:
-                    # Try exact name match against faction members
-                    clean_name = re.sub(r'\s*\[\d+\]', '', display).strip().lower()
-                    if clean_name in name_lookup:
-                        matched_tid = name_lookup[clean_name]['torn_id']
-                        matched_data = name_lookup[clean_name]['data']
-
-                if matched_tid and matched_data:
-                    # Register this member
-                    verification_system.verified_users[discord_id] = {
-                        'torn_id': int(matched_tid),
-                        'torn_name': matched_data.get('name', ''),
-                        'faction_id': int(TORN_FACTION_ID),
-                        'faction_name': '',  # Not available from faction members endpoint
-                        'verified_at': datetime.now(timezone.utc).isoformat(),
-                        'verified_by': 'bulksync'
-                    }
-
-                    # Also save to inactivity tracker
-                    if verification_system.inactivity_tracker:
-                        verification_system.inactivity_tracker.user_mapping[discord_id] = matched_tid
-
-                    synced += 1
-                else:
-                    if not discord_member.bot:
-                        not_matched.append(discord_member.display_name)
-
-            # Save all at once
-            await verification_system.save_verified_users()
-            if verification_system.inactivity_tracker:
-                await verification_system.inactivity_tracker.save_user_mapping()
-
+            not_matched = result['not_matched']
             unmatched_text = ''
             if not_matched:
                 unmatched_text = f'\n\n**Could not match ({len(not_matched)}):**\n'
@@ -652,8 +700,8 @@ async def setup_verification_commands(bot, verification_system: VerificationSyst
             embed = create_embed(
                 title='Bulk Sync Complete',
                 description=(
-                    f'**Newly verified:** {synced}\n'
-                    f'**Already verified:** {already_verified}\n'
+                    f"**Newly verified:** {result['synced']}\n"
+                    f"**Already verified:** {result['already_verified']}\n"
                     f'**Could not match:** {len(not_matched)}'
                     f'{unmatched_text}'
                 ),

@@ -306,6 +306,48 @@ async def daily_inactivity_check():
     try:
         if inactivity_tracker:
             await inactivity_tracker.check_and_alert_inactive()
+
+        # Auto-verify: match unverified members to their Torn account and grant the
+        # verified role, so channel access doesn't depend on someone remembering to
+        # run /verify. Only EXACT matches (nickname carries a valid Torn ID) are
+        # applied automatically; fuzzy name-only matches are posted for a human to
+        # confirm via /verify manual rather than silently granting access.
+        if verification_system:
+            guild = bot.get_guild(GUILD_ID)
+            if guild:
+                sync_result = await verification_system.bulksync_members(guild, confident_only=True)
+                if sync_result:
+                    needs_review = sync_result.get('needs_review', [])
+                    logger.info(f"Daily auto-verify: {sync_result['synced']} exact match(es) applied, "
+                                f"{len(needs_review)} need review, "
+                                f"{len(sync_result['not_matched'])} unmatched")
+
+                    if needs_review:
+                        from config import INACTIVITY_ALERTS_CHANNEL_ID, MANAGEMENT_PING_ROLE_ID, EMBED_COLOR_WARNING
+                        from utils.helpers import create_embed
+                        channel = bot.get_channel(INACTIVITY_ALERTS_CHANNEL_ID)
+                        if channel:
+                            lines = [
+                                f"• {r['discord_name']} → **{r['torn_name']}** [{r['torn_id']}]  "
+                                f"→ `/verify manual member:@{r['discord_name']} torn_id:{r['torn_id']}`"
+                                for r in needs_review
+                            ]
+                            embed = create_embed(
+                                title='🔍 Auto-verify: matches need review',
+                                description=(
+                                    "These members matched a Torn account by **name only** (no ID in "
+                                    "their nickname), so I did not auto-grant access. Confirm each "
+                                    "before verifying:\n\n" + '\n'.join(lines[:20])
+                                ),
+                                color=EMBED_COLOR_WARNING
+                            )
+                            ping = f'<@&{MANAGEMENT_PING_ROLE_ID}>' if MANAGEMENT_PING_ROLE_ID else ''
+                            await channel.send(content=ping or None, embed=embed)
+
+                role_result = await verification_system.fixrole_members(guild)
+                if role_result:
+                    logger.info(f"Daily auto-verify: {role_result['fixed']} role(s) fixed, "
+                                f"{role_result['failed']} failed")
     except Exception as e:
         logger.error(f'Error in daily inactivity check: {e}')
 
