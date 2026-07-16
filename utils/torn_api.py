@@ -378,15 +378,15 @@ async def fetch_faction_crimes():
         for crime in data['crimes']:
             if not isinstance(crime, dict):
                 continue
-            status = crime.get('status', '')
-            completed = status == 'completed'
-            completion_ts = float(crime.get('initiated_at') or 0)
-            # v2 uses 'slots' (or sometimes 'participants')
-            slots = crime.get('slots', crime.get('participants', []))
+            executed_at = crime.get('executed_at')
+            completed = executed_at is not None
+            completion_ts = float(executed_at) if completed else 0.0
+            # v2 uses 'slots', each with a nested 'user' object (or None if unfilled)
+            slots = crime.get('slots', [])
             participants = [
-                str(s['user_id'])
+                str(s['user']['id'])
                 for s in (slots if isinstance(slots, list) else [])
-                if isinstance(s, dict) and s.get('user_id')
+                if isinstance(s, dict) and isinstance(s.get('user'), dict) and s['user'].get('id')
             ]
             normalized.append({
                 'completed': completed,
