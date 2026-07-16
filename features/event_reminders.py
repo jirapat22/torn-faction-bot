@@ -10,8 +10,9 @@ Event routing:
 """
 
 import discord
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, date, timezone, timedelta
 from utils.helpers import load_json, save_json, create_embed
+from utils.torn_api import fetch_user_messages
 from config import (
     EMBED_COLOR_INFO,
     GENERAL_CHANNEL_ID,
@@ -26,23 +27,149 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# Torn's fixed/recurring annual events (not Discord Scheduled Events).
+# (name, month, day) — day=None means "first Friday of month".
+# Source: https://wiki.torn.com/wiki/Current_Events — update by hand if Torn changes dates.
+CALENDAR_EVENTS = [
+    ('Awareness Week', 1, 15),
+    ('Weekend Road Trip', 1, 31),
+    ("Valentine's Day", 2, 13),
+    ('Employee Appreciation Day', 3, None),
+    ("St Patrick's Day", 3, 16),
+    ('420 Day', 4, 19),
+    ('Museum Day', 5, 17),
+    ('World Blood Donor Day', 6, 13),
+    ('World Population Day', 7, 10),
+    ('World Tiger Day', 7, 28),
+    ('International Beer Day', 8, None),
+    ('Tourism Day', 9, 26),
+    ('CaffeineCon {year}', 10, 14),
+    ('Trick or Treat', 10, 25),
+    ('World Diabetes Day', 11, 13),
+    ('Torn Anniversary', 11, 15),
+    ('Black Friday', 11, 29),
+    ('Slash Wednesday', 12, 10),
+    ('Christmas Town', 12, 19),
+]
+
+
 class EventReminderManager:
     """Manages 35-hour advance event reminders"""
 
     def __init__(self, bot):
         self.bot = bot
         self.data_file = 'data/event_reminders.json'
-        self.announced_events = set()  # Event IDs that have been announced
+        self.announced_events = set()  # Discord scheduled event IDs that have been announced
+        self.announced_calendar = set()  # 'calendar:{name}:{year}' keys already announced
+        self.last_newsletter_id = 0  # highest Faction Newsletter message ID already posted
 
     async def load_data(self):
         """Load announced event IDs from JSON"""
-        data = load_json(self.data_file, default={'announced': []})
+        data = load_json(self.data_file, default={'announced': [], 'announced_calendar': [], 'last_newsletter_id': 0})
         self.announced_events = set(data.get('announced', []))
-        logger.info(f'Loaded {len(self.announced_events)} announced event IDs')
+        self.announced_calendar = set(data.get('announced_calendar', []))
+        self.last_newsletter_id = data.get('last_newsletter_id', 0)
+        logger.info(f'Loaded {len(self.announced_events)} announced event IDs, '
+                    f'{len(self.announced_calendar)} announced calendar events, '
+                    f'last newsletter ID {self.last_newsletter_id}')
 
     async def save_data(self):
         """Save announced event IDs to JSON"""
-        save_json(self.data_file, {'announced': list(self.announced_events)})
+        save_json(self.data_file, {
+            'announced': list(self.announced_events),
+            'announced_calendar': list(self.announced_calendar),
+            'last_newsletter_id': self.last_newsletter_id,
+        })
+
+    def _resolve_calendar_date(self, year: int, month: int, day):
+        """day=None resolves to the first Friday of that month/year."""
+        if day is not None:
+            return date(year, month, day)
+        first = date(year, month, 1)
+        return first + timedelta(days=(4 - first.weekday()) % 7)
+
+    def _next_calendar_start(self, month: int, day, now: datetime) -> datetime:
+        """This year's (or next year's, if already passed) noon-TCT start."""
+        d = self._resolve_calendar_date(now.year, month, day)
+        start = datetime(d.year, d.month, d.day, 12, 0, tzinfo=timezone.utc)
+        if start < now - timedelta(hours=48):
+            d = self._resolve_calendar_date(now.year + 1, month, day)
+            start = datetime(d.year, d.month, d.day, 12, 0, tzinfo=timezone.utc)
+        return start
+
+    async def check_calendar_events(self):
+        """Post a 35h advance reminder for Torn's fixed annual calendar events."""
+        now = datetime.now(timezone.utc)
+
+        for name, month, day in CALENDAR_EVENTS:
+            start = self._next_calendar_start(month, day, now)
+            hours_until = (start - now).total_seconds() / 3600
+            key = f'calendar:{name}:{start.year}'
+
+            if key in self.announced_calendar or not (33 <= hours_until <= 37):
+                continue
+
+            display_name = name.format(year=start.year)
+            channel = self.bot.get_channel(GENERAL_CHANNEL_ID)
+            if channel:
+                embed = create_embed(
+                    title='📅 Torn Event Reminder',
+                    description=(
+                        f"**{display_name}** starts <t:{int(start.timestamp())}:R> "
+                        f"(<t:{int(start.timestamp())}:F>).\n"
+                        f"_Exact start may shift a few hours — Torn staggers some events per-player._"
+                    ),
+                    color=EMBED_COLOR_INFO
+                )
+                await channel.send(embed=embed)
+                logger.info(f'Calendar event reminder posted for "{display_name}"')
+            else:
+                logger.warning(f'Calendar event reminder: could not find channel (ID: {GENERAL_CHANNEL_ID})')
+
+            self.announced_calendar.add(key)
+            await self.save_data()
+
+    async def check_newsletters(self):
+        """
+        Surface new in-game 'Faction Newsletter' mail to Discord. Torn's API
+        only exposes title/sender/timestamp, not the body — members still
+        need to check Torn mail for the actual details (dates, etc.).
+        """
+        messages = await fetch_user_messages()
+        newsletter_ids = [int(mid) for mid, m in messages.items() if m.get('type') == 'Faction newsletter']
+        if not newsletter_ids:
+            return
+
+        if self.last_newsletter_id == 0:
+            # First run — baseline to newest so we don't dump months of history
+            self.last_newsletter_id = max(newsletter_ids)
+            await self.save_data()
+            return
+
+        new_ids = sorted(mid for mid in newsletter_ids if mid > self.last_newsletter_id)
+        if not new_ids:
+            return
+
+        for mid in new_ids:
+            m = messages[str(mid)]
+            title = (m.get('title') or 'Faction Newsletter').strip()
+            sender = m.get('name', 'Unknown')
+            channel = self.bot.get_channel(self._get_channel_for_event(title))
+            if channel:
+                embed = create_embed(
+                    title='📰 Faction Newsletter',
+                    description=(
+                        f"**{sender}** sent: **{title}**\n"
+                        f"Sent <t:{m['timestamp']}:R> — check your Torn mail for full details.\n\n"
+                        f"If this schedules something, use `/createevent` so Discord reminds everyone."
+                    ),
+                    color=EMBED_COLOR_INFO
+                )
+                await channel.send(embed=embed)
+                logger.info(f'Newsletter nudge posted: "{title}"')
+
+        self.last_newsletter_id = max(new_ids)
+        await self.save_data()
 
     def _get_channel_for_event(self, event_name: str) -> int:
         """

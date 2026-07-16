@@ -359,6 +359,20 @@ async def fetch_player_data(torn_id, selections='profile', use_personal_key=True
     return data
 
 
+async def fetch_user_messages():
+    """
+    Fetch the API key owner's last 100 personal messages (includes
+    'Faction newsletter' type entries — title/sender/timestamp only, no body).
+
+    Returns:
+        Dict of {message_id: {timestamp, ID, name, type, title, seen, read}}
+    """
+    data = await _make_api_request('user', {'selections': 'messages'})
+    if not data:
+        return {}
+    return data.get('messages', {})
+
+
 async def fetch_faction_crimes():
     """
     Fetch and normalize faction organized crimes.

@@ -400,6 +400,8 @@ async def event_reminder_check():
     try:
         if event_reminder_manager:
             await event_reminder_manager.check_and_announce_events()
+            await event_reminder_manager.check_calendar_events()
+            await event_reminder_manager.check_newsletters()
     except Exception as e:
         logger.error(f'Error in event reminder check: {e}')
 
