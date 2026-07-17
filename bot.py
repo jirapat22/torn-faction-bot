@@ -196,10 +196,11 @@ async def on_ready():
         await role_sync_manager.load_config()
         await setup_rolesync_commands(bot, role_sync_manager)
 
-        # Initialize enemy watchlist
+        # Initialize enemy watchlist — builds the /enemy command group
+        # (stakeout attaches to it below; added to the tree once, after)
         enemy_watchlist = EnemyWatchlist(bot)
         await enemy_watchlist.load_watchlist()
-        await setup_enemy_commands(bot, enemy_watchlist)
+        enemy_group = await setup_enemy_commands(bot, enemy_watchlist)
 
         # Link enemy watchlist to war tracker for auto-clear
         war_tracker.enemy_watchlist = enemy_watchlist
@@ -208,10 +209,14 @@ async def on_ready():
         event_reminder_manager = EventReminderManager(bot)
         await event_reminder_manager.load_data()
 
-        # Initialize stakeout manager (enemy behavior tracking)
+        # Initialize stakeout manager (enemy behavior tracking) —
+        # nests as /enemy stakeout under the group built above
         stakeout_manager = StakeoutManager(bot)
         await stakeout_manager.load_data()
-        await setup_stakeout_commands(bot, stakeout_manager)
+        await setup_stakeout_commands(bot, stakeout_manager, enemy_group)
+
+        # Register the fully-assembled /enemy group (watchlist + stakeout)
+        bot.tree.add_command(enemy_group)
 
         # Initialize alliance manager (ally faction war tracking)
         alliance_manager = AllianceManager(bot)

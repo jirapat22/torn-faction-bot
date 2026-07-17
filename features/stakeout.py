@@ -10,11 +10,11 @@ Features:
 - Estimate timezone based on sleep patterns
 - Track multiple targets simultaneously
 
-Commands:
-- /stakeout add <torn_id> [hours] - Start watching (default 24h, max 48h)
-- /stakeout list - Show active stakeouts
-- /stakeout report <torn_id> - Show behavior analysis
-- /stakeout stop <torn_id> - Stop watching
+Commands (nested under /enemy):
+- /enemy stakeout add <torn_id> [hours] - Start watching (default 24h, max 48h)
+- /enemy stakeout list - Show active stakeouts
+- /enemy stakeout report <torn_id> - Show behavior analysis
+- /enemy stakeout stop <torn_id> - Stop watching
 """
 
 import discord
@@ -875,10 +875,18 @@ class StakeoutManager:
         return '\n'.join(lines)
 
 
-async def setup_stakeout_commands(bot, manager: StakeoutManager):
-    """Register stakeout slash commands"""
+async def setup_stakeout_commands(bot, manager: StakeoutManager, enemy_group):
+    """Register stakeout commands as an /enemy stakeout subgroup.
 
-    stakeout_group = app_commands.Group(name='stakeout', description='Track enemy player behavior')
+    Attaches to the passed enemy_group (from setup_enemy_commands); bot.py
+    adds enemy_group to the tree once, after this runs.
+    """
+
+    stakeout_group = app_commands.Group(
+        name='stakeout',
+        description='Track enemy player behavior',
+        parent=enemy_group
+    )
 
     @stakeout_group.command(name='add', description='[Management] Start watching a player')
     @app_commands.describe(
@@ -929,7 +937,7 @@ async def setup_stakeout_commands(bot, manager: StakeoutManager):
             )
             embed.add_field(
                 name='Next Steps',
-                value='Use `/stakeout report` after a few hours to see patterns.',
+                value='Use `/enemy stakeout report` after a few hours to see patterns.',
                 inline=False
             )
         else:
@@ -959,7 +967,7 @@ async def setup_stakeout_commands(bot, manager: StakeoutManager):
         if success:
             embed = create_embed(
                 title='Stakeout Stopped',
-                description=message + '\n\nHistory preserved - you can still run `/stakeout report` to see collected data.',
+                description=message + '\n\nHistory preserved - you can still run `/enemy stakeout report` to see collected data.',
                 color=EMBED_COLOR_SUCCESS
             )
         else:
@@ -1031,7 +1039,7 @@ async def setup_stakeout_commands(bot, manager: StakeoutManager):
         if result.get('status') == 'stopped':
             embed = create_embed(
                 title='Stakeout Stopped',
-                description=f'Player {torn_id} is no longer being watched.\nUse `/stakeout report {torn_id}` to view collected data.',
+                description=f'Player {torn_id} is no longer being watched.\nUse `/enemy stakeout report {torn_id}` to view collected data.',
                 color=EMBED_COLOR_INFO
             )
             await interaction.followup.send(embed=embed, ephemeral=True)
@@ -1094,7 +1102,7 @@ async def setup_stakeout_commands(bot, manager: StakeoutManager):
         if result.get('mins_since_action') is not None:
             embed.add_field(name='Last Action', value=f'{result["mins_since_action"]} mins ago', inline=True)
 
-        embed.set_footer(text='Use /stakeout report for full analysis')
+        embed.set_footer(text='Use /enemy stakeout report for full analysis')
         await interaction.followup.send(embed=embed, ephemeral=True)
 
     @stakeout_group.command(name='clear', description='[Management] Clear all stakeouts (use to fix corrupted data)')
@@ -1129,7 +1137,7 @@ async def setup_stakeout_commands(bot, manager: StakeoutManager):
         if not stakeouts:
             embed = create_embed(
                 title='No Active Stakeouts',
-                description='No players are currently being watched.\n\nUse `/stakeout add <torn_id>` to start.',
+                description='No players are currently being watched.\n\nUse `/enemy stakeout add <torn_id>` to start.',
                 color=EMBED_COLOR_INFO
             )
             await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -1156,7 +1164,7 @@ async def setup_stakeout_commands(bot, manager: StakeoutManager):
             description=description,
             color=EMBED_COLOR_INFO
         )
-        embed.set_footer(text='Use /stakeout report <torn_id> to see behavior analysis')
+        embed.set_footer(text='Use /enemy stakeout report <torn_id> to see behavior analysis')
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @stakeout_group.command(name='report', description='View behavior analysis for a watched player')
@@ -1170,7 +1178,7 @@ async def setup_stakeout_commands(bot, manager: StakeoutManager):
         if not report:
             embed = create_embed(
                 title='No Data Available',
-                description=f'No stakeout data found for player {torn_id}.\n\nUse `/stakeout add {torn_id}` to start watching.',
+                description=f'No stakeout data found for player {torn_id}.\n\nUse `/enemy stakeout add {torn_id}` to start watching.',
                 color=EMBED_COLOR_WARNING
             )
             await interaction.followup.send(embed=embed)
@@ -1330,6 +1338,5 @@ async def setup_stakeout_commands(bot, manager: StakeoutManager):
 
         await interaction.followup.send(embed=embed, ephemeral=True)
 
-    # Add group to bot
-    bot.tree.add_command(stakeout_group)
-    logger.info('Stakeout commands registered (/stakeout add, stop, extend, status, list, report, clear, test)')
+    # Attached to enemy_group via parent=; bot.py adds the tree once.
+    logger.info('Stakeout commands registered (/enemy stakeout add, stop, extend, status, list, report, clear, test)')

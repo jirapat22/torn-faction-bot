@@ -194,8 +194,8 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
                     'name': 'Intel (Management)',
                     'value': (
                         '`/faction compare|stats <id>` - Compare / analyse a faction\n'
-                        '`/enemy` - Enemy watchlist\n'
-                        '`/stakeout` - Track enemy activity\n'
+                        '`/enemy watchlist` - War enemy watchlist\n'
+                        '`/enemy stakeout` - Track enemy activity / behavior\n'
                         '`/alliance` - Ally faction war tracking'
                     ),
                     'inline': False,

@@ -2,11 +2,11 @@
 Enemy Watchlist Module
 Track enemy players during war - monitor their online/offline status
 
-Features:
-- /enemy add <torn_id> <name> - Add enemy to watchlist
-- /enemy remove <torn_id> - Remove enemy from watchlist
-- /enemy list - Show all tracked enemies with current status
-- /enemy clear - Clear all enemies
+Features (commands under /enemy watchlist action:...):
+- action:add (torn_id, name) - Add enemy to watchlist
+- action:remove (torn_id) - Remove enemy from watchlist
+- action:list - Show all tracked enemies with current status
+- action:clear - Clear all enemies
 - Auto-checks every 15 minutes during active war
 - Posts status changes to war channel
 - Auto-clears when war ends
@@ -281,7 +281,7 @@ class EnemyWatchlist:
         if not self.watchlist:
             return create_embed(
                 title='Enemy Watchlist',
-                description='No enemies are being tracked.\n\nUse `/enemy add <torn_id> <name>` to add enemies.',
+                description='No enemies are being tracked.\n\nUse `/enemy watchlist action:add` to add enemies.',
                 color=EMBED_COLOR_INFO
             )
 
@@ -344,11 +344,20 @@ class EnemyWatchlist:
 
 
 async def setup_enemy_commands(bot, enemy_watchlist: EnemyWatchlist):
-    """Set up enemy watchlist slash commands"""
+    """Set up the /enemy command group (watchlist + nested stakeout).
 
-    @bot.tree.command(
+    Returns the group so setup_stakeout_commands can attach its subgroup
+    before bot.py adds the whole tree with a single add_command().
+    """
+
+    enemy_group = app_commands.Group(
         name='enemy',
-        description='Manage enemy watchlist for war'
+        description='Enemy watchlist and behavior tracking'
+    )
+
+    @enemy_group.command(
+        name='watchlist',
+        description='Manage the war enemy watchlist'
     )
     @app_commands.describe(
         action='Action to perform',
@@ -454,4 +463,5 @@ async def setup_enemy_commands(bot, enemy_watchlist: EnemyWatchlist):
             )
             await interaction.followup.send(embed=embed, ephemeral=True)
 
-    logger.info('Enemy watchlist commands registered (/enemy)')
+    logger.info('Enemy commands registered (/enemy watchlist)')
+    return enemy_group
