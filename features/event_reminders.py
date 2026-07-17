@@ -19,6 +19,7 @@ from config import (
     CHAINING_CHANNEL_ID,
     WAR_CHANNEL_ID,
     ANNOUNCEMENTS_CHANNEL_ID,
+    EVENT_POSTING_CHANNEL_ID,
     GUILD_ID
 )
 
@@ -154,7 +155,7 @@ class EventReminderManager:
             m = messages[str(mid)]
             title = (m.get('title') or 'Faction Newsletter').strip()
             sender = m.get('name', 'Unknown')
-            channel = self.bot.get_channel(self._get_channel_for_event(title))
+            channel = self.bot.get_channel(EVENT_POSTING_CHANNEL_ID)
             if channel:
                 embed = create_embed(
                     title='📰 Faction Newsletter',
