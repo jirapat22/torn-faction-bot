@@ -23,7 +23,6 @@ from features.wars import WarTracker
 from features.verification import VerificationSystem, setup_verification_commands
 from features.roles import RoleSyncManager, setup_rolesync_commands
 from features.enemies import EnemyWatchlist, setup_enemy_commands
-from features.availability import AvailabilityManager, setup_availability_commands, restore_availability_views
 from features.event_reminders import EventReminderManager
 from features.stakeout import StakeoutManager, setup_stakeout_commands
 from features.alliance import AllianceManager, setup_alliance_commands
@@ -79,7 +78,6 @@ war_tracker = None
 verification_system = None
 role_sync_manager = None
 enemy_watchlist = None
-availability_manager = None
 event_reminder_manager = None
 stakeout_manager = None
 alliance_manager = None
@@ -113,7 +111,7 @@ async def _start_healthcheck_server():
         loops = [
             daily_inactivity_check, chain_update_check, war_update_check,
             role_sync_check, enemy_status_check, event_reminder_check,
-            stakeout_check, alliance_war_check, poll_end_check,
+            stakeout_check, alliance_war_check,
         ]
         all_running = bot.is_ready() and all(loop.is_running() for loop in loops)
         body = {
@@ -139,7 +137,7 @@ async def _start_healthcheck_server():
 async def on_ready():
     """Called when the bot successfully connects to Discord"""
     global inactivity_tracker, chain_tracker, war_tracker, verification_system
-    global role_sync_manager, enemy_watchlist, availability_manager
+    global role_sync_manager, enemy_watchlist
     global event_reminder_manager, stakeout_manager, alliance_manager, _initialized
 
     try:
@@ -205,13 +203,6 @@ async def on_ready():
 
         # Link enemy watchlist to war tracker for auto-clear
         war_tracker.enemy_watchlist = enemy_watchlist
-
-        # Initialize availability polling system
-        from config import VERIFIED_ROLE_NAME
-        availability_manager = AvailabilityManager(bot)
-        await availability_manager.load_data()
-        await setup_availability_commands(bot, availability_manager, VERIFIED_ROLE_NAME)
-        await restore_availability_views(bot, availability_manager, VERIFIED_ROLE_NAME)
 
         # Initialize event reminder manager (35-hour advance reminders)
         event_reminder_manager = EventReminderManager(bot)
@@ -281,9 +272,6 @@ async def on_ready():
 
         if not alliance_war_check.is_running():
             alliance_war_check.start()
-
-        if not poll_end_check.is_running():
-            poll_end_check.start()
 
         if not loop_watchdog.is_running():
             loop_watchdog.start()
@@ -489,23 +477,6 @@ async def before_alliance_war_check():
     logger.info('Alliance war checker started (checks every 5 minutes)')
 
 
-@tasks.loop(minutes=1)
-async def poll_end_check():
-    """Background task to check if any availability polls have ended"""
-    try:
-        if availability_manager:
-            await availability_manager.check_poll_endings()
-    except Exception as e:
-        logger.error(f'Error in poll end check: {e}')
-
-
-@poll_end_check.before_loop
-async def before_poll_end_check():
-    """Wait until bot is ready before starting poll end check"""
-    await bot.wait_until_ready()
-    logger.info('Poll end checker started (checks every minute)')
-
-
 @tasks.loop(minutes=5)
 async def loop_watchdog():
     """Restart any background task loop that has stopped unexpectedly."""
@@ -518,7 +489,6 @@ async def loop_watchdog():
         'event_reminder_check': event_reminder_check,
         'stakeout_check': stakeout_check,
         'alliance_war_check': alliance_war_check,
-        'poll_end_check': poll_end_check,
     }
     for name, loop in loops.items():
         if not loop.is_running():
