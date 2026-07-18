@@ -18,6 +18,7 @@ from config import (
     HAPPY_JUMP_CHANNEL_ID,
     CHAINING_CHANNEL_ID,
     WAR_CHANNEL_ID,
+    GENERAL_CHANNEL_ID,
     ANNOUNCEMENTS_CHANNEL_ID,
     EVENT_POSTING_CHANNEL_ID,
 )
@@ -52,7 +53,8 @@ def _announce_channel_id(event_name: str) -> int:
     n = event_name.lower()
     fallback = EVENT_POSTING_CHANNEL_ID or ANNOUNCEMENTS_CHANNEL_ID
     if 'happy' in n or 'jump' in n:
-        return HAPPY_JUMP_CHANNEL_ID or fallback
+        # Happy jumps live in punk-plaza (GENERAL); dedicated channel wins if set
+        return HAPPY_JUMP_CHANNEL_ID or GENERAL_CHANNEL_ID or fallback
     if 'chain' in n:
         return CHAINING_CHANNEL_ID or fallback
     if 'war' in n:
