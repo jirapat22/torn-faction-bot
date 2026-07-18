@@ -159,6 +159,11 @@ async def on_ready():
         # Ensure data directories exist
         ensure_data_directories()
 
+        # Register persistent views so their buttons survive restarts
+        # (the newsletter nudge's "Create Event" button)
+        from features.event_ui import CreateEventPromptView
+        bot.add_view(CreateEventPromptView())
+
         # Verify Torn API key
         logger.info('Verifying Torn API key...')
         api_valid = await verify_api_key()

@@ -13,6 +13,7 @@ import discord
 from datetime import datetime, date, timezone, timedelta
 from utils.helpers import load_json, save_json, create_embed
 from utils.torn_api import fetch_user_messages
+from features.event_ui import CreateEventPromptView
 from config import (
     EMBED_COLOR_INFO,
     GENERAL_CHANNEL_ID,
@@ -162,11 +163,12 @@ class EventReminderManager:
                     description=(
                         f"**{sender}** sent: **{title}**\n"
                         f"Sent <t:{m['timestamp']}:R> — check your Torn mail for full details.\n\n"
-                        f"If this schedules something, use `/createevent` so Discord reminds everyone."
+                        f"If this schedules something, hit **Create Event** below "
+                        f"(or use `/createevent`) so Discord reminds everyone."
                     ),
                     color=EMBED_COLOR_INFO
                 )
-                await channel.send(embed=embed)
+                await channel.send(embed=embed, view=CreateEventPromptView())
                 logger.info(f'Newsletter nudge posted: "{title}"')
 
         self.last_newsletter_id = max(new_ids)

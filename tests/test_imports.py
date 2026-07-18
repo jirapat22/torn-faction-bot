@@ -31,6 +31,7 @@ MODULES = [
     'features.chains',
     'features.enemies',
     'features.event_reminders',
+    'features.event_ui',
     'features.faction',
     'features.inactivity',
     'features.roles',
