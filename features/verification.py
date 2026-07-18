@@ -199,23 +199,83 @@ class VerificationSystem:
 
         return True, f'Successfully verified as **{player_info["name"]}** [{torn_id}]\n\n{status_msg}'
 
-    async def bulksync_members(self, guild, confident_only=False):
+    async def autoverify_linked_members(self, guild):
         """
-        Match unverified Discord members to Torn faction members and register them.
+        Verify faction members using Torn's official Torn<->Discord account link.
 
-        Two match tiers:
-          - exact: nickname carries a "[12345]" Torn ID that's a real faction member
-          - fuzzy: no ID in the name, matched by display-name text alone (can be wrong)
+        The player establishes that link through Torn itself, so it is proof of
+        ownership — unlike a Discord nickname, which the user sets themselves and
+        can therefore claim any Torn ID. Only this authoritative source is allowed
+        to verify anyone unattended.
 
-        Args:
-            confident_only: if True, only exact matches are registered; fuzzy matches
-                are returned in 'needs_review' for a human to confirm instead of being
-                silently applied. Used by the unattended daily cron.
+        Skips members already verified (no API call), members with no Torn link,
+        and linked members who aren't in this Discord server.
 
         Returns:
-            {'synced', 'already_verified', 'not_matched', 'needs_review'} or None if
-            the Torn API call failed. 'needs_review' is a list of dicts:
-            {discord_id, discord_name, torn_id, torn_name}.
+            {'verified', 'checked', 'unlinked'} or None if the roster fetch failed.
+        """
+        from utils.torn_api import fetch_faction_members, fetch_user_discord
+
+        faction_members = await fetch_faction_members()
+        if not faction_members:
+            return None
+
+        # Torn IDs already verified — skip them entirely (saves an API call each)
+        known_tids = {str(d.get('torn_id')) for d in self.verified_users.values()}
+
+        verified = 0
+        checked = 0
+        unlinked = 0
+
+        for tid, mdata in faction_members.items():
+            tid = str(tid)
+            if tid in known_tids:
+                continue
+
+            checked += 1
+            discord_id = await fetch_user_discord(tid)
+
+            if not discord_id:
+                unlinked += 1
+                continue
+            if discord_id in self.verified_users:
+                continue
+            if not discord_id.isdigit():
+                continue
+
+            member = guild.get_member(int(discord_id))
+            if not member:
+                continue  # linked to a Discord account that isn't in this server
+
+            self.verified_users[discord_id] = {
+                'torn_id': int(tid),
+                'torn_name': mdata.get('name', ''),
+                'faction_id': int(TORN_FACTION_ID),
+                'faction_name': '',
+                'verified_at': datetime.now(timezone.utc).isoformat(),
+                'verified_by': 'torn-discord-link'
+            }
+            if self.inactivity_tracker:
+                self.inactivity_tracker.user_mapping[discord_id] = tid
+            verified += 1
+
+        if verified:
+            await self.save_verified_users()
+            if self.inactivity_tracker:
+                await self.inactivity_tracker.save_user_mapping()
+
+        return {'verified': verified, 'checked': checked, 'unlinked': unlinked}
+
+    async def bulksync_members(self, guild):
+        """
+        Match unverified Discord members to faction members by nickname/display name.
+
+        NOT identity proof — a nickname is user-controlled. Manual, human-reviewed
+        use only (/verify bulksync); never call this from an unattended job.
+
+        Returns:
+            {'synced', 'already_verified', 'not_matched'} or None if the Torn API
+            call failed.
         """
         import re
         from utils.torn_api import fetch_faction_members
@@ -233,7 +293,6 @@ class VerificationSystem:
         synced = 0
         already_verified = 0
         not_matched = []
-        needs_review = []
 
         for discord_member in guild.members:
             if discord_member.bot:
@@ -250,14 +309,12 @@ class VerificationSystem:
 
             matched_tid = None
             matched_data = None
-            is_exact = False
 
             if id_match:
                 potential_tid = id_match.group(1)
                 if potential_tid in torn_lookup:
                     matched_tid = potential_tid
                     matched_data = torn_lookup[potential_tid]
-                    is_exact = True
 
             if not matched_tid:
                 clean_name = re.sub(r'\s*\[\d+\]', '', display).strip().lower()
@@ -267,16 +324,6 @@ class VerificationSystem:
 
             if not (matched_tid and matched_data):
                 not_matched.append(discord_member.display_name)
-                continue
-
-            # Fuzzy match under confident_only: defer to human review, don't apply
-            if confident_only and not is_exact:
-                needs_review.append({
-                    'discord_id': discord_id,
-                    'discord_name': discord_member.display_name,
-                    'torn_id': matched_tid,
-                    'torn_name': matched_data.get('name', ''),
-                })
                 continue
 
             self.verified_users[discord_id] = {
@@ -299,7 +346,6 @@ class VerificationSystem:
             'synced': synced,
             'already_verified': already_verified,
             'not_matched': not_matched,
-            'needs_review': needs_review,
         }
 
     async def fixrole_members(self, guild):

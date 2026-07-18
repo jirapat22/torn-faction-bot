@@ -359,6 +359,22 @@ async def fetch_player_data(torn_id, selections='profile', use_personal_key=True
     return data
 
 
+async def fetch_user_discord(torn_id):
+    """
+    Fetch Torn's official Torn<->Discord account link for a player.
+
+    Authoritative: the player establishes this link through Torn itself, so
+    unlike a self-set Discord nickname it cannot be spoofed.
+
+    Returns:
+        Discord user ID as a string, or '' if the player hasn't linked one.
+    """
+    data = await _make_api_request(f'user/{torn_id}', {'selections': 'discord'})
+    if not data:
+        return ''
+    return str((data.get('discord') or {}).get('discordID') or '')
+
+
 async def fetch_user_messages():
     """
     Fetch the API key owner's last 100 personal messages (includes
