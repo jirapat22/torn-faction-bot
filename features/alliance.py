@@ -349,6 +349,14 @@ class AllianceManager:
         # War is active (started but not ended)
         # end_time can be None or 0 for ongoing wars
         elif start_time <= now and (end_time is None or end_time == 0 or now < end_time):
+            existing = self.active_wars.get(faction_id)
+            if existing and existing.get('war_id') != war_id:
+                # A new war started before the previous one's end was ever
+                # detected (no gap between wars, or we missed the exact tick
+                # it ended on) - announce the old one's end now, best-effort
+                # with no final score, before starting to track the new war.
+                await self._handle_war_ended(channel, faction_id, ally_name)
+
             if war_id not in self.announced_wars:
                 await self._announce_war_started(channel, ally_name, enemy_name)
                 self.announced_wars.add(war_id)

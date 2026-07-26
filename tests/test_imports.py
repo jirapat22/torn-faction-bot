@@ -410,6 +410,36 @@ def test_chain_milestone_picks_highest_on_jump():
     assert tracker.last_chain_count == 120
 
 
+def test_alliance_announces_old_war_end_on_new_war():
+    """
+    Regression test: if an ally faction's war ends and a NEW war starts
+    before the tracker's next check (no detected gap), the OLD war's end
+    (win/loss) must still get announced - not silently overwritten by
+    active_wars[faction_id] getting replaced with the new war's data.
+    """
+    import asyncio
+    from features.alliance import AllianceManager
+
+    mgr = AllianceManager(bot=None)
+    mgr.active_wars = {'100': {'war_id': 'old_war', 'enemy_name': 'OldEnemy', 'enemy_id': '1',
+                               'start_time': 0, 'factions': []}}
+    mgr.announced_wars = set()
+
+    posted = []
+
+    class FakeChannel:
+        async def send(self, content=None, embed=None):
+            posted.append(embed.title if embed else content)
+
+    new_war_item = {'start': 100, 'end': 0, 'factions': [{'id': '100'}, {'id': '2', 'name': 'NewEnemy'}]}
+
+    asyncio.run(mgr._process_war_v2(FakeChannel(), '100', 'AllyName', 'new_war', new_war_item))
+
+    assert len(posted) == 2, 'must post both the old war ending and the new war starting'
+    assert 'Ended' in posted[0]
+    assert mgr.active_wars['100']['war_id'] == 'new_war'
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -423,4 +453,5 @@ if __name__ == '__main__':
     test_register_rejects_torn_discord_mismatch()
     test_register_allows_unlinked_torn_id()
     test_chain_milestone_picks_highest_on_jump()
+    test_alliance_announces_old_war_end_on_new_war()
     print('All smoke tests passed.')
