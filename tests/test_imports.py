@@ -148,10 +148,62 @@ def test_flytrack_logic():
     assert '7' not in mgr.tiers
 
 
+def test_flytrack_resolve_leg():
+    """
+    _resolve_leg is the actual fix for the "None destination" bug: it must use
+    Torn's real travel selection (structured destination + time_left) instead
+    of parsing status text, which is what silently failed in production.
+    """
+    import asyncio
+    from features.flytrack import FlyTracker, PHASE_OUT, PHASE_RETURNING
+
+    mgr = FlyTracker(bot=None)
+    now_ts = 1_000_000
+
+    # Outbound: real travel data gives exact destination + time_left directly
+    async def fake_travel_outbound(torn_id):
+        return {'destination': 'Mexico', 'time_left': 600}
+    mgr._fetch_travel = fake_travel_outbound
+
+    resolved = asyncio.run(mgr._resolve_leg('1', {'state': 'Traveling'}, None, now_ts))
+    assert resolved['phase'] == PHASE_OUT
+    assert resolved['dest'] == 'Mexico'
+    assert resolved['eta'] == now_ts + 600
+    assert resolved['note'] == ''  # exact data needs no "(estimate)" caveat
+
+    # Returning: travel.destination says "Torn" (not the origin) — origin must
+    # come from the previously-known abroad location, not from the API call
+    async def fake_travel_returning(torn_id):
+        return {'destination': 'Torn', 'time_left': 300}
+    mgr._fetch_travel = fake_travel_returning
+
+    resolved = asyncio.run(mgr._resolve_leg(
+        '2', {'state': 'Traveling'}, None, now_ts, prev={'dest': 'Switzerland'}
+    ))
+    assert resolved['phase'] == PHASE_RETURNING
+    assert resolved['dest'] == 'Switzerland'
+    assert resolved['eta'] == now_ts + 300
+
+    # Travel selection unusable (e.g. Theater privacy, API hiccup) — must fall
+    # back to the text/duration-table estimate rather than losing the ETA
+    async def fake_travel_empty(torn_id):
+        return None
+    mgr._fetch_travel = fake_travel_empty
+
+    resolved = asyncio.run(mgr._resolve_leg(
+        '3', {'state': 'Traveling', 'description': 'Traveling to Mexico'}, 'Mexico', now_ts
+    ))
+    assert resolved['phase'] == PHASE_OUT
+    assert resolved['dest'] == 'Mexico'
+    assert resolved['eta'] is not None
+    assert 'estimate' in resolved['note']
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
     test_torn_api_helpers()
     test_stakeout_algorithm()
     test_flytrack_logic()
+    test_flytrack_resolve_leg()
     print('All smoke tests passed.')

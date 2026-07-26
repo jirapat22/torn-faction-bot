@@ -474,9 +474,9 @@ async def before_alliance_war_check():
     logger.info('Alliance war checker started (checks every 5 minutes)')
 
 
-@tasks.loop(seconds=30)
+@tasks.loop(seconds=60)
 async def fly_check():
-    """Background task that runs every 30 seconds to track enemy flights during war"""
+    """Background task that runs every 60 seconds to track enemy flights during war"""
     try:
         if fly_tracker and fly_tracker.enabled:
             await fly_tracker.check_flights()
@@ -488,7 +488,7 @@ async def fly_check():
 async def before_fly_check():
     """Wait until bot is ready before starting fly check"""
     await bot.wait_until_ready()
-    logger.info('Fly checker started (checks every 30 seconds while fly tracking is on)')
+    logger.info('Fly checker started (checks every 60 seconds while fly tracking is on)')
 
 
 @tasks.loop(minutes=5)

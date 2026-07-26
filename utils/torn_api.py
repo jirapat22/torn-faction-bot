@@ -343,7 +343,8 @@ async def fetch_any_faction_data(faction_id, selections='basic', use_personal_ke
     return data
 
 
-async def fetch_player_data(torn_id, selections='profile', use_personal_key=True):
+async def fetch_player_data(torn_id, selections='profile', use_personal_key=True,
+                            cache_seconds=None):
     """
     Fetch player data for any Torn player (for verification, stakeout, etc.)
 
@@ -351,6 +352,7 @@ async def fetch_player_data(torn_id, selections='profile', use_personal_key=True
         torn_id: Torn user ID
         selections: API selections (default 'profile', can use 'profile,travel' etc.)
         use_personal_key: If True, use personal API key for user lookups (default True)
+        cache_seconds: Override cache TTL (0 = always fetch fresh)
 
     Returns:
         Dict with player data or None if error
@@ -359,7 +361,8 @@ async def fetch_player_data(torn_id, selections='profile', use_personal_key=True
     data = await _make_api_request(
         f'user/{torn_id}',
         {'selections': selections},
-        use_personal_key=use_personal_key
+        use_personal_key=use_personal_key,
+        cache_seconds=cache_seconds
     )
 
     return data
