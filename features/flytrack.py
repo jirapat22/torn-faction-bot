@@ -114,16 +114,6 @@ def normalize_dest(raw: str) -> Optional[str]:
     return DEST_ALIASES.get(cleaned.lower(), cleaned)
 
 
-def _coarse_category(phase: str) -> str:
-    """Collapse a fine-grained phase to the roster-visible category
-    (Torn's `state` field can't distinguish outbound vs returning)."""
-    if phase in (PHASE_OUT, PHASE_RETURNING):
-        return 'traveling'
-    if phase == PHASE_ABROAD:
-        return 'abroad'
-    return 'home'
-
-
 def parse_phase(status: Dict, torn_id: str = '', name: str = '') -> Tuple[str, Optional[str]]:
     """
     Classify phase/destination from status text. Accepts both American and
@@ -379,11 +369,14 @@ class FlyTracker:
 
             if phase in (PHASE_OUT, PHASE_RETURNING):
                 # Reuse the already leg_start-anchored eta from check_flights()
-                # whenever it's for this same leg — recomputing from "now" on
-                # every peek would push the ETA later each time it's checked,
-                # since it'd treat "now" as a fresh departure instant.
+                # whenever it's for this exact same leg — recomputing from "now"
+                # on every peek would push the ETA later each time it's checked,
+                # since it'd treat "now" as a fresh departure instant. Compare
+                # the exact phase (not a coarse OUT/RETURNING-collapsed category)
+                # so a leg check_flights() hasn't caught up to yet still gets a
+                # fresh estimate instead of stale data from the previous leg.
                 prev = self.players.get(tid)
-                if prev and _coarse_category(prev.get('phase')) == 'traveling' and prev.get('eta') is not None:
+                if prev and prev.get('phase') == phase and prev.get('eta') is not None:
                     r_phase, r_dest, r_eta = prev['phase'], prev['dest'], prev['eta']
                 else:
                     resolved = self._estimate_leg(tid, phase, dest, now_ts, prev)
@@ -472,10 +465,13 @@ class FlyTracker:
                 continue
 
             prev_phase = prev.get('phase')
-            prev_category = _coarse_category(prev_phase)
-            new_category = _coarse_category(text_phase)
 
-            if new_category == prev_category:
+            # Compare the exact fine-grained phase, not a coarse OUT/RETURNING-
+            # collapsed category — otherwise a fast turnaround (land abroad and
+            # immediately re-depart within one poll tick) never registers as a
+            # change, silently swallowing the return alert and leaving stale
+            # outbound data in self.players.
+            if text_phase == prev_phase:
                 if prev.get('name') != name:
                     prev['name'] = name
                     changed = True
@@ -484,7 +480,7 @@ class FlyTracker:
             # --- Transition handling ---
             changed = True
 
-            if new_category == 'traveling':
+            if text_phase in (PHASE_OUT, PHASE_RETURNING):
                 resolved = self._estimate_leg(tid, text_phase, text_dest, now_ts, prev)
 
                 if resolved['phase'] == PHASE_OUT:
@@ -497,7 +493,7 @@ class FlyTracker:
                     'eta': resolved['eta'], 'leg_start': now_ts, 'leg_observed': True,
                 }
 
-            elif new_category == 'abroad':
+            elif text_phase == PHASE_ABROAD:
                 # Landed abroad — learn tier if we watched the whole outbound leg
                 if prev_phase == PHASE_OUT and prev.get('leg_observed') and prev.get('leg_start'):
                     self._learn_tier(tid, name, prev.get('dest'), now_ts - prev['leg_start'])

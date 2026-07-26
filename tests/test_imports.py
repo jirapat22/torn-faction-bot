@@ -237,6 +237,50 @@ def test_flytrack_status_reuses_persisted_eta():
     assert f'<t:{fixed_eta}:t>' in field.value
 
 
+def test_flytrack_fast_turnaround_detected():
+    """
+    Regression test: a fast turnaround (landed abroad and immediately started
+    returning, missing the brief Abroad tick between two 60s polls entirely)
+    must still be caught. The old coarse-category comparison collapsed
+    PHASE_OUT and PHASE_RETURNING into the same 'traveling' bucket, so
+    OUT -> RETURNING looked like "no change" and was silently skipped -
+    no return alert, and self.players stayed stuck on stale outbound data.
+    """
+    import asyncio
+    from features.flytrack import FlyTracker, PHASE_RETURNING
+
+    mgr = FlyTracker(bot=None)
+    mgr.enabled = True
+    mgr.enemy_faction_id = '1'
+
+    mgr.players['1'] = {
+        'name': 'Testy', 'phase': 'out', 'dest': 'Mexico',
+        'eta': 1_600_000, 'leg_start': 1_500_000, 'leg_observed': True,
+    }
+
+    posted = []
+
+    async def fake_post(content=None, embed=None):
+        if content:
+            posted.append(content)
+    mgr._post = fake_post
+
+    async def fake_save():
+        pass
+    mgr.save_data = fake_save
+
+    async def fake_members():
+        return {'1': {'name': 'Testy',
+                     'status': {'state': 'Traveling', 'description': 'Traveling from Mexico to Torn'}}}
+    mgr._fetch_enemy_members = fake_members
+
+    asyncio.run(mgr.check_flights())
+
+    assert len(posted) == 1, 'return alert must fire even though the roster state stayed "Traveling" both ticks'
+    assert 'Testy' in posted[0] and 'Mexico' in posted[0]
+    assert mgr.players['1']['phase'] == PHASE_RETURNING
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -246,4 +290,5 @@ if __name__ == '__main__':
     test_flytrack_estimate_leg()
     test_flytrack_group_formatting()
     test_flytrack_status_reuses_persisted_eta()
+    test_flytrack_fast_turnaround_detected()
     print('All smoke tests passed.')
