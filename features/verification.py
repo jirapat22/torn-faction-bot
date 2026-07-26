@@ -129,6 +129,21 @@ class VerificationSystem:
         if not player_info:
             return False, f'Could not find Torn player with ID {torn_id}. Please check the ID and try again.'
 
+        # Ownership check: if this Torn ID has an official Torn<->Discord link
+        # (set by the player through Torn itself, so it can't be spoofed from
+        # this side), it must match the Discord account doing the registering.
+        # Without this, anyone could /register someone else's real Torn ID and
+        # be renamed/verified as them. A Torn ID with no link yet has no better
+        # proof available, so it still falls through to the existing self-report.
+        from utils.torn_api import fetch_user_discord
+        linked_discord_id = await fetch_user_discord(torn_id)
+        if linked_discord_id and linked_discord_id != discord_id:
+            return False, (
+                f'Torn ID {torn_id} is linked to a different Discord account via Torn\'s '
+                f'own Torn<->Discord link. If this is your ID, link your Discord account '
+                f'in Torn\'s settings first, or contact an admin.'
+            )
+
         # Check faction requirement if enabled
         if self.config.get('require_faction'):
             from config import TORN_FACTION_ID

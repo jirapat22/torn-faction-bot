@@ -666,8 +666,14 @@ class ChainTracker:
         should_post = False
         hit_milestone = None
 
+        # Check in descending order so a chain that jumps past several
+        # milestones between two 1-minute polls (plausible when multiple
+        # members hit at once) announces the highest one actually reached,
+        # not the lowest — ascending order would report "10 hits!" for a
+        # true jump to 120, and the skipped 25/50/100 would never get
+        # announced since last_chain_count moves past them regardless.
         milestones = [10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000]
-        for milestone in milestones:
+        for milestone in reversed(milestones):
             if current_count >= milestone and self.last_chain_count < milestone:
                 should_post = True
                 hit_milestone = milestone

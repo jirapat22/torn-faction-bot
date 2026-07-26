@@ -1597,6 +1597,12 @@ class WarTracker:
                             content = '📊 **War Management Report**' if i == 0 else None
                             await management_channel.send(content=content, embed=mgmt_embed)
                         logger.info('Posted detailed war report to management channel')
+                    else:
+                        logger.warning(
+                            f'War end: management report not posted for war {self.current_war_id} — '
+                            f'format_war_management_report returned no embeds (likely no our-faction '
+                            f'member data in the war report yet)'
+                        )
                 else:
                     logger.warning('Warning: War management channel not configured')
 

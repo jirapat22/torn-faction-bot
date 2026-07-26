@@ -281,6 +281,135 @@ def test_flytrack_fast_turnaround_detected():
     assert mgr.players['1']['phase'] == PHASE_RETURNING
 
 
+def test_register_rejects_torn_discord_mismatch():
+    """
+    Regression test for a real vulnerability: /register let anyone claim any
+    Torn ID with zero ownership proof - just that the ID exists and isn't
+    already claimed in this bot's own database. Torn's own Torn<->Discord
+    link (set by the player through Torn itself, unspoofable from this side)
+    must be checked: if it points to a DIFFERENT Discord account, reject.
+    """
+    import asyncio
+    import features.verification as verification_mod
+    import utils.torn_api as torn_api_mod
+
+    async def fake_fetch_player_data(torn_id, *args, **kwargs):
+        return {'player_id': torn_id, 'name': 'Victim', 'level': 10,
+                'faction': {'faction_id': 0, 'faction_name': '', 'faction_tag': ''},
+                'last_action': {'timestamp': 0}}
+    verification_mod.fetch_player_data = fake_fetch_player_data
+
+    async def fake_mismatch(torn_id):
+        return '999999999999999999'  # a DIFFERENT discord id than the caller
+    torn_api_mod.fetch_user_discord = fake_mismatch
+
+    class FakeUser:
+        id = 111111111111111111
+    class FakeInteraction:
+        user = FakeUser()
+        guild = None
+
+    mgr = verification_mod.VerificationSystem(bot=None)
+    mgr.verified_users = {}
+    mgr.config = {'require_faction': False, 'change_name': True, 'append_id': True, 'append_faction_tag': False}
+
+    success, message = asyncio.run(mgr.register_user(FakeInteraction(), 12345))
+    assert success is False
+    assert 'linked to a different Discord account' in message
+    assert '12345' not in mgr.verified_users.get(str(FakeUser.id), {})
+
+
+def test_register_allows_unlinked_torn_id():
+    """
+    Self-registration must still work when the Torn ID has no Torn<->Discord
+    link on file - there's no better ownership signal available, so this is
+    an intentional, documented remaining gap, not something to break.
+    """
+    import asyncio
+    import features.verification as verification_mod
+    import utils.torn_api as torn_api_mod
+
+    async def fake_fetch_player_data(torn_id, *args, **kwargs):
+        return {'player_id': torn_id, 'name': 'Me', 'level': 5,
+                'faction': {'faction_id': 0, 'faction_name': '', 'faction_tag': ''},
+                'last_action': {'timestamp': 0}}
+    verification_mod.fetch_player_data = fake_fetch_player_data
+
+    async def fake_no_link(torn_id):
+        return ''
+    torn_api_mod.fetch_user_discord = fake_no_link
+
+    class FakeUser:
+        id = 222222222222222222
+        async def edit(self, nick=None):
+            pass
+        async def add_roles(self, role):
+            pass
+    class FakeGuild:
+        def get_role(self, role_id):
+            return None
+    class FakeInteraction:
+        user = FakeUser()
+        guild = FakeGuild()
+
+    async def fake_save():
+        pass
+
+    mgr = verification_mod.VerificationSystem(bot=None)
+    mgr.verified_users = {}
+    mgr.config = {'require_faction': False, 'change_name': False, 'append_id': True,
+                  'append_faction_tag': False, 'verified_role_id': None}
+    mgr.save_verified_users = fake_save
+
+    success, message = asyncio.run(mgr.register_user(FakeInteraction(), 54321))
+    assert success is True
+    assert str(FakeUser.id) in mgr.verified_users
+
+
+def test_chain_milestone_picks_highest_on_jump():
+    """
+    Regression test: a chain that jumps past multiple milestones between two
+    1-minute polls (plausible when several members hit at once) must announce
+    the HIGHEST milestone reached, not the lowest. The old ascending-order
+    loop with an early break reported "10 hits!" for a true jump to 120, and
+    the skipped 25/50/100 milestones were never announced afterward since
+    last_chain_count moves past them regardless.
+    """
+    import asyncio
+    import features.chains as chains_mod
+    from features.chains import ChainTracker
+
+    tracker = ChainTracker(bot=None)
+    tracker.was_chain_active = True
+    tracker.last_chain_count = 8  # below all milestones
+    tracker.last_chain_start = 0
+    tracker.chain_end_checks = 0
+
+    posted = []
+
+    class FakeChannel:
+        async def send(self, content=None, embed=None):
+            posted.append(content)
+
+    tracker.bot = type('FakeBot', (), {'get_channel': lambda self, cid: FakeChannel()})()
+
+    async def fake_get_current_chain():
+        return {'current': 120, 'start': 1000, 'timeout': 0, 'modifier': 1.0, 'max': 200}
+    tracker.get_current_chain = fake_get_current_chain
+
+    chains_mod.save_json = lambda *a, **kw: None  # avoid real disk writes
+
+    async def fake_save_history():
+        pass
+    tracker.save_chain_history = fake_save_history
+
+    asyncio.run(tracker.check_chain_update())
+
+    assert len(posted) == 1
+    assert '100 hits' in posted[0]
+    assert tracker.last_chain_count == 120
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -291,4 +420,7 @@ if __name__ == '__main__':
     test_flytrack_group_formatting()
     test_flytrack_status_reuses_persisted_eta()
     test_flytrack_fast_turnaround_detected()
+    test_register_rejects_torn_discord_mismatch()
+    test_register_allows_unlinked_torn_id()
+    test_chain_milestone_picks_highest_on_jump()
     print('All smoke tests passed.')
