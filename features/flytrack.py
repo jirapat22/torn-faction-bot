@@ -263,8 +263,7 @@ class FlyTracker:
         # Baseline snapshot: record phases without alerting, so toggling on
         # mid-war doesn't spam a message per member.
         members = await self._fetch_enemy_members()
-        returning_lines = []  # (eta_sort_key, display_line)
-        outbound_lines = []
+        returning_lines, outbound_lines, abroad_entries = [], [], []
         now_ts = datetime.now(timezone.utc).timestamp()
         if members:
             for tid, m in members.items():
@@ -278,8 +277,15 @@ class FlyTracker:
                         'name': name, 'phase': resolved['phase'], 'dest': resolved['dest'],
                         'eta': resolved['eta'], 'leg_start': None, 'leg_observed': False,
                     }
-                    entry = (resolved['eta'] or float('inf'), self._format_latest_line(tid))
+                    line = self._format_group_line(name, resolved['phase'], resolved['dest'], resolved['eta'])
+                    entry = (resolved['eta'] or float('inf'), line)
                     (returning_lines if resolved['phase'] == PHASE_RETURNING else outbound_lines).append(entry)
+                elif phase == PHASE_ABROAD:
+                    self.players[tid] = {
+                        'name': name, 'phase': PHASE_ABROAD, 'dest': dest,
+                        'eta': None, 'leg_start': None, 'leg_observed': False,
+                    }
+                    abroad_entries.append((name, self._format_abroad_line(name, dest)))
                 else:
                     self.players[tid] = {
                         'name': name, 'phase': phase, 'dest': dest,
@@ -288,6 +294,8 @@ class FlyTracker:
 
         returning_lines.sort(key=lambda e: e[0])
         outbound_lines.sort(key=lambda e: e[0])
+        abroad_entries.sort(key=lambda e: e[0].lower())
+        abroad_lines = [line for _, line in abroad_entries]
 
         self.enabled = True
         await self.save_data()
@@ -316,9 +324,15 @@ class FlyTracker:
                       + ('\n…' if len(outbound_lines) > 10 else ''),
                 inline=False
             )
-        if not returning_lines and not outbound_lines:
-            embed.add_field(name='Currently in the air', value='Nobody — all enemies are grounded.', inline=False)
-        embed.set_footer(text='Toggle off with /war view:Fly · auto-stops when the war ends')
+        if abroad_lines:
+            embed.add_field(
+                name=f'🌍 Abroad — landed ({len(abroad_lines)})',
+                value='\n'.join(abroad_lines[:10]) + ('\n…' if len(abroad_lines) > 10 else ''),
+                inline=False
+            )
+        if not returning_lines and not outbound_lines and not abroad_lines:
+            embed.add_field(name='Status', value='Nobody abroad — everyone is in Torn.', inline=False)
+        embed.set_footer(text='/war view:Fly again to toggle off · /war view:FlyStatus for a live peek')
         return True, embed
 
     async def disable(self, reason: str = 'Toggled off') -> discord.Embed:
@@ -336,6 +350,74 @@ class FlyTracker:
                         f'Learned travel tiers are kept for next time.',
             color=EMBED_COLOR_INFO
         )
+
+    async def status_embed(self) -> discord.Embed:
+        """Read-only snapshot of who's currently flying/abroad, on demand —
+        does NOT touch self.players or self.enabled, so it's safe to call
+        anytime without disturbing the running background tracker."""
+        if not self.enabled:
+            return create_embed(
+                title='Fly Tracking Off',
+                description='Turn it on with `/war view:Fly` first.',
+                color=EMBED_COLOR_WARNING
+            )
+
+        members = await self._fetch_enemy_members()
+        if not members:
+            return create_embed(
+                title='Fly Status',
+                description='Could not fetch the enemy roster right now — try again shortly.',
+                color=EMBED_COLOR_WARNING
+            )
+
+        returning_lines, outbound_lines, abroad_entries = [], [], []
+        now_ts = datetime.now(timezone.utc).timestamp()
+        for tid, m in members.items():
+            tid = str(tid)
+            name = m.get('name', tid)
+            phase, dest = parse_phase(m.get('status', {}), tid, name)
+
+            if phase in (PHASE_OUT, PHASE_RETURNING):
+                resolved = self._estimate_leg(tid, phase, dest, now_ts)
+                line = self._format_group_line(name, resolved['phase'], resolved['dest'], resolved['eta'])
+                entry = (resolved['eta'] or float('inf'), line)
+                (returning_lines if resolved['phase'] == PHASE_RETURNING else outbound_lines).append(entry)
+            elif phase == PHASE_ABROAD:
+                abroad_entries.append((name, self._format_abroad_line(name, dest)))
+
+        returning_lines.sort(key=lambda e: e[0])
+        outbound_lines.sort(key=lambda e: e[0])
+        abroad_entries.sort(key=lambda e: e[0].lower())
+        abroad_lines = [line for _, line in abroad_entries]
+
+        embed = create_embed(
+            title=f'📡 Fly Status: {self.enemy_faction_name}',
+            description='Live snapshot — tracking keeps running in the background regardless.',
+            color=EMBED_COLOR_INFO
+        )
+        if returning_lines:
+            embed.add_field(
+                name=f'🛬 Returning — attack window ({len(returning_lines)})',
+                value='\n'.join(line for _, line in returning_lines[:10])
+                      + ('\n…' if len(returning_lines) > 10 else ''),
+                inline=False
+            )
+        if outbound_lines:
+            embed.add_field(
+                name=f'✈️ Outbound ({len(outbound_lines)})',
+                value='\n'.join(line for _, line in outbound_lines[:10])
+                      + ('\n…' if len(outbound_lines) > 10 else ''),
+                inline=False
+            )
+        if abroad_lines:
+            embed.add_field(
+                name=f'🌍 Abroad — landed ({len(abroad_lines)})',
+                value='\n'.join(abroad_lines[:10]) + ('\n…' if len(abroad_lines) > 10 else ''),
+                inline=False
+            )
+        if not returning_lines and not outbound_lines and not abroad_lines:
+            embed.add_field(name='Status', value='Nobody abroad — everyone is in Torn.', inline=False)
+        return embed
 
     # ===== Polling =====
 
@@ -527,18 +609,19 @@ class FlyTracker:
                     f'[Attack]({attack})')
         return f'🛬 **{name}** ← **{dest_label}** — landing time unknown. [Attack]({attack})'
 
-    def _format_latest_line(self, torn_id: str) -> str:
-        """One row for the grouped Returning/Outbound lists (toggle-on baseline)."""
-        p = self.players.get(torn_id, {})
-        name = p.get('name', torn_id)
-        phase = p.get('phase')
-        dest = p.get('dest')
-        eta = p.get('eta')
+    def _format_group_line(self, name: str, phase: str, dest: Optional[str], eta: Optional[int]) -> str:
+        """One row for the grouped Returning/Outbound lists. Takes the fields
+        directly (not a self.players lookup) so it's safe to use for a
+        read-only status peek that must not touch persisted tracking state."""
         arrow = '→' if phase == PHASE_OUT else '←'
         dest_label = dest or 'unknown'
         if eta:
             return f'**{name}** {arrow} **{dest_label}** — <t:{eta}:t> (<t:{eta}:R>)'
         return f'**{name}** {arrow} **{dest_label}** — ETA unknown'
+
+    def _format_abroad_line(self, name: str, dest: Optional[str]) -> str:
+        """One row for the Abroad (landed, not currently flying) list."""
+        return f'**{name}** — {dest or "unknown"}'
 
     async def _post(self, content: str = None, embed: discord.Embed = None):
         """Post to the war-tracker channel."""

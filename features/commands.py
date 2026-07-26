@@ -351,6 +351,7 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
             app_commands.Choice(name='History - War performance across wars (Management)', value='history'),
             app_commands.Choice(name='Trends - Faction W/L record and top contributors (Management)', value='trends'),
             app_commands.Choice(name='Fly - Toggle enemy flight tracking (Management)', value='fly'),
+            app_commands.Choice(name='FlyStatus - Who\'s flying/abroad right now', value='flystatus'),
         ])
         async def war(interaction: discord.Interaction, view: app_commands.Choice[str] = None, member: discord.Member = None):
             """Unified war command with multiple views"""
@@ -421,12 +422,23 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
                     _, embed = await fly_tracker.enable()
                 await interaction.followup.send(embed=embed)
 
+            elif view_value == 'flystatus':
+                if not fly_tracker:
+                    await interaction.followup.send(embed=create_embed(
+                        title='Fly Tracking Unavailable',
+                        description='Fly tracker is not initialized.',
+                        color=EMBED_COLOR_WARNING
+                    ))
+                    return
+                embed = await fly_tracker.status_embed()
+                await interaction.followup.send(embed=embed)
+
             else:  # status (default)
                 war_info = await war_tracker.get_current_war()
                 embed = await war_tracker.format_war_embed(war_info)
                 await interaction.followup.send(embed=embed)
 
-        logger.info('War command registered (/war with status/board/xan/history/trends/fly views)')
+        logger.info('War command registered (/war with status/board/xan/history/trends/fly/flystatus views)')
     else:
         logger.warning('war_tracker is None, war command NOT registered')
 

@@ -183,6 +183,28 @@ def test_flytrack_estimate_leg():
     assert resolved['note'] == ''
 
 
+def test_flytrack_group_formatting():
+    """
+    Group-line formatters must not depend on self.players, since status_embed()
+    is a read-only peek that must never mutate the live tracker's persisted
+    state (self.players is actively used by the running background loop).
+    """
+    from features.flytrack import FlyTracker, PHASE_OUT, PHASE_RETURNING
+
+    mgr = FlyTracker(bot=None)
+    # mgr.players deliberately left empty — formatters take fields directly
+    assert mgr.players == {}
+
+    line = mgr._format_group_line('Chaosito', PHASE_OUT, 'China', 1_700_000)
+    assert 'Chaosito' in line and 'China' in line and '→' in line
+
+    line = mgr._format_group_line('RodneyAKing', PHASE_RETURNING, 'South Africa', None)
+    assert '←' in line and 'ETA unknown' in line
+
+    line = mgr._format_abroad_line('Ferothen', 'China')
+    assert line == '**Ferothen** — China'
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -190,4 +212,5 @@ if __name__ == '__main__':
     test_stakeout_algorithm()
     test_flytrack_logic()
     test_flytrack_estimate_leg()
+    test_flytrack_group_formatting()
     print('All smoke tests passed.')
