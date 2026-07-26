@@ -378,10 +378,19 @@ class FlyTracker:
             phase, dest = parse_phase(m.get('status', {}), tid, name)
 
             if phase in (PHASE_OUT, PHASE_RETURNING):
-                resolved = self._estimate_leg(tid, phase, dest, now_ts)
-                line = self._format_group_line(name, resolved['phase'], resolved['dest'], resolved['eta'])
-                entry = (resolved['eta'] or float('inf'), line)
-                (returning_lines if resolved['phase'] == PHASE_RETURNING else outbound_lines).append(entry)
+                # Reuse the already leg_start-anchored eta from check_flights()
+                # whenever it's for this same leg — recomputing from "now" on
+                # every peek would push the ETA later each time it's checked,
+                # since it'd treat "now" as a fresh departure instant.
+                prev = self.players.get(tid)
+                if prev and _coarse_category(prev.get('phase')) == 'traveling' and prev.get('eta') is not None:
+                    r_phase, r_dest, r_eta = prev['phase'], prev['dest'], prev['eta']
+                else:
+                    resolved = self._estimate_leg(tid, phase, dest, now_ts, prev)
+                    r_phase, r_dest, r_eta = resolved['phase'], resolved['dest'], resolved['eta']
+                line = self._format_group_line(name, r_phase, r_dest, r_eta)
+                entry = (r_eta or float('inf'), line)
+                (returning_lines if r_phase == PHASE_RETURNING else outbound_lines).append(entry)
             elif phase == PHASE_ABROAD:
                 abroad_entries.append((name, self._format_abroad_line(name, dest)))
 

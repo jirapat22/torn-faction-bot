@@ -205,6 +205,38 @@ def test_flytrack_group_formatting():
     assert line == '**Ferothen** — China'
 
 
+def test_flytrack_status_reuses_persisted_eta():
+    """
+    Regression test: status_embed() must reuse the already leg_start-anchored
+    eta from self.players for a leg check_flights() already caught, not
+    recompute from "now". Recomputing pushes the ETA later every single time
+    the peek is called (confirmed live: an alert said 6:31pm, the status
+    peek 10 minutes later said 6:42pm for the same still-in-flight player).
+    """
+    import asyncio
+    from features.flytrack import FlyTracker, PHASE_RETURNING
+
+    mgr = FlyTracker(bot=None)
+    mgr.enabled = True
+    mgr.enemy_faction_name = 'TGC'
+
+    # Simulate check_flights() having anchored this leg some time ago
+    fixed_eta = 1_700_000
+    mgr.players['99'] = {
+        'name': 'BigGeecuz', 'phase': PHASE_RETURNING, 'dest': 'UAE',
+        'eta': fixed_eta, 'leg_start': fixed_eta - 3600, 'leg_observed': True,
+    }
+
+    async def fake_members():
+        return {'99': {'name': 'BigGeecuz',
+                       'status': {'state': 'Traveling', 'description': 'Traveling from UAE to Torn'}}}
+    mgr._fetch_enemy_members = fake_members
+
+    embed = asyncio.run(mgr.status_embed())
+    field = next(f for f in embed.fields if 'Returning' in f.name)
+    assert f'<t:{fixed_eta}:t>' in field.value
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -213,4 +245,5 @@ if __name__ == '__main__':
     test_flytrack_logic()
     test_flytrack_estimate_leg()
     test_flytrack_group_formatting()
+    test_flytrack_status_reuses_persisted_eta()
     print('All smoke tests passed.')
