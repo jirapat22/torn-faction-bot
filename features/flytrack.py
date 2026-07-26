@@ -59,27 +59,6 @@ STANDARD_FLIGHT_MINUTES = {
     'South Africa': 297,
 }
 
-# Flag emoji per destination, for quick visual scanning in alerts/lists
-FLAG_EMOJI = {
-    'Mexico': '🇲🇽',
-    'Cayman Islands': '🇰🇾',
-    'Canada': '🇨🇦',
-    'Hawaii': '🌺',
-    'United Kingdom': '🇬🇧',
-    'Argentina': '🇦🇷',
-    'Switzerland': '🇨🇭',
-    'Japan': '🇯🇵',
-    'China': '🇨🇳',
-    'UAE': '🇦🇪',
-    'South Africa': '🇿🇦',
-}
-
-
-def flag_for(dest: Optional[str]) -> str:
-    """Flag emoji for a destination, or a generic globe if unknown."""
-    return FLAG_EMOJI.get(dest or '', '🌐')
-
-
 # lowercase alias -> canonical destination name
 DEST_ALIASES = {
     'uae': 'UAE',
@@ -315,11 +294,8 @@ class FlyTracker:
         logger.info(f'Fly tracking ENABLED vs {enemy_name} [{enemy_id}], {len(self.players)} members baselined')
 
         description = (
-            f'Watching **{enemy_name}** [{enemy_id}] — polling every 60 seconds.\n'
-            f'Alerts post to <#{WAR_TRACKER_CHANNEL_ID}>.\n\n'
-            f'ETAs assume **airstrip** (x0.70) until a player\'s real travel tier '
-            f'is learned from an observed flight. Torn doesn\'t expose exact '
-            f'remaining flight time for other players, so these are estimates.'
+            f'Watching **{enemy_name}** [{enemy_id}] · alerts in <#{WAR_TRACKER_CHANNEL_ID}> · every 60s\n'
+            f'*ETAs are estimates (airstrip default, refined per player over time).*'
         )
         embed = create_embed(
             title='✈️ Fly Tracking ON',
@@ -535,23 +511,21 @@ class FlyTracker:
 
     def _format_outbound_alert(self, dest: Optional[str], name: str, eta: Optional[int],
                                note: str = '') -> str:
-        flag = flag_for(dest)
         dest_label = dest or 'an unknown destination'
         if eta:
-            return (f'✈️ {flag} **{name}** flew out to **{dest_label}** — '
-                    f'arrive at <t:{eta}:t> (<t:{eta}:R>){note}. Watch out!')
-        return f'✈️ {flag} **{name}** flew out to **{dest_label}** — flight time unknown. Watch out!'
+            return (f'✈️ **{name}** → **{dest_label}** — '
+                    f'lands <t:{eta}:t> (<t:{eta}:R>){note}. Watch out!')
+        return f'✈️ **{name}** → **{dest_label}** — flight time unknown. Watch out!'
 
     def _format_return_alert(self, torn_id: str, name: str, dest: Optional[str], eta: Optional[int],
                              note: str = '') -> str:
-        flag = flag_for(dest)
         dest_label = dest or 'abroad'
         attack = f'https://www.torn.com/loader.php?sid=attack&user2ID={torn_id}'
         if eta:
-            return (f'🛬 {flag} **{name}** is returning from **{dest_label}** — '
-                    f'lands at <t:{eta}:t> (<t:{eta}:R>){note}. '
+            return (f'🛬 **{name}** ← **{dest_label}** — '
+                    f'lands <t:{eta}:t> (<t:{eta}:R>){note}. '
                     f'[Attack]({attack})')
-        return f'🛬 {flag} **{name}** is returning from **{dest_label}** — landing time unknown. [Attack]({attack})'
+        return f'🛬 **{name}** ← **{dest_label}** — landing time unknown. [Attack]({attack})'
 
     def _format_latest_line(self, torn_id: str) -> str:
         """One row for the grouped Returning/Outbound lists (toggle-on baseline)."""
@@ -560,12 +534,11 @@ class FlyTracker:
         phase = p.get('phase')
         dest = p.get('dest')
         eta = p.get('eta')
-        flag = flag_for(dest)
-        preposition = 'to' if phase == PHASE_OUT else 'from'
+        arrow = '→' if phase == PHASE_OUT else '←'
         dest_label = dest or 'unknown'
         if eta:
-            return f'{flag} **{name}** {preposition} {dest_label} — lands <t:{eta}:t> (<t:{eta}:R>)'
-        return f'{flag} **{name}** {preposition} {dest_label} — ETA unknown'
+            return f'**{name}** {arrow} **{dest_label}** — <t:{eta}:t> (<t:{eta}:R>)'
+        return f'**{name}** {arrow} **{dest_label}** — ETA unknown'
 
     async def _post(self, content: str = None, embed: discord.Embed = None):
         """Post to the war-tracker channel."""
