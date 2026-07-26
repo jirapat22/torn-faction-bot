@@ -2,18 +2,19 @@
 Fly Tracking Module
 Track enemy faction flights during ranked war and estimate landing times.
 
-Primary path: Torn's `travel` selection (user/{id}?selections=travel) returns
-destination, method, and time_left for ANY player, not just the API key
-owner — travel destination is public game info (visible on profiles unless
-the target has a max-level Theater), so this gives an EXACT arrival time.
-We only call it for the handful of members currently mid-flight, resolved
-once per leg (not every poll tick).
+The Torn API's `travel` selection (user/{id}?selections=travel) only works
+for the key owner's own ID — querying anyone else returns API error 7
+("Incorrect ID-entity relation": the selection is private and the ID
+doesn't match the key owner), confirmed live against this faction's war.
+So there is no way to read an enemy's exact remaining flight time.
 
-Fallback path: if that lookup ever comes back empty (privacy upgrade, API
-hiccup), we timestamp the status transition and estimate using a known
-flight-duration table, defaulting to the airstrip tier (x0.70) until a
-player's real tier (standard/airstrip/WLT/business) is learned from a fully
-observed leg.
+Landing times are therefore ESTIMATES: we timestamp the moment a player's
+status flips to Traveling (accurate to one poll tick) and add a known
+flight duration, defaulting to the airstrip tier (x0.70) until a player's
+real tier (standard/airstrip/WLT/business) is learned from a fully observed
+leg. Destination/direction come from the status text, which is logged at
+WARNING when it can't be parsed so the exact wording can be nailed down
+from production logs.
 
 Toggled via /war view:Fly (management only). Alerts post to the war-tracker
 channel. Auto-stops when the ranked war ends.
@@ -31,7 +32,7 @@ from config import (
     EMBED_COLOR_SUCCESS,
     EMBED_COLOR_WARNING,
 )
-from utils.torn_api import fetch_any_faction_data, fetch_player_data
+from utils.torn_api import fetch_any_faction_data
 
 import logging
 
@@ -104,11 +105,6 @@ HOSPITAL_ADJECTIVES = {
 # (a single None can just be an API hiccup)
 WAR_END_STRIKES = 3
 
-# Safety cap on individual travel-selection lookups per poll tick, so a chaotic
-# moment (many departures at once) can't blow through the API rate budget.
-# Anyone beyond the cap still gets tracked via the estimate fallback this tick.
-MAX_TRAVEL_LOOKUPS_PER_TICK = 25
-
 
 def normalize_dest(raw: str) -> Optional[str]:
     """Map a destination string to its canonical name."""
@@ -128,15 +124,16 @@ def _coarse_category(phase: str) -> str:
     return 'home'
 
 
-def parse_phase(status: Dict) -> Tuple[str, Optional[str]]:
+def parse_phase(status: Dict, torn_id: str = '', name: str = '') -> Tuple[str, Optional[str]]:
     """
-    Fallback classifier: guess phase/destination from status text when the
-    travel-selection lookup is unavailable. Accepts both American and
+    Classify phase/destination from status text. Accepts both American and
     British spelling ("traveling"/"travelling") since Torn is UK-developed
     and the free-text description isn't guaranteed to match the API's
     state enum spelling.
 
     Returns (phase, destination) — destination is None when at home or unknown.
+    torn_id/name are optional, used only to label diagnostic logging when a
+    traveling/abroad member's destination can't be parsed out of the text.
     """
     state = (status or {}).get('state', '') or ''
     desc = ((status or {}).get('description', '') or '').strip()
@@ -153,11 +150,15 @@ def parse_phase(status: Dict) -> Tuple[str, Optional[str]]:
                 if dest and dest.lower() == 'torn':
                     return PHASE_RETURNING, None
                 return PHASE_OUT, dest
+        logger.warning(f"Fly: couldn't parse destination for {name} [{torn_id}] — "
+                       f"state={state!r} description={desc!r} details={details!r}")
         return PHASE_OUT, None
 
     if state == 'Abroad':
         if desc_lower.startswith('in '):
             return PHASE_ABROAD, normalize_dest(desc_lower[3:])
+        logger.warning(f"Fly: couldn't parse destination for {name} [{torn_id}] — "
+                       f"state={state!r} description={desc!r} details={details!r}")
         return PHASE_ABROAD, None
 
     # Abroad hospital: "In a Swiss hospital ..." (home hospital is just "In hospital")
@@ -165,6 +166,8 @@ def parse_phase(status: Dict) -> Tuple[str, Optional[str]]:
         for adj, country in HOSPITAL_ADJECTIVES.items():
             if adj in desc_lower:
                 return PHASE_ABROAD, country
+        logger.warning(f"Fly: couldn't parse hospital country for {name} [{torn_id}] — "
+                       f"state={state!r} description={desc!r} details={details!r}")
         return PHASE_ABROAD, None
 
     return PHASE_HOME, None
@@ -244,35 +247,29 @@ class FlyTracker:
         self.players = {}
         self._war_end_strikes = 0
 
-        # Baseline snapshot: resolve anyone already mid-flight (real ETA via
-        # individual lookup where possible) without alerting, so toggling on
+        # Baseline snapshot: record phases without alerting, so toggling on
         # mid-war doesn't spam a message per member.
         members = await self._fetch_enemy_members()
         in_air_lines = []
         now_ts = datetime.now(timezone.utc).timestamp()
-        lookups_used = 0
         if members:
             for tid, m in members.items():
                 tid = str(tid)
-                status = m.get('status', {})
-                phase, dest = parse_phase(status)
+                name = m.get('name', tid)
+                phase, dest = parse_phase(m.get('status', {}), tid, name)
 
-                if phase in (PHASE_OUT, PHASE_RETURNING) and lookups_used < MAX_TRAVEL_LOOKUPS_PER_TICK:
-                    lookups_used += 1
-                    resolved = await self._resolve_leg(tid, status, dest, now_ts)
+                if phase in (PHASE_OUT, PHASE_RETURNING):
+                    resolved = self._estimate_leg(tid, phase, dest, now_ts)
                     self.players[tid] = {
-                        'name': m.get('name', tid), 'phase': resolved['phase'],
-                        'dest': resolved['dest'], 'eta': resolved['eta'],
-                        'leg_start': now_ts, 'leg_observed': False,  # mid-flight spotted, not a full leg
+                        'name': name, 'phase': resolved['phase'], 'dest': resolved['dest'],
+                        'eta': resolved['eta'], 'leg_start': None, 'leg_observed': False,
                     }
                     in_air_lines.append(self._format_latest_line(tid))
                 else:
                     self.players[tid] = {
-                        'name': m.get('name', tid), 'phase': phase, 'dest': dest,
+                        'name': name, 'phase': phase, 'dest': dest,
                         'eta': None, 'leg_start': None, 'leg_observed': False,
                     }
-                    if phase in (PHASE_OUT, PHASE_RETURNING):
-                        in_air_lines.append(self._format_latest_line(tid))
 
         self.enabled = True
         await self.save_data()
@@ -281,9 +278,9 @@ class FlyTracker:
         description = (
             f'Watching **{enemy_name}** [{enemy_id}] — polling every 60 seconds.\n'
             f'Alerts post to <#{WAR_TRACKER_CHANNEL_ID}>.\n\n'
-            f'ETAs use Torn\'s real travel time when available; falls back to an '
-            f'**airstrip** (x0.70) estimate otherwise, refined once a player\'s '
-            f'real tier is learned.'
+            f'ETAs assume **airstrip** (x0.70) until a player\'s real travel tier '
+            f'is learned from an observed flight. Torn doesn\'t expose exact '
+            f'remaining flight time for other players, so these are estimates.'
         )
         embed = create_embed(
             title='✈️ Fly Tracking ON',
@@ -343,13 +340,12 @@ class FlyTracker:
         now_ts = datetime.now(timezone.utc).timestamp()
         alerts = []
         changed = False
-        lookups_used = 0
 
         for tid, m in members.items():
             tid = str(tid)
             name = m.get('name', tid)
             status = m.get('status', {})
-            text_phase, text_dest = parse_phase(status)
+            text_phase, text_dest = parse_phase(status, tid, name)
 
             prev = self.players.get(tid)
             if prev is None:
@@ -375,11 +371,7 @@ class FlyTracker:
             changed = True
 
             if new_category == 'traveling':
-                if lookups_used < MAX_TRAVEL_LOOKUPS_PER_TICK:
-                    lookups_used += 1
-                    resolved = await self._resolve_leg(tid, status, text_dest, now_ts, prev=prev)
-                else:
-                    resolved = self._estimate_leg(tid, text_phase, text_dest, now_ts, prev)
+                resolved = self._estimate_leg(tid, text_phase, text_dest, now_ts, prev)
 
                 if resolved['phase'] == PHASE_OUT:
                     alerts.append(self._format_outbound_alert(resolved['dest'], name, resolved['eta'], resolved['note']))
@@ -427,50 +419,18 @@ class FlyTracker:
             return None
         return data.get('members', {})
 
-    # ===== Leg resolution: real travel data first, estimate as fallback =====
-
-    async def _resolve_leg(self, torn_id: str, status: Dict, text_dest: Optional[str],
-                           now_ts: float, prev: Optional[Dict] = None) -> Dict:
-        """
-        Resolve a newly-detected traveling member to {phase, dest, eta, note}.
-        Tries the individual `travel` selection (exact time_left) first;
-        falls back to text-based estimate if that comes back unusable.
-        """
-        travel = await self._fetch_travel(torn_id)
-        if travel:
-            time_left = travel.get('time_left') or 0
-            raw_dest = travel.get('destination') or ''
-            if time_left > 0 and raw_dest:
-                eta = int(now_ts + time_left)
-                if raw_dest.strip().lower() == 'torn':
-                    # Returning: travel.destination says "Torn", not the origin —
-                    # the country they're coming FROM is whatever we last saw them at.
-                    origin = (prev or {}).get('dest') or text_dest
-                    return {'phase': PHASE_RETURNING, 'dest': normalize_dest(origin) if origin else None,
-                            'eta': eta, 'note': ''}
-                return {'phase': PHASE_OUT, 'dest': normalize_dest(raw_dest), 'eta': eta, 'note': ''}
-
-        # Fallback: estimate from text + known flight durations
-        phase, dest = parse_phase(status)
-        return self._estimate_leg(torn_id, phase, dest, now_ts, prev)
+    # ===== Leg estimation =====
 
     def _estimate_leg(self, torn_id: str, phase: str, dest: Optional[str], now_ts: float,
                       prev: Optional[Dict] = None) -> Dict:
-        """Estimate ETA from status text + duration table when real travel data is unavailable."""
+        """Estimate ETA from status text + known flight-duration table."""
         if phase == PHASE_RETURNING and not dest:
             dest = (prev or {}).get('dest')
         eta = self._eta_ts(torn_id, dest, now_ts)
         note = f' (estimate — {self._tier_note(torn_id)})' if eta else ''
         return {'phase': phase, 'dest': dest, 'eta': eta, 'note': note}
 
-    async def _fetch_travel(self, torn_id: str) -> Optional[Dict]:
-        """Individual travel-selection lookup — only called for currently-traveling members."""
-        data = await fetch_player_data(torn_id, selections='travel', cache_seconds=0)
-        if not data:
-            return None
-        return data.get('travel') or None
-
-    # ===== ETA / tier logic (fallback path) =====
+    # ===== ETA / tier logic =====
 
     def _tier_for(self, torn_id: str) -> Tuple[str, bool]:
         """Return (tier, learned) for a player — learned=False means assumption."""
@@ -493,8 +453,8 @@ class FlyTracker:
         return f'{label} — learned' if learned else f'assuming {label}'
 
     def _learn_tier(self, torn_id: str, name: str, dest: Optional[str], elapsed_seconds: float):
-        """Infer a player's travel tier from a fully-observed flight leg (fallback-path only —
-        legs resolved via real travel data don't need this, since we already have ground truth)."""
+        """Infer a player's travel tier from a fully-observed flight leg (departure and
+        arrival both caught live), refining future ETA estimates for that player."""
         std = STANDARD_FLIGHT_MINUTES.get(dest or '')
         if not std or elapsed_seconds <= 0:
             return
