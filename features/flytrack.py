@@ -484,9 +484,9 @@ class FlyTracker:
                 resolved = self._estimate_leg(tid, text_phase, text_dest, now_ts, prev)
 
                 if resolved['phase'] == PHASE_OUT:
-                    alerts.append(self._format_outbound_alert(resolved['dest'], name, resolved['eta'], resolved['note']))
+                    alerts.append(self._format_outbound_alert(resolved['dest'], name, resolved['eta']))
                 else:
-                    alerts.append(self._format_return_alert(tid, name, resolved['dest'], resolved['eta'], resolved['note']))
+                    alerts.append(self._format_return_alert(tid, name, resolved['dest'], resolved['eta']))
 
                 self.players[tid] = {
                     'name': name, 'phase': resolved['phase'], 'dest': resolved['dest'],
@@ -596,33 +596,30 @@ class FlyTracker:
 
     # ===== Message formatting =====
 
-    def _format_outbound_alert(self, dest: Optional[str], name: str, eta: Optional[int],
-                               note: str = '') -> str:
+    def _format_outbound_alert(self, dest: Optional[str], name: str, eta: Optional[int]) -> str:
+        # 🔴/🟢 instead of plane emoji — ✈️/🛬 look nearly identical at a
+        # glance, which was the actual reason out/in was hard to tell apart.
         dest_label = dest or 'an unknown destination'
         if eta:
-            return (f'✈️ **{name}** → **{dest_label}** — '
-                    f'lands <t:{eta}:t> (<t:{eta}:R>){note}. Watch out!')
-        return f'✈️ **{name}** → **{dest_label}** — flight time unknown. Watch out!'
+            return f'🔴 **{name}** → **{dest_label}** — lands <t:{eta}:t> (<t:{eta}:R>)'
+        return f'🔴 **{name}** → **{dest_label}** — flight time unknown'
 
-    def _format_return_alert(self, torn_id: str, name: str, dest: Optional[str], eta: Optional[int],
-                             note: str = '') -> str:
+    def _format_return_alert(self, torn_id: str, name: str, dest: Optional[str], eta: Optional[int]) -> str:
         dest_label = dest or 'abroad'
         attack = f'https://www.torn.com/loader.php?sid=attack&user2ID={torn_id}'
         if eta:
-            return (f'🛬 **{name}** ← **{dest_label}** — '
-                    f'lands <t:{eta}:t> (<t:{eta}:R>){note}. '
-                    f'[Attack]({attack})')
-        return f'🛬 **{name}** ← **{dest_label}** — landing time unknown. [Attack]({attack})'
+            return f'🟢 **{name}** ← **{dest_label}** — lands <t:{eta}:t> (<t:{eta}:R>) · [Attack]({attack})'
+        return f'🟢 **{name}** ← **{dest_label}** — landing time unknown · [Attack]({attack})'
 
     def _format_group_line(self, name: str, phase: str, dest: Optional[str], eta: Optional[int]) -> str:
         """One row for the grouped Returning/Outbound lists. Takes the fields
         directly (not a self.players lookup) so it's safe to use for a
         read-only status peek that must not touch persisted tracking state."""
-        arrow = '→' if phase == PHASE_OUT else '←'
+        icon = '🔴 →' if phase == PHASE_OUT else '🟢 ←'
         dest_label = dest or 'unknown'
         if eta:
-            return f'**{name}** {arrow} **{dest_label}** — <t:{eta}:t> (<t:{eta}:R>)'
-        return f'**{name}** {arrow} **{dest_label}** — ETA unknown'
+            return f'{icon} **{name}** **{dest_label}** — <t:{eta}:t> (<t:{eta}:R>)'
+        return f'{icon} **{name}** **{dest_label}** — ETA unknown'
 
     def _format_abroad_line(self, name: str, dest: Optional[str]) -> str:
         """One row for the Abroad (landed, not currently flying) list."""
