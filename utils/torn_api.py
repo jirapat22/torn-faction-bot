@@ -84,7 +84,7 @@ def _prune_cache():
         del api_cache[k]
 
 
-async def _make_api_request(endpoint, params=None, use_personal_key=False):
+async def _make_api_request(endpoint, params=None, use_personal_key=False, cache_seconds=None):
     """
     Internal function to make API requests with caching and error handling
 
@@ -92,6 +92,8 @@ async def _make_api_request(endpoint, params=None, use_personal_key=False):
         endpoint: API endpoint (e.g., 'faction', 'user')
         params: Dict of query parameters
         use_personal_key: If True, use TORN_PERSONAL_API_KEY instead of faction key
+        cache_seconds: Override cache TTL for this request (0 = bypass cache).
+                       None uses the global TORN_API_CACHE_SECONDS.
 
     Returns:
         Dict with API response or None if error
@@ -114,10 +116,11 @@ async def _make_api_request(endpoint, params=None, use_personal_key=False):
         params['key'] = TORN_API_KEY
 
     # Check cache
-    if cache_key in api_cache:
+    ttl = TORN_API_CACHE_SECONDS if cache_seconds is None else cache_seconds
+    if ttl > 0 and cache_key in api_cache:
         cached = api_cache[cache_key]
         age = time.time() - cached['timestamp']
-        if age < TORN_API_CACHE_SECONDS:
+        if age < ttl:
             logger.info(f'Using cached data for {endpoint} (age: {age:.1f}s)')
             return cached['data']
 
@@ -316,7 +319,8 @@ async def fetch_faction_attacks(from_ts=None, to_ts=None, sort=None):
     return data.get('attacks', {})
 
 
-async def fetch_any_faction_data(faction_id, selections='basic', use_personal_key=True):
+async def fetch_any_faction_data(faction_id, selections='basic', use_personal_key=True,
+                                 cache_seconds=None):
     """
     Fetch data for any faction (not just the bot's own faction).
     Uses the shared session, caching, and rate-limit handling.
@@ -325,6 +329,7 @@ async def fetch_any_faction_data(faction_id, selections='basic', use_personal_ke
         faction_id: Torn faction ID to query
         selections: API selections (e.g. 'basic', 'basic,rankedwars')
         use_personal_key: If True, use personal API key (default True)
+        cache_seconds: Override cache TTL (0 = always fetch fresh, for fast polling)
 
     Returns:
         Dict with faction data or None if error
@@ -332,7 +337,8 @@ async def fetch_any_faction_data(faction_id, selections='basic', use_personal_ke
     data = await _make_api_request(
         f'faction/{faction_id}',
         {'selections': selections},
-        use_personal_key=use_personal_key
+        use_personal_key=use_personal_key,
+        cache_seconds=cache_seconds
     )
     return data
 

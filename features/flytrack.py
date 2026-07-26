@@ -1,0 +1,495 @@
+"""
+Fly Tracking Module
+Track enemy faction flights during ranked war and estimate landing times.
+
+The Torn API does not expose travel time_left for other players, so landing
+times are ESTIMATES: we timestamp the moment a player's status flips to
+Traveling (accurate to one 30s poll tick) and add the known flight duration.
+Flight durations default to the airstrip tier (x0.70); once we observe a
+player's complete flight leg we infer their real tier (standard / airstrip /
+WLT / business class) and use that for their future ETAs.
+
+Toggled via /war view:Fly (management only). Alerts post to the war-tracker
+channel. Auto-stops when the ranked war ends.
+"""
+
+import discord
+from datetime import datetime, timezone
+from typing import Optional, Dict, Tuple
+
+from utils.helpers import load_json, save_json, create_embed
+from config import (
+    TORN_FACTION_ID,
+    WAR_TRACKER_CHANNEL_ID,
+    EMBED_COLOR_INFO,
+    EMBED_COLOR_SUCCESS,
+    EMBED_COLOR_WARNING,
+)
+from utils.torn_api import fetch_any_faction_data
+
+import logging
+
+logger = logging.getLogger(__name__)
+
+# Player phases on the travel cycle
+PHASE_HOME = 'home'            # In Torn (Okay/Hospital/Jail/Federal)
+PHASE_OUT = 'out'              # Traveling to <destination>
+PHASE_ABROAD = 'abroad'        # In <destination> (incl. abroad hospital)
+PHASE_RETURNING = 'returning'  # Returning to Torn from <destination>
+
+# Standard (no-perk) one-way flight times in minutes
+STANDARD_FLIGHT_MINUTES = {
+    'Mexico': 26,
+    'Cayman Islands': 35,
+    'Canada': 41,
+    'Hawaii': 134,
+    'United Kingdom': 159,
+    'Argentina': 167,
+    'Switzerland': 175,
+    'Japan': 225,
+    'China': 242,
+    'UAE': 271,
+    'South Africa': 297,
+}
+
+# lowercase alias -> canonical destination name
+DEST_ALIASES = {
+    'uae': 'UAE',
+    'united arab emirates': 'UAE',
+    'uk': 'United Kingdom',
+    'great britain': 'United Kingdom',
+}
+DEST_ALIASES.update({name.lower(): name for name in STANDARD_FLIGHT_MINUTES})
+
+# Flight duration multipliers per travel tier
+TIER_MULTIPLIERS = {
+    'standard': 1.00,
+    'airstrip': 0.70,
+    'wlt': 0.50,       # Wind Lines Travel job perk
+    'business': 0.30,  # business class ticket
+}
+DEFAULT_TIER = 'airstrip'
+TIER_LABELS = {
+    'standard': 'standard flight',
+    'airstrip': 'airstrip',
+    'wlt': 'WLT',
+    'business': 'business class',
+}
+
+# Abroad-hospital descriptions read "In a <adjective> hospital"
+HOSPITAL_ADJECTIVES = {
+    'mexican': 'Mexico',
+    'cayman': 'Cayman Islands',
+    'canadian': 'Canada',
+    'hawaiian': 'Hawaii',
+    'british': 'United Kingdom',
+    'argentinian': 'Argentina',
+    'swiss': 'Switzerland',
+    'japanese': 'Japan',
+    'chinese': 'China',
+    'emirati': 'UAE',
+    'united arab emirates': 'UAE',
+    'south african': 'South Africa',
+    'argentine': 'Argentina',
+}
+
+# Consecutive "no active war" reads required before auto-stop
+# (a single None can just be an API hiccup)
+WAR_END_STRIKES = 3
+
+
+def normalize_dest(raw: str) -> Optional[str]:
+    """Map a destination string from a status description to its canonical name."""
+    if not raw:
+        return None
+    cleaned = raw.strip().rstrip('.').strip()
+    return DEST_ALIASES.get(cleaned.lower(), cleaned)
+
+
+def parse_phase(status: Dict) -> Tuple[str, Optional[str]]:
+    """
+    Classify a member's travel phase from their status object.
+
+    Returns (phase, destination) — destination is None when at home or unknown.
+    """
+    state = (status or {}).get('state', '') or ''
+    desc = ((status or {}).get('description', '') or '').strip()
+    desc_lower = desc.lower()
+
+    if state == 'Traveling':
+        if desc_lower.startswith('returning to torn from '):
+            return PHASE_RETURNING, normalize_dest(desc[len('Returning to Torn from '):])
+        if desc_lower.startswith('traveling to '):
+            dest = normalize_dest(desc[len('Traveling to '):])
+            # Defensive: some wordings phrase the return leg as "Traveling to Torn"
+            if dest and dest.lower() == 'torn':
+                return PHASE_RETURNING, None
+            return PHASE_OUT, dest
+        return PHASE_OUT, None
+
+    if state == 'Abroad':
+        if desc_lower.startswith('in '):
+            return PHASE_ABROAD, normalize_dest(desc[3:])
+        return PHASE_ABROAD, None
+
+    # Abroad hospital: "In a Swiss hospital ..." (home hospital is just "In hospital")
+    if state == 'Hospital' and desc_lower.startswith('in a') and 'hospital' in desc_lower:
+        for adj, country in HOSPITAL_ADJECTIVES.items():
+            if adj in desc_lower:
+                return PHASE_ABROAD, country
+        return PHASE_ABROAD, None
+
+    return PHASE_HOME, None
+
+
+class FlyTracker:
+    """Tracks enemy faction flights during ranked war with landing estimates."""
+
+    def __init__(self, bot, war_tracker=None):
+        self.bot = bot
+        self.war_tracker = war_tracker  # Set by bot.py
+        self.data_file = 'data/flytrack.json'
+        self.enabled = False
+        self.war_id = None
+        self.enemy_faction_id = None
+        self.enemy_faction_name = ''
+        self.players = {}  # {torn_id: {name, phase, dest, leg_start, leg_observed}}
+        self.tiers = {}    # {torn_id: {tier, name, observed_minutes, dest, ts}} — persists across wars
+        self._war_end_strikes = 0
+
+    async def load_data(self):
+        data = load_json(self.data_file, default={})
+        self.enabled = data.get('enabled', False)
+        self.war_id = data.get('war_id')
+        self.enemy_faction_id = data.get('enemy_faction_id')
+        self.enemy_faction_name = data.get('enemy_faction_name', '')
+        self.players = data.get('players', {})
+        self.tiers = data.get('tiers', {})
+        if self.enabled:
+            logger.info(f'Fly tracking resumed for faction {self.enemy_faction_id} ({self.enemy_faction_name})')
+
+    async def save_data(self):
+        save_json(self.data_file, {
+            'enabled': self.enabled,
+            'war_id': self.war_id,
+            'enemy_faction_id': self.enemy_faction_id,
+            'enemy_faction_name': self.enemy_faction_name,
+            'players': self.players,
+            'tiers': self.tiers,
+        })
+
+    # ===== Toggle =====
+
+    async def enable(self) -> Tuple[bool, discord.Embed]:
+        """Turn fly tracking on for the current ranked war opponent."""
+        if not self.war_tracker:
+            return False, create_embed(
+                title='Fly Tracking Unavailable',
+                description='War tracker is not initialized.',
+                color=EMBED_COLOR_WARNING
+            )
+
+        war_info = await self.war_tracker.get_current_war()
+        if not war_info:
+            return False, create_embed(
+                title='No Active War',
+                description='Fly tracking needs an active ranked war — none found.',
+                color=EMBED_COLOR_WARNING
+            )
+
+        factions = war_info.get('data', {}).get('factions', {})
+        enemy_id, enemy_name = None, 'Unknown'
+        for fid, fdata in factions.items():
+            if str(fid) != str(TORN_FACTION_ID):
+                enemy_id = str(fid)
+                enemy_name = fdata.get('name', 'Unknown')
+        if not enemy_id:
+            return False, create_embed(
+                title='Enemy Faction Not Found',
+                description='Could not determine the opposing faction from war data.',
+                color=EMBED_COLOR_WARNING
+            )
+
+        self.war_id = war_info.get('war_id')
+        self.enemy_faction_id = enemy_id
+        self.enemy_faction_name = enemy_name
+        self.players = {}
+        self._war_end_strikes = 0
+
+        # Baseline snapshot: record phases without alerting, so toggling on
+        # mid-war doesn't spam a message per member.
+        members = await self._fetch_enemy_members()
+        in_air_lines = []
+        now_ts = datetime.now(timezone.utc).timestamp()
+        if members:
+            for tid, m in members.items():
+                phase, dest = parse_phase(m.get('status', {}))
+                self.players[str(tid)] = {
+                    'name': m.get('name', tid),
+                    'phase': phase,
+                    'dest': dest,
+                    'leg_start': None,      # unknown — spotted mid-state
+                    'leg_observed': False,  # can't learn tier from this leg
+                }
+                if phase in (PHASE_OUT, PHASE_RETURNING):
+                    latest = self._format_latest_eta(str(tid), dest, now_ts, phase)
+                    in_air_lines.append(latest)
+
+        self.enabled = True
+        await self.save_data()
+        logger.info(f'Fly tracking ENABLED vs {enemy_name} [{enemy_id}], {len(self.players)} members baselined')
+
+        description = (
+            f'Watching **{enemy_name}** [{enemy_id}] — polling every 30 seconds.\n'
+            f'Alerts post to <#{WAR_TRACKER_CHANNEL_ID}>.\n\n'
+            f'ETAs assume **airstrip** (x0.70) until a player\'s real travel tier '
+            f'is learned from an observed flight.'
+        )
+        embed = create_embed(
+            title='✈️ Fly Tracking ON',
+            description=description,
+            color=EMBED_COLOR_SUCCESS
+        )
+        if in_air_lines:
+            embed.add_field(
+                name=f'Currently in the air ({len(in_air_lines)})',
+                value='\n'.join(in_air_lines[:15]) + ('\n…' if len(in_air_lines) > 15 else ''),
+                inline=False
+            )
+        else:
+            embed.add_field(name='Currently in the air', value='Nobody — all enemies are grounded.', inline=False)
+        embed.set_footer(text='Toggle off with /war view:Fly · auto-stops when the war ends')
+        return True, embed
+
+    async def disable(self, reason: str = 'Toggled off') -> discord.Embed:
+        """Turn fly tracking off. Learned tiers are kept for future wars."""
+        name = self.enemy_faction_name or 'enemy faction'
+        self.enabled = False
+        self.players = {}
+        self.war_id = None
+        self._war_end_strikes = 0
+        await self.save_data()
+        logger.info(f'Fly tracking DISABLED ({reason})')
+        return create_embed(
+            title='✈️ Fly Tracking OFF',
+            description=f'Stopped watching **{name}**. ({reason})\n'
+                        f'Learned travel tiers are kept for next time.',
+            color=EMBED_COLOR_INFO
+        )
+
+    # ===== Polling =====
+
+    async def check_flights(self):
+        """One poll tick: fetch enemy roster, detect transitions, post alerts.
+        Called every 30s by the background loop in bot.py."""
+        if not self.enabled or not self.enemy_faction_id:
+            return
+
+        # Auto-stop when the war ends (tolerate transient API failures)
+        war_info = await self.war_tracker.get_current_war() if self.war_tracker else None
+        if war_info is None:
+            self._war_end_strikes += 1
+            if self._war_end_strikes >= WAR_END_STRIKES:
+                embed = await self.disable(reason='War ended')
+                await self._post(embed=embed)
+                return
+        else:
+            self._war_end_strikes = 0
+
+        members = await self._fetch_enemy_members()
+        if not members:
+            return  # API hiccup — keep previous state, try next tick
+
+        now_ts = datetime.now(timezone.utc).timestamp()
+        alerts = []
+        changed = False
+
+        for tid, m in members.items():
+            tid = str(tid)
+            name = m.get('name', tid)
+            phase, dest = parse_phase(m.get('status', {}))
+
+            prev = self.players.get(tid)
+            if prev is None:
+                # New member joined mid-war — baseline silently
+                self.players[tid] = {
+                    'name': name, 'phase': phase, 'dest': dest,
+                    'leg_start': None, 'leg_observed': False,
+                }
+                changed = True
+                continue
+
+            prev_phase = prev.get('phase')
+            if phase == prev_phase:
+                if prev.get('name') != name:
+                    prev['name'] = name
+                    changed = True
+                if dest and prev.get('dest') != dest:
+                    prev['dest'] = dest
+                    changed = True
+                continue
+
+            # --- Transition handling ---
+            changed = True
+            if phase == PHASE_OUT:
+                # Departure seen live: we know the leg started within the last tick
+                alerts.append(self._format_outbound_alert(tid, name, dest, now_ts))
+                self.players[tid] = {
+                    'name': name, 'phase': phase, 'dest': dest,
+                    'leg_start': now_ts, 'leg_observed': True,
+                }
+
+            elif phase == PHASE_RETURNING:
+                ret_dest = dest or prev.get('dest')
+                alerts.append(self._format_return_alert(tid, name, ret_dest, now_ts))
+                # Any live-observed transition pins the leg start to within one
+                # poll tick, so tier learning is valid regardless of prev phase
+                self.players[tid] = {
+                    'name': name, 'phase': phase, 'dest': ret_dest,
+                    'leg_start': now_ts, 'leg_observed': True,
+                }
+
+            elif phase == PHASE_ABROAD:
+                # Landed abroad — learn tier if we watched the whole outbound leg
+                if prev_phase == PHASE_OUT and prev.get('leg_observed') and prev.get('leg_start'):
+                    self._learn_tier(tid, name, prev.get('dest'), now_ts - prev['leg_start'])
+                self.players[tid] = {
+                    'name': name, 'phase': phase, 'dest': dest or prev.get('dest'),
+                    'leg_start': None, 'leg_observed': False,
+                }
+
+            else:  # PHASE_HOME — landed back in Torn
+                if prev_phase == PHASE_RETURNING and prev.get('leg_observed') and prev.get('leg_start'):
+                    self._learn_tier(tid, name, prev.get('dest'), now_ts - prev['leg_start'])
+                self.players[tid] = {
+                    'name': name, 'phase': phase, 'dest': None,
+                    'leg_start': None, 'leg_observed': False,
+                }
+
+        # Drop members who left the faction
+        gone = [tid for tid in self.players if tid not in {str(k) for k in members}]
+        for tid in gone:
+            del self.players[tid]
+            changed = True
+
+        if alerts:
+            await self._post(content='\n'.join(alerts))
+
+        if changed:
+            await self.save_data()
+
+    async def _fetch_enemy_members(self) -> Optional[Dict]:
+        """Fetch enemy faction roster, bypassing the API cache for fresh statuses."""
+        data = await fetch_any_faction_data(self.enemy_faction_id, 'basic', cache_seconds=0)
+        if not data:
+            return None
+        return data.get('members', {})
+
+    # ===== ETA / tier logic =====
+
+    def _tier_for(self, torn_id: str) -> Tuple[str, bool]:
+        """Return (tier, learned) for a player — learned=False means assumption."""
+        entry = self.tiers.get(str(torn_id))
+        if entry and entry.get('tier') in TIER_MULTIPLIERS:
+            return entry['tier'], True
+        return DEFAULT_TIER, False
+
+    def _eta_ts(self, torn_id: str, dest: Optional[str], leg_start: float) -> Optional[int]:
+        """Estimated landing timestamp for a leg, or None if destination unknown."""
+        std = STANDARD_FLIGHT_MINUTES.get(dest or '')
+        if not std:
+            return None
+        tier, _ = self._tier_for(torn_id)
+        return int(leg_start + std * TIER_MULTIPLIERS[tier] * 60)
+
+    def _tier_note(self, torn_id: str) -> str:
+        tier, learned = self._tier_for(torn_id)
+        label = TIER_LABELS[tier]
+        return f'{label} — learned' if learned else f'assuming {label}'
+
+    def _learn_tier(self, torn_id: str, name: str, dest: Optional[str], elapsed_seconds: float):
+        """Infer a player's travel tier from a fully-observed flight leg."""
+        std = STANDARD_FLIGHT_MINUTES.get(dest or '')
+        if not std or elapsed_seconds <= 0:
+            return
+
+        best_tier, best_err = None, None
+        for tier, mult in TIER_MULTIPLIERS.items():
+            expected = std * mult * 60
+            err = abs(elapsed_seconds - expected) / expected
+            if best_err is None or err < best_err:
+                best_tier, best_err = tier, err
+
+        # Reject measurements that don't sit near any tier (glitchy data)
+        if best_err is None or best_err > 0.25:
+            logger.info(f'Fly: tier learn rejected for {name} [{torn_id}] — '
+                        f'{elapsed_seconds/60:.1f}min to {dest} matches no tier well')
+            return
+
+        old = self.tiers.get(str(torn_id), {}).get('tier')
+        self.tiers[str(torn_id)] = {
+            'tier': best_tier,
+            'name': name,
+            'observed_minutes': round(elapsed_seconds / 60, 1),
+            'dest': dest,
+            'ts': datetime.now(timezone.utc).timestamp(),
+        }
+        if old != best_tier:
+            logger.info(f'Fly: learned tier for {name} [{torn_id}]: {best_tier} '
+                        f'({elapsed_seconds/60:.1f}min to {dest})')
+
+    # ===== Message formatting =====
+
+    def _format_outbound_alert(self, torn_id: str, name: str, dest: Optional[str], now_ts: float) -> str:
+        dest_label = dest or 'an unknown destination'
+        eta = self._eta_ts(torn_id, dest, now_ts)
+        if eta:
+            return (f'✈️ **{name}** flew out to **{dest_label}** — '
+                    f'arrives at <t:{eta}:t> (<t:{eta}:R>, {self._tier_note(torn_id)}). Watch out!')
+        return f'✈️ **{name}** flew out to **{dest_label}** — flight time unknown. Watch out!'
+
+    def _format_return_alert(self, torn_id: str, name: str, dest: Optional[str], now_ts: float) -> str:
+        dest_label = dest or 'abroad'
+        eta = self._eta_ts(torn_id, dest, now_ts)
+        attack = f'https://www.torn.com/loader.php?sid=attack&user2ID={torn_id}'
+        if eta:
+            return (f'🛬 **{name}** is returning from **{dest_label}** — '
+                    f'lands at <t:{eta}:t> (<t:{eta}:R>, {self._tier_note(torn_id)}). '
+                    f'[Attack]({attack})')
+        return f'🛬 **{name}** is returning from **{dest_label}** — landing time unknown. [Attack]({attack})'
+
+    def _format_latest_eta(self, torn_id: str, dest: Optional[str], now_ts: float, phase: str) -> str:
+        """Line for a player spotted mid-flight at toggle-on: only a latest-possible ETA."""
+        p = self.players.get(torn_id, {})
+        name = p.get('name', torn_id)
+        direction = f'→ {dest}' if phase == PHASE_OUT else f'← returning from {dest or "abroad"}'
+        eta = self._eta_ts(torn_id, dest, now_ts)
+        if eta:
+            return f'**{name}** {direction} — lands by <t:{eta}:t> at the latest (spotted mid-flight)'
+        return f'**{name}** {direction} — ETA unknown'
+
+    async def _post(self, content: str = None, embed: discord.Embed = None):
+        """Post to the war-tracker channel."""
+        if not WAR_TRACKER_CHANNEL_ID:
+            logger.warning('Fly: WAR_TRACKER_CHANNEL_ID not set — dropping alert')
+            return
+        channel = self.bot.get_channel(WAR_TRACKER_CHANNEL_ID)
+        if not channel:
+            logger.warning(f'Fly: channel {WAR_TRACKER_CHANNEL_ID} not found')
+            return
+        try:
+            if content:
+                # Discord message limit is 2000 chars — chunk on line boundaries
+                lines = content.split('\n')
+                buf = ''
+                for line in lines:
+                    if len(buf) + len(line) + 1 > 1900:
+                        await channel.send(buf, suppress_embeds=True)
+                        buf = ''
+                    buf = f'{buf}\n{line}' if buf else line
+                if buf:
+                    await channel.send(buf, suppress_embeds=True)
+            if embed:
+                await channel.send(embed=embed)
+        except Exception as e:
+            logger.error(f'Fly: failed to post to war-tracker channel: {e}')

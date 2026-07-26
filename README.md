@@ -27,7 +27,7 @@ on Railway.
 - `/verify` ⚙ — verification settings, bulksync, fixrole, manual verify, stats
 - `/myactivity`, `/status`, `/ping`, `/version`, `/help`
 - `/chain` — chain status / report / board
-- `/war` — status / board / xan calc / history / trends
+- `/war` — status / board / xan calc / history / trends / fly (enemy flight tracking with landing ETAs)
 - `/enemy` ⚙ — war enemy watchlist
 - `/stakeout` ⚙ — enemy behavior tracking
 - `/alliance` ⚙ — ally faction war tracking
@@ -75,7 +75,8 @@ Railway service's Variables tab. A `PORT`-bound healthcheck endpoint reports
 **Channels** (IDs): `INACTIVITY_ALERTS_CHANNEL_ID`, `ANNOUNCEMENTS_CHANNEL_ID`,
 `WAR_CHANNEL_ID`, `WAR_MANAGEMENT_CHANNEL_ID`, `CHAINING_CHANNEL_ID`,
 `HAPPY_JUMP_CHANNEL_ID`, `GENERAL_CHANNEL_ID`, `EVENT_POSTING_CHANNEL_ID`,
-`ALLIANCE_CHANNEL_ID`, `WELCOME_CHANNEL_ID`, `RULES_CHANNEL_ID`.
+`ALLIANCE_CHANNEL_ID`, `WELCOME_CHANNEL_ID`, `RULES_CHANNEL_ID`,
+`WAR_TRACKER_CHANNEL_ID` (enemy flight alerts).
 
 **Optional / tunables:** `TORN_PERSONAL_API_KEY`, `FFSCOUTER_API_KEY`,
 `COMMAND_PREFIX`, `INACTIVITY_WARNING_DAYS` (3), `INACTIVITY_CRITICAL_DAYS` (5),

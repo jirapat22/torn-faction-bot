@@ -30,7 +30,8 @@ logger = logging.getLogger(__name__)
 
 async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracker=None, verification_system=None,
                          event_reminder_manager=None, role_sync_manager=None,
-                         enemy_watchlist=None, stakeout_manager=None, alliance_manager=None):
+                         enemy_watchlist=None, stakeout_manager=None, alliance_manager=None,
+                         fly_tracker=None):
     """
     Register all slash commands with the bot
 
@@ -349,13 +350,14 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
             app_commands.Choice(name='Xan - Xanax calculation (Management)', value='xan'),
             app_commands.Choice(name='History - War performance across wars (Management)', value='history'),
             app_commands.Choice(name='Trends - Faction W/L record and top contributors (Management)', value='trends'),
+            app_commands.Choice(name='Fly - Toggle enemy flight tracking (Management)', value='fly'),
         ])
         async def war(interaction: discord.Interaction, view: app_commands.Choice[str] = None, member: discord.Member = None):
             """Unified war command with multiple views"""
             view_value = view.value if view else 'status'
 
-            # Board, xan, history, trends views require management
-            if view_value in ('board', 'xan', 'history', 'trends') and not is_management(interaction):
+            # Board, xan, history, trends, fly views require management
+            if view_value in ('board', 'xan', 'history', 'trends', 'fly') and not is_management(interaction):
                 await interaction.response.send_message(
                     embed=create_embed(
                         title='Permission Denied',
@@ -405,12 +407,26 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
                 embed = await war_tracker.format_war_trends_embed()
                 await interaction.followup.send(embed=embed)
 
+            elif view_value == 'fly':
+                if not fly_tracker:
+                    await interaction.followup.send(embed=create_embed(
+                        title='Fly Tracking Unavailable',
+                        description='Fly tracker is not initialized.',
+                        color=EMBED_COLOR_WARNING
+                    ))
+                    return
+                if fly_tracker.enabled:
+                    embed = await fly_tracker.disable(reason=f'Toggled off by {interaction.user.display_name}')
+                else:
+                    _, embed = await fly_tracker.enable()
+                await interaction.followup.send(embed=embed)
+
             else:  # status (default)
                 war_info = await war_tracker.get_current_war()
                 embed = await war_tracker.format_war_embed(war_info)
                 await interaction.followup.send(embed=embed)
 
-        logger.info('War command registered (/war with status/board/xan/history/trends views)')
+        logger.info('War command registered (/war with status/board/xan/history/trends/fly views)')
     else:
         logger.warning('war_tracker is None, war command NOT registered')
 

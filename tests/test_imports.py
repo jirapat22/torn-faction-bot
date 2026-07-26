@@ -33,6 +33,7 @@ MODULES = [
     'features.event_reminders',
     'features.event_ui',
     'features.faction',
+    'features.flytrack',
     'features.inactivity',
     'features.roles',
     'features.stakeout',
@@ -111,9 +112,46 @@ def test_stakeout_algorithm():
     assert peak is not None and 17 <= peak[0] <= 19
 
 
+def test_flytrack_logic():
+    """Phase parsing, tier learning, and ETA math for enemy flight tracking."""
+    from features.flytrack import (
+        FlyTracker, parse_phase, STANDARD_FLIGHT_MINUTES,
+        PHASE_HOME, PHASE_OUT, PHASE_ABROAD, PHASE_RETURNING,
+    )
+
+    # Status description → phase/destination
+    assert parse_phase({'state': 'Traveling', 'description': 'Traveling to Mexico'}) == (PHASE_OUT, 'Mexico')
+    assert parse_phase({'state': 'Traveling', 'description': 'Returning to Torn from South Africa'}) == (PHASE_RETURNING, 'South Africa')
+    # Alternate return-leg wording must not read as an outbound flight
+    assert parse_phase({'state': 'Traveling', 'description': 'Traveling to Torn'})[0] == PHASE_RETURNING
+    assert parse_phase({'state': 'Abroad', 'description': 'In United Arab Emirates'}) == (PHASE_ABROAD, 'UAE')
+    assert parse_phase({'state': 'Hospital', 'description': 'In a Swiss hospital for 2 mins'}) == (PHASE_ABROAD, 'Switzerland')
+    assert parse_phase({'state': 'Hospital', 'description': 'In hospital for 5 mins'})[0] == PHASE_HOME
+    assert parse_phase({'state': 'Okay', 'description': 'Okay'})[0] == PHASE_HOME
+
+    # Tier learning: a 13-minute Mexico flight (26 std) is business class (x0.30 → 7.8)
+    # vs WLT (x0.50 → 13.0) — should learn WLT
+    mgr = FlyTracker(bot=None)
+    mgr._learn_tier('42', 'Testy', 'Mexico', 13 * 60)
+    assert mgr.tiers['42']['tier'] == 'wlt'
+
+    # Default assumption is airstrip; ETA = start + std * 0.70
+    eta = mgr._eta_ts('999', 'Mexico', 1_000_000)
+    assert eta == 1_000_000 + int(STANDARD_FLIGHT_MINUTES['Mexico'] * 0.70 * 60)
+
+    # Learned tier overrides the default
+    eta_wlt = mgr._eta_ts('42', 'Mexico', 1_000_000)
+    assert eta_wlt == 1_000_000 + int(STANDARD_FLIGHT_MINUTES['Mexico'] * 0.50 * 60)
+
+    # Garbage measurement (fits no tier) must be rejected
+    mgr._learn_tier('7', 'Glitchy', 'Mexico', 3 * 60)
+    assert '7' not in mgr.tiers
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
     test_torn_api_helpers()
     test_stakeout_algorithm()
+    test_flytrack_logic()
     print('All smoke tests passed.')

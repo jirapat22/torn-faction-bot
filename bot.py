@@ -26,6 +26,7 @@ from features.enemies import EnemyWatchlist, setup_enemy_commands
 from features.event_reminders import EventReminderManager
 from features.stakeout import StakeoutManager, setup_stakeout_commands
 from features.alliance import AllianceManager, setup_alliance_commands
+from features.flytrack import FlyTracker
 from features.commands import setup_commands
 from features.faction import setup_faction_commands
 from utils.helpers import ensure_data_directories
@@ -81,6 +82,7 @@ enemy_watchlist = None
 event_reminder_manager = None
 stakeout_manager = None
 alliance_manager = None
+fly_tracker = None
 _initialized = False  # Prevent re-initialization on reconnect
 
 
@@ -111,7 +113,7 @@ async def _start_healthcheck_server():
         loops = [
             daily_inactivity_check, chain_update_check, war_update_check,
             role_sync_check, enemy_status_check, event_reminder_check,
-            stakeout_check, alliance_war_check,
+            stakeout_check, alliance_war_check, fly_check,
         ]
         all_running = bot.is_ready() and all(loop.is_running() for loop in loops)
         body = {
@@ -138,7 +140,7 @@ async def on_ready():
     """Called when the bot successfully connects to Discord"""
     global inactivity_tracker, chain_tracker, war_tracker, verification_system
     global role_sync_manager, enemy_watchlist
-    global event_reminder_manager, stakeout_manager, alliance_manager, _initialized
+    global event_reminder_manager, stakeout_manager, alliance_manager, fly_tracker, _initialized
 
     try:
         logger.info(f'Bot logged in as {bot.user.name} (ID: {bot.user.id})')
@@ -228,6 +230,10 @@ async def on_ready():
         await alliance_manager.load_data()
         await setup_alliance_commands(bot, alliance_manager)
 
+        # Initialize fly tracker (enemy flight tracking during ranked war)
+        fly_tracker = FlyTracker(bot, war_tracker=war_tracker)
+        await fly_tracker.load_data()
+
         # Initialize faction tools
         await setup_faction_commands(bot)
 
@@ -238,7 +244,8 @@ async def on_ready():
             role_sync_manager=role_sync_manager,
             enemy_watchlist=enemy_watchlist,
             stakeout_manager=stakeout_manager,
-            alliance_manager=alliance_manager
+            alliance_manager=alliance_manager,
+            fly_tracker=fly_tracker
         )
 
         # Sync slash commands with Discord (guild-specific for instant updates)
@@ -282,6 +289,9 @@ async def on_ready():
 
         if not alliance_war_check.is_running():
             alliance_war_check.start()
+
+        if not fly_check.is_running():
+            fly_check.start()
 
         if not loop_watchdog.is_running():
             loop_watchdog.start()
@@ -464,6 +474,23 @@ async def before_alliance_war_check():
     logger.info('Alliance war checker started (checks every 5 minutes)')
 
 
+@tasks.loop(seconds=30)
+async def fly_check():
+    """Background task that runs every 30 seconds to track enemy flights during war"""
+    try:
+        if fly_tracker and fly_tracker.enabled:
+            await fly_tracker.check_flights()
+    except Exception as e:
+        logger.error(f'Error in fly check: {e}')
+
+
+@fly_check.before_loop
+async def before_fly_check():
+    """Wait until bot is ready before starting fly check"""
+    await bot.wait_until_ready()
+    logger.info('Fly checker started (checks every 30 seconds while fly tracking is on)')
+
+
 @tasks.loop(minutes=5)
 async def loop_watchdog():
     """Restart any background task loop that has stopped unexpectedly."""
@@ -476,6 +503,7 @@ async def loop_watchdog():
         'event_reminder_check': event_reminder_check,
         'stakeout_check': stakeout_check,
         'alliance_war_check': alliance_war_check,
+        'fly_check': fly_check,
     }
     for name, loop in loops.items():
         if not loop.is_running():
