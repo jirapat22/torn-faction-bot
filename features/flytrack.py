@@ -59,6 +59,27 @@ STANDARD_FLIGHT_MINUTES = {
     'South Africa': 297,
 }
 
+# Flag emoji per destination, for quick visual scanning in alerts/lists
+FLAG_EMOJI = {
+    'Mexico': '🇲🇽',
+    'Cayman Islands': '🇰🇾',
+    'Canada': '🇨🇦',
+    'Hawaii': '🌺',
+    'United Kingdom': '🇬🇧',
+    'Argentina': '🇦🇷',
+    'Switzerland': '🇨🇭',
+    'Japan': '🇯🇵',
+    'China': '🇨🇳',
+    'UAE': '🇦🇪',
+    'South Africa': '🇿🇦',
+}
+
+
+def flag_for(dest: Optional[str]) -> str:
+    """Flag emoji for a destination, or a generic globe if unknown."""
+    return FLAG_EMOJI.get(dest or '', '🌐')
+
+
 # lowercase alias -> canonical destination name
 DEST_ALIASES = {
     'uae': 'UAE',
@@ -263,7 +284,8 @@ class FlyTracker:
         # Baseline snapshot: record phases without alerting, so toggling on
         # mid-war doesn't spam a message per member.
         members = await self._fetch_enemy_members()
-        in_air_lines = []
+        returning_lines = []  # (eta_sort_key, display_line)
+        outbound_lines = []
         now_ts = datetime.now(timezone.utc).timestamp()
         if members:
             for tid, m in members.items():
@@ -277,12 +299,16 @@ class FlyTracker:
                         'name': name, 'phase': resolved['phase'], 'dest': resolved['dest'],
                         'eta': resolved['eta'], 'leg_start': None, 'leg_observed': False,
                     }
-                    in_air_lines.append(self._format_latest_line(tid))
+                    entry = (resolved['eta'] or float('inf'), self._format_latest_line(tid))
+                    (returning_lines if resolved['phase'] == PHASE_RETURNING else outbound_lines).append(entry)
                 else:
                     self.players[tid] = {
                         'name': name, 'phase': phase, 'dest': dest,
                         'eta': None, 'leg_start': None, 'leg_observed': False,
                     }
+
+        returning_lines.sort(key=lambda e: e[0])
+        outbound_lines.sort(key=lambda e: e[0])
 
         self.enabled = True
         await self.save_data()
@@ -300,13 +326,21 @@ class FlyTracker:
             description=description,
             color=EMBED_COLOR_SUCCESS
         )
-        if in_air_lines:
+        if returning_lines:
             embed.add_field(
-                name=f'Currently in the air ({len(in_air_lines)})',
-                value='\n'.join(in_air_lines[:15]) + ('\n…' if len(in_air_lines) > 15 else ''),
+                name=f'🛬 Returning — attack window ({len(returning_lines)})',
+                value='\n'.join(line for _, line in returning_lines[:10])
+                      + ('\n…' if len(returning_lines) > 10 else ''),
                 inline=False
             )
-        else:
+        if outbound_lines:
+            embed.add_field(
+                name=f'✈️ Outbound ({len(outbound_lines)})',
+                value='\n'.join(line for _, line in outbound_lines[:10])
+                      + ('\n…' if len(outbound_lines) > 10 else ''),
+                inline=False
+            )
+        if not returning_lines and not outbound_lines:
             embed.add_field(name='Currently in the air', value='Nobody — all enemies are grounded.', inline=False)
         embed.set_footer(text='Toggle off with /war view:Fly · auto-stops when the war ends')
         return True, embed
@@ -501,33 +535,37 @@ class FlyTracker:
 
     def _format_outbound_alert(self, dest: Optional[str], name: str, eta: Optional[int],
                                note: str = '') -> str:
+        flag = flag_for(dest)
         dest_label = dest or 'an unknown destination'
         if eta:
-            return (f'✈️ **{name}** flew out to **{dest_label}** — '
+            return (f'✈️ {flag} **{name}** flew out to **{dest_label}** — '
                     f'arrive at <t:{eta}:t> (<t:{eta}:R>){note}. Watch out!')
-        return f'✈️ **{name}** flew out to **{dest_label}** — flight time unknown. Watch out!'
+        return f'✈️ {flag} **{name}** flew out to **{dest_label}** — flight time unknown. Watch out!'
 
     def _format_return_alert(self, torn_id: str, name: str, dest: Optional[str], eta: Optional[int],
                              note: str = '') -> str:
+        flag = flag_for(dest)
         dest_label = dest or 'abroad'
         attack = f'https://www.torn.com/loader.php?sid=attack&user2ID={torn_id}'
         if eta:
-            return (f'🛬 **{name}** is returning from **{dest_label}** — '
+            return (f'🛬 {flag} **{name}** is returning from **{dest_label}** — '
                     f'lands at <t:{eta}:t> (<t:{eta}:R>){note}. '
                     f'[Attack]({attack})')
-        return f'🛬 **{name}** is returning from **{dest_label}** — landing time unknown. [Attack]({attack})'
+        return f'🛬 {flag} **{name}** is returning from **{dest_label}** — landing time unknown. [Attack]({attack})'
 
     def _format_latest_line(self, torn_id: str) -> str:
-        """Line for a player spotted mid-flight at toggle-on time."""
+        """One row for the grouped Returning/Outbound lists (toggle-on baseline)."""
         p = self.players.get(torn_id, {})
         name = p.get('name', torn_id)
         phase = p.get('phase')
         dest = p.get('dest')
         eta = p.get('eta')
-        direction = f'→ {dest or "unknown destination"}' if phase == PHASE_OUT else f'← returning from {dest or "abroad"}'
+        flag = flag_for(dest)
+        preposition = 'to' if phase == PHASE_OUT else 'from'
+        dest_label = dest or 'unknown'
         if eta:
-            return f'**{name}** {direction} — lands at <t:{eta}:t> (<t:{eta}:R>)'
-        return f'**{name}** {direction} — ETA unknown'
+            return f'{flag} **{name}** {preposition} {dest_label} — lands <t:{eta}:t> (<t:{eta}:R>)'
+        return f'{flag} **{name}** {preposition} {dest_label} — ETA unknown'
 
     async def _post(self, content: str = None, embed: discord.Embed = None):
         """Post to the war-tracker channel."""
