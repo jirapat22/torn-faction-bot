@@ -141,6 +141,19 @@ def parse_phase(status: Dict, torn_id: str = '', name: str = '') -> Tuple[str, O
     desc_lower = f'{desc} {details}'.strip().lower()
 
     if state == 'Traveling':
+        # Confirmed live format: "Traveling from {origin} to {destination}"
+        # (origin is "Torn" outbound, destination is "Torn" on the way back)
+        for prefix in ('traveling from ', 'travelling from '):
+            if desc_lower.startswith(prefix):
+                rest = desc_lower[len(prefix):]
+                if ' to ' in rest:
+                    origin_raw, dest_raw = rest.split(' to ', 1)
+                    origin, dest = normalize_dest(origin_raw), normalize_dest(dest_raw)
+                    if origin and origin.lower() == 'torn':
+                        return PHASE_OUT, dest
+                    if dest and dest.lower() == 'torn':
+                        return PHASE_RETURNING, origin
+        # Older/alternate wordings, kept as a cheap secondary attempt
         for prefix in ('returning to torn from ', 'returning to torn city from '):
             if desc_lower.startswith(prefix):
                 return PHASE_RETURNING, normalize_dest(desc_lower[len(prefix):])

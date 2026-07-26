@@ -119,10 +119,14 @@ def test_flytrack_logic():
         PHASE_HOME, PHASE_OUT, PHASE_ABROAD, PHASE_RETURNING,
     )
 
-    # Status description → phase/destination
-    assert parse_phase({'state': 'Traveling', 'description': 'Traveling to Mexico'}) == (PHASE_OUT, 'Mexico')
+    # Status description → phase/destination. Confirmed live in production:
+    # Torn's real wording is "Traveling from {origin} to {destination}", not
+    # the "Traveling to X" this module originally assumed.
+    assert parse_phase({'state': 'Traveling', 'description': 'Traveling from Torn to Mexico'}) == (PHASE_OUT, 'Mexico')
+    assert parse_phase({'state': 'Traveling', 'description': 'Traveling from South Africa to Torn'}) == (PHASE_RETURNING, 'South Africa')
+    assert parse_phase({'state': 'Traveling', 'description': 'Traveling from Torn to UAE'}) == (PHASE_OUT, 'UAE')
+    # Legacy/alternate wordings kept as a secondary fallback attempt
     assert parse_phase({'state': 'Traveling', 'description': 'Returning to Torn from South Africa'}) == (PHASE_RETURNING, 'South Africa')
-    # Alternate return-leg wording must not read as an outbound flight
     assert parse_phase({'state': 'Traveling', 'description': 'Traveling to Torn'})[0] == PHASE_RETURNING
     assert parse_phase({'state': 'Abroad', 'description': 'In United Arab Emirates'}) == (PHASE_ABROAD, 'UAE')
     assert parse_phase({'state': 'Hospital', 'description': 'In a Swiss hospital for 2 mins'}) == (PHASE_ABROAD, 'Switzerland')
