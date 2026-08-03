@@ -1425,9 +1425,9 @@ class WarTracker:
         gives a multi-day notice window between declaration and start.
 
         DRY-RUN STAGE: only logs the raw payload and posts a plain notice embed.
-        Deliberately NOT wired up to auto-populate the enemy watchlist yet —
-        that comes after we've inspected a real declaration's data shape from
-        the logged payload.
+        Deliberately NOT wired up to auto-create an availability poll or
+        auto-populate the enemy watchlist yet — that comes after we've
+        inspected a real declaration's data shape from the logged payload.
         """
         rankedwars = await self._fetch_rankedwars()
         if not rankedwars:

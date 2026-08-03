@@ -28,6 +28,7 @@ MODULES = [
     'utils.torn_api',
     'features.commands',
     'features.alliance',
+    'features.availability',
     'features.chains',
     'features.enemies',
     'features.event_reminders',

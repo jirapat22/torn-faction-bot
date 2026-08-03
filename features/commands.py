@@ -169,7 +169,8 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
                     'name': 'Chain & War',
                     'value': (
                         '`/chain` - Chain status / report / board\n'
-                        '`/war` - War status / board / xan / history / trends'
+                        '`/war` - War status / board / xan / history / trends\n'
+                        '`/avail` - Availability polls (setup / summary / mine / list / delete)'
                     ),
                     'inline': False,
                 },
