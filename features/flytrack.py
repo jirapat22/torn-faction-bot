@@ -430,27 +430,42 @@ class FlyTracker:
         if not self.enabled or not self.enemy_faction_id:
             return
 
-        # Auto-stop when the war ends. Piggyback on war_tracker's own
-        # rigorous, raw-refetch-confirmed end detection (WarTracker.
-        # check_war_update, called every minute independently) instead of
-        # re-deriving a weaker signal here — a lone get_current_war() == None
-        # can just be a transient API hiccup, and trusting a short run of
-        # those on their own is what silently killed tracking mid-war before.
+        # Auto-stop when the war ends OR a different war has taken over.
+        # Piggyback on war_tracker's own rigorous, raw-refetch-confirmed end
+        # detection (WarTracker.check_war_update, called every minute
+        # independently) instead of re-deriving a weaker signal here — a
+        # lone get_current_war() == None can just be a transient API
+        # hiccup, and trusting a short run of those on their own is what
+        # silently killed tracking mid-war before.
         #
-        # was_war_active always resets to False on process start and only
-        # becomes True again once war_update_check completes its first tick
-        # post-restart. That loop and this one both fire around the same
-        # on_ready() moment with no ordering guarantee between them, so on
-        # every restart during an active war there's a window where this
-        # check could read that stale reset value before war_update_check
-        # has caught up. Requiring a few consecutive confirmations survives
-        # that window (war_update_check needs one Torn API call to recover,
-        # comfortably under a minute) without reopening the false-positive
-        # problem, since was_war_active itself is already hardened.
-        if self.war_tracker and not self.war_tracker.was_war_active:
+        # self.enemy_faction_id is fixed once at enable() and never
+        # re-derived, so if the tracked war ends and a genuinely different
+        # war starts (new opponent), nothing else here would ever notice —
+        # it would keep polling the old, no-longer-relevant faction's
+        # roster indefinitely. Cross-checking current_war_id catches that.
+        #
+        # Both was_war_active and current_war_id reset on process restart
+        # and only recover once war_update_check completes its first tick —
+        # that loop and this one fire around the same on_ready() moment
+        # with no ordering guarantee between them, so on every restart
+        # there's a window where either check could read a stale value
+        # before war_update_check has caught up. Requiring a few
+        # consecutive confirmations survives that window (war_update_check
+        # needs one Torn API call to recover, comfortably under a minute)
+        # without reopening the false-positive problem, since both signals
+        # are already hardened on war_tracker's side.
+        war_changed = self.war_tracker and (
+            not self.war_tracker.was_war_active
+            or str(self.war_tracker.current_war_id) != str(self.war_id)
+        )
+        if war_changed:
             self._war_end_strikes += 1
             if self._war_end_strikes >= WAR_END_STRIKES:
-                embed = await self.disable(reason='War ended')
+                if not self.war_tracker.was_war_active:
+                    reason = 'War ended'
+                else:
+                    reason = 'A different war is now active — re-toggle Fly tracking for it'
+                embed = await self.disable(reason=reason)
                 await self._post(embed=embed)
                 return
         else:
