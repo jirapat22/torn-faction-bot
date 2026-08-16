@@ -101,11 +101,6 @@ HOSPITAL_ADJECTIVES = {
     'south african': 'South Africa',
 }
 
-# Consecutive "no active war" reads required before auto-stop
-# (a single None can just be an API hiccup)
-WAR_END_STRIKES = 3
-
-
 def normalize_dest(raw: str) -> Optional[str]:
     """Map a destination string to its canonical name."""
     if not raw:
@@ -189,7 +184,6 @@ class FlyTracker:
         self.enemy_faction_name = ''
         self.players = {}  # {torn_id: {name, phase, dest, eta, leg_start, leg_observed}}
         self.tiers = {}    # {torn_id: {tier, name, observed_minutes, dest, ts}} — persists across wars
-        self._war_end_strikes = 0
 
     async def load_data(self):
         data = load_json(self.data_file, default={})
@@ -248,7 +242,6 @@ class FlyTracker:
         self.enemy_faction_id = enemy_id
         self.enemy_faction_name = enemy_name
         self.players = {}
-        self._war_end_strikes = 0
 
         # Baseline snapshot: record phases without alerting, so toggling on
         # mid-war doesn't spam a message per member.
@@ -331,7 +324,6 @@ class FlyTracker:
         self.enabled = False
         self.players = {}
         self.war_id = None
-        self._war_end_strikes = 0
         await self.save_data()
         logger.info(f'Fly tracking DISABLED ({reason})')
         return create_embed(
@@ -429,16 +421,17 @@ class FlyTracker:
         if not self.enabled or not self.enemy_faction_id:
             return
 
-        # Auto-stop when the war ends (tolerate transient API failures)
-        war_info = await self.war_tracker.get_current_war() if self.war_tracker else None
-        if war_info is None:
-            self._war_end_strikes += 1
-            if self._war_end_strikes >= WAR_END_STRIKES:
-                embed = await self.disable(reason='War ended')
-                await self._post(embed=embed)
-                return
-        else:
-            self._war_end_strikes = 0
+        # Auto-stop when the war ends. Piggyback on war_tracker's own
+        # rigorous, raw-refetch-confirmed end detection (WarTracker.
+        # check_war_update, called every minute independently) instead of
+        # re-deriving a weaker signal here. A lone get_current_war() == None
+        # can just be a transient API hiccup — trusting a short run of those
+        # on their own silently killed tracking mid-war in production, hours
+        # before the war actually ended, with no clear signal why.
+        if self.war_tracker and not self.war_tracker.was_war_active:
+            embed = await self.disable(reason='War ended')
+            await self._post(embed=embed)
+            return
 
         members = await self._fetch_enemy_members()
         if not members:

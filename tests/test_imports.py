@@ -441,6 +441,76 @@ def test_alliance_announces_old_war_end_on_new_war():
     assert mgr.active_wars['100']['war_id'] == 'new_war'
 
 
+def test_flytrack_autostop_trusts_war_tracker_not_raw_none():
+    """
+    Regression test for a real production incident: fly-tracking silently
+    disabled itself during a confirmed-still-active war, hours before it
+    actually ended, with no clear signal why. The old auto-stop counted
+    consecutive get_current_war() == None results on its own - a transient
+    API hiccup can produce that, which WarTracker's own war-end detection
+    already guards against (raw refetch + per-war end-timestamp check)
+    before ever flipping was_war_active. Auto-stop must now trust that
+    already-hardened flag instead of re-deriving a noisier signal.
+    """
+    import asyncio
+    from features.flytrack import FlyTracker
+
+    # Case 1: transient hiccup (get_current_war() -> None) while the war
+    # tracker's own confirmed state says the war is still active - must NOT
+    # disable.
+    class FlakyButActiveWarTracker:
+        was_war_active = True
+        async def get_current_war(self):
+            return None
+
+    mgr = FlyTracker(bot=None, war_tracker=FlakyButActiveWarTracker())
+    mgr.enabled = True
+    mgr.enemy_faction_id = '1'
+
+    async def fake_members_empty():
+        return {}
+    mgr._fetch_enemy_members = fake_members_empty
+
+    disabled = []
+    async def fake_disable(reason='Toggled off'):
+        disabled.append(reason)
+    mgr.disable = fake_disable
+
+    # Call several times in a row - the old code counted to 3 consecutive
+    # None results before disabling, so a single call wouldn't distinguish
+    # old vs. new behavior. The new code has no counter at all: it must
+    # stay enabled no matter how many hiccups occur, as long as the war
+    # tracker's own confirmed state says the war is still active.
+    for _ in range(5):
+        asyncio.run(mgr.check_flights())
+    assert disabled == [], 'repeated API hiccups must not auto-disable a genuinely active war'
+    assert mgr.enabled is True
+
+    # Case 2: war tracker has confirmed the war really ended - must disable.
+    class ConfirmedEndedWarTracker:
+        was_war_active = False
+        async def get_current_war(self):
+            return None
+
+    mgr2 = FlyTracker(bot=None, war_tracker=ConfirmedEndedWarTracker())
+    mgr2.enabled = True
+    mgr2.enemy_faction_id = '1'
+
+    disabled2 = []
+    async def fake_disable2(reason='Toggled off'):
+        disabled2.append(reason)
+        mgr2.enabled = False
+
+    async def fake_post2(content=None, embed=None):
+        pass
+
+    mgr2.disable = fake_disable2
+    mgr2._post = fake_post2
+
+    asyncio.run(mgr2.check_flights())
+    assert disabled2 == ['War ended']
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -453,6 +523,7 @@ if __name__ == '__main__':
     test_flytrack_fast_turnaround_detected()
     test_register_rejects_torn_discord_mismatch()
     test_register_allows_unlinked_torn_id()
+    test_flytrack_autostop_trusts_war_tracker_not_raw_none()
     test_chain_milestone_picks_highest_on_jump()
     test_alliance_announces_old_war_end_on_new_war()
     print('All smoke tests passed.')
