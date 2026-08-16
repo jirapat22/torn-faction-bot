@@ -101,6 +101,12 @@ HOSPITAL_ADJECTIVES = {
     'south african': 'South Africa',
 }
 
+# Consecutive "war_tracker says the war isn't active" reads required before
+# auto-stop — guards against reading war_tracker.was_war_active during its
+# post-restart warm-up window (see check_flights).
+WAR_END_STRIKES = 3
+
+
 def normalize_dest(raw: str) -> Optional[str]:
     """Map a destination string to its canonical name."""
     if not raw:
@@ -184,6 +190,7 @@ class FlyTracker:
         self.enemy_faction_name = ''
         self.players = {}  # {torn_id: {name, phase, dest, eta, leg_start, leg_observed}}
         self.tiers = {}    # {torn_id: {tier, name, observed_minutes, dest, ts}} — persists across wars
+        self._war_end_strikes = 0
 
     async def load_data(self):
         data = load_json(self.data_file, default={})
@@ -242,6 +249,7 @@ class FlyTracker:
         self.enemy_faction_id = enemy_id
         self.enemy_faction_name = enemy_name
         self.players = {}
+        self._war_end_strikes = 0
 
         # Baseline snapshot: record phases without alerting, so toggling on
         # mid-war doesn't spam a message per member.
@@ -324,6 +332,7 @@ class FlyTracker:
         self.enabled = False
         self.players = {}
         self.war_id = None
+        self._war_end_strikes = 0
         await self.save_data()
         logger.info(f'Fly tracking DISABLED ({reason})')
         return create_embed(
@@ -424,14 +433,28 @@ class FlyTracker:
         # Auto-stop when the war ends. Piggyback on war_tracker's own
         # rigorous, raw-refetch-confirmed end detection (WarTracker.
         # check_war_update, called every minute independently) instead of
-        # re-deriving a weaker signal here. A lone get_current_war() == None
-        # can just be a transient API hiccup — trusting a short run of those
-        # on their own silently killed tracking mid-war in production, hours
-        # before the war actually ended, with no clear signal why.
+        # re-deriving a weaker signal here — a lone get_current_war() == None
+        # can just be a transient API hiccup, and trusting a short run of
+        # those on their own is what silently killed tracking mid-war before.
+        #
+        # was_war_active always resets to False on process start and only
+        # becomes True again once war_update_check completes its first tick
+        # post-restart. That loop and this one both fire around the same
+        # on_ready() moment with no ordering guarantee between them, so on
+        # every restart during an active war there's a window where this
+        # check could read that stale reset value before war_update_check
+        # has caught up. Requiring a few consecutive confirmations survives
+        # that window (war_update_check needs one Torn API call to recover,
+        # comfortably under a minute) without reopening the false-positive
+        # problem, since was_war_active itself is already hardened.
         if self.war_tracker and not self.war_tracker.was_war_active:
-            embed = await self.disable(reason='War ended')
-            await self._post(embed=embed)
-            return
+            self._war_end_strikes += 1
+            if self._war_end_strikes >= WAR_END_STRIKES:
+                embed = await self.disable(reason='War ended')
+                await self._post(embed=embed)
+                return
+        else:
+            self._war_end_strikes = 0
 
         members = await self._fetch_enemy_members()
         if not members:

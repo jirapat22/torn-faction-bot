@@ -445,19 +445,17 @@ def test_flytrack_autostop_trusts_war_tracker_not_raw_none():
     """
     Regression test for a real production incident: fly-tracking silently
     disabled itself during a confirmed-still-active war, hours before it
-    actually ended, with no clear signal why. The old auto-stop counted
-    consecutive get_current_war() == None results on its own - a transient
-    API hiccup can produce that, which WarTracker's own war-end detection
-    already guards against (raw refetch + per-war end-timestamp check)
-    before ever flipping was_war_active. Auto-stop must now trust that
-    already-hardened flag instead of re-deriving a noisier signal.
+    actually ended, with no clear signal why. Root cause: the old auto-stop
+    counted consecutive get_current_war() == None results on its own - a
+    transient API hiccup can produce that, which WarTracker's own war-end
+    detection already guards against (raw refetch + per-war end-timestamp
+    check) before ever flipping was_war_active.
     """
     import asyncio
-    from features.flytrack import FlyTracker
+    from features.flytrack import FlyTracker, WAR_END_STRIKES
 
-    # Case 1: transient hiccup (get_current_war() -> None) while the war
-    # tracker's own confirmed state says the war is still active - must NOT
-    # disable.
+    # Case 1: transient hiccups while the war tracker's own confirmed state
+    # says the war is still active - must never disable, no matter how many.
     class FlakyButActiveWarTracker:
         was_war_active = True
         async def get_current_war(self):
@@ -476,17 +474,14 @@ def test_flytrack_autostop_trusts_war_tracker_not_raw_none():
         disabled.append(reason)
     mgr.disable = fake_disable
 
-    # Call several times in a row - the old code counted to 3 consecutive
-    # None results before disabling, so a single call wouldn't distinguish
-    # old vs. new behavior. The new code has no counter at all: it must
-    # stay enabled no matter how many hiccups occur, as long as the war
-    # tracker's own confirmed state says the war is still active.
     for _ in range(5):
         asyncio.run(mgr.check_flights())
     assert disabled == [], 'repeated API hiccups must not auto-disable a genuinely active war'
     assert mgr.enabled is True
 
-    # Case 2: war tracker has confirmed the war really ended - must disable.
+    # Case 2: war tracker confirms the war really ended, consistently across
+    # several ticks - must disable, but only once the strike threshold is met
+    # (a single confirmation isn't enough - see Case 3 for why).
     class ConfirmedEndedWarTracker:
         was_war_active = False
         async def get_current_war(self):
@@ -495,6 +490,10 @@ def test_flytrack_autostop_trusts_war_tracker_not_raw_none():
     mgr2 = FlyTracker(bot=None, war_tracker=ConfirmedEndedWarTracker())
     mgr2.enabled = True
     mgr2.enemy_faction_id = '1'
+
+    async def fake_members_empty2():
+        return {}
+    mgr2._fetch_enemy_members = fake_members_empty2  # ticks before the threshold fall through to here
 
     disabled2 = []
     async def fake_disable2(reason='Toggled off'):
@@ -507,8 +506,47 @@ def test_flytrack_autostop_trusts_war_tracker_not_raw_none():
     mgr2.disable = fake_disable2
     mgr2._post = fake_post2
 
+    for i in range(WAR_END_STRIKES - 1):
+        asyncio.run(mgr2.check_flights())
+        assert disabled2 == [], f'must not disable before {WAR_END_STRIKES} confirmations (tick {i + 1})'
     asyncio.run(mgr2.check_flights())
     assert disabled2 == ['War ended']
+
+    # Case 3: the actual restart-race this threshold exists for. was_war_active
+    # always resets to False when WarTracker is freshly constructed (process
+    # restart) and only becomes True again after war_update_check's first
+    # tick - which may not have run yet when fly_check's own first tick
+    # fires. A war that's genuinely still active must survive a couple of
+    # early reads of that not-yet-warmed-up flag.
+    class RestartingWarTracker:
+        def __init__(self):
+            self.was_war_active = False  # fresh process state, war_update_check hasn't run yet
+        async def get_current_war(self):
+            return {'war_id': '1'}
+
+    wt = RestartingWarTracker()
+    mgr3 = FlyTracker(bot=None, war_tracker=wt)
+    mgr3.enabled = True  # resumed from disk: was tracking before the restart
+    mgr3.enemy_faction_id = '1'
+
+    async def fake_members_empty3():
+        return {}
+    mgr3._fetch_enemy_members = fake_members_empty3
+
+    disabled3 = []
+    async def fake_disable3(reason='Toggled off'):
+        disabled3.append(reason)
+    mgr3.disable = fake_disable3
+
+    # First tick(s) race ahead of war_update_check and see was_war_active
+    # still False - must not disable yet.
+    asyncio.run(mgr3.check_flights())
+    assert disabled3 == [], 'must tolerate the post-restart warm-up window'
+
+    # war_update_check catches up and confirms the war is genuinely active.
+    wt.was_war_active = True
+    asyncio.run(mgr3.check_flights())
+    assert disabled3 == [], 'must recover once the war tracker catches up, not stay committed to disabling'
 
 
 if __name__ == '__main__':
