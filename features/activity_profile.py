@@ -30,6 +30,16 @@ CHUNK_THRESHOLD = 0.30        # hour counts as "typically active" at >=30% of sa
 MAX_CHUNKS = 5                # cap on distinct active windows shown per member
 COVERAGE_WINDOW_HOURS = 3     # width of the sliding window for best/quiet faction-wide
 
+# Applied once per elapsed calendar day per member, so recent weeks outweigh
+# months-old samples instead of every sample carrying equal weight forever
+# (~34-day half-life at 0.98/day).
+DECAY_FACTOR = 0.98
+# Drop a member's profile once they've been absent from the faction fetch for
+# this many days straight — avoids stale ex-members quietly skewing Coverage
+# and cluttering the roster view forever. A grace period (not "first miss")
+# so one API hiccup doesn't wipe real history.
+PRUNE_AFTER_DAYS = 7
+
 
 def _hour_probabilities(profile: dict) -> Optional[dict]:
     """{hour:int -> probability:float} for one profile dict, or None if empty."""
@@ -159,9 +169,14 @@ class ActivityProfileManager:
             is_active = status_desc in ACTIVE_STATUSES or recently_active
 
             profile = self.profiles.setdefault(torn_id, {
-                'name': name, 'first_seen': date_key, 'hours': {}, 'days': [], 'last_updated': 0
+                'name': name, 'first_seen': date_key, 'hours': {}, 'days': [],
+                'last_updated': 0, 'last_decay_date': date_key, 'last_seen_in_faction': date_key,
             })
             profile['name'] = name
+            # Every torn_id here is in the current faction fetch, so it's seen today.
+            profile['last_seen_in_faction'] = date_key
+
+            self._apply_decay(profile, now.date(), date_key)
 
             hours = profile['hours']
             active_count, total_count = hours.get(hour_key, [0, 0])
@@ -180,8 +195,47 @@ class ActivityProfileManager:
 
             profile['last_updated'] = now_ts
 
+        self._prune_stale_profiles(now.date())
+
         await self.save_data()
         logger.info(f'Activity profile: recorded snapshot for {len(faction_members)} members')
+
+    @staticmethod
+    def _apply_decay(profile: dict, today: 'datetime.date', date_key: str):
+        """
+        Shrink a profile's hour counters once per elapsed calendar day (compounding
+        across any gap), so old samples gradually matter less than recent ones.
+        No-op if already decayed today.
+        """
+        last_decay_str = profile.get('last_decay_date', date_key)
+        last_decay_date = datetime.strptime(last_decay_str, '%Y-%m-%d').date()
+        days_elapsed = (today - last_decay_date).days
+        if days_elapsed < 1:
+            return
+
+        factor = DECAY_FACTOR ** days_elapsed
+        hours = profile['hours']
+        for hk, (active, total) in list(hours.items()):
+            new_total = round(total * factor)
+            new_active = min(round(active * factor), new_total)
+            hours[hk] = [new_active, new_total]
+        profile['last_decay_date'] = date_key
+
+    def _prune_stale_profiles(self, today: 'datetime.date'):
+        """Drop profiles for members absent from the faction fetch for PRUNE_AFTER_DAYS+."""
+        stale_ids = []
+        for torn_id, profile in self.profiles.items():
+            last_seen_str = profile.get('last_seen_in_faction')
+            if not last_seen_str:
+                continue  # no staleness info yet (legacy entry) — leave it alone
+            last_seen_date = datetime.strptime(last_seen_str, '%Y-%m-%d').date()
+            if (today - last_seen_date).days > PRUNE_AFTER_DAYS:
+                stale_ids.append(torn_id)
+
+        for torn_id in stale_ids:
+            name = self.profiles[torn_id].get('name', torn_id)
+            logger.info(f'Activity profile: pruning {name} ({torn_id}) — absent from faction {PRUNE_AFTER_DAYS}+ days')
+            del self.profiles[torn_id]
 
     def has_enough_data(self, torn_id: str) -> bool:
         return _total_samples(self.profiles.get(torn_id)) >= MIN_SAMPLES_FOR_PROFILE

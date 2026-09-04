@@ -724,6 +724,86 @@ def test_activity_profile_record_snapshot():
     assert mgr.profiles['100']['hours']['14'] == [2, 2]
 
 
+def test_activity_profile_decay():
+    """
+    Regression test for an audit finding: hour counters accumulated forever
+    with no decay, so a member's activity from months ago carried the same
+    weight as yesterday's — directly undermining the "notice a member's
+    pattern shrinking" use case. Counters must now shrink day-over-day.
+    """
+    import asyncio
+    from datetime import datetime, timezone
+    from features.activity_profile import ActivityProfileManager, DECAY_FACTOR
+
+    mgr = ActivityProfileManager(bot=None)
+
+    async def fake_save():
+        pass
+    mgr.save_data = fake_save
+
+    mgr.profiles['100'] = {
+        'name': 'Dan', 'first_seen': '2025-01-01', 'last_decay_date': '2025-01-01',
+        'last_seen_in_faction': '2025-01-01',
+        'hours': {'10': [50, 100]}, 'days': [], 'last_updated': 0,
+    }
+
+    now = datetime(2025, 1, 11, 10, 0, tzinfo=timezone.utc)  # 10 days later, same hour
+    faction_members = {'100': {'name': 'Dan', 'last_action': {'status': 'Offline', 'timestamp': 0}}}
+    asyncio.run(mgr.record_snapshot(faction_members, now=now))
+
+    active, total = mgr.profiles['100']['hours']['10']
+    expected_total = round(100 * DECAY_FACTOR ** 10)
+    expected_active = min(round(50 * DECAY_FACTOR ** 10), expected_total)
+    # +1 new sample this tick (offline -> total grows, active doesn't)
+    assert total == expected_total + 1
+    assert active == expected_active
+    assert total < 100 + 1  # actually shrank, not just kept accumulating raw
+    assert mgr.profiles['100']['last_decay_date'] == '2025-01-11'
+
+    # Same-day second call must not double-decay
+    asyncio.run(mgr.record_snapshot(faction_members, now=now))
+    active2, total2 = mgr.profiles['100']['hours']['10']
+    assert total2 == total + 1  # only the new sample added, no extra decay
+
+
+def test_activity_profile_pruning():
+    """
+    Regression test for an audit finding: profiles were never removed when a
+    member left the faction, so Coverage/Activity would silently include
+    ex-members forever. Absence past the grace period must prune; a shorter
+    absence must not (guards against a single API hiccup wiping real history).
+    """
+    import asyncio
+    from datetime import datetime, timezone, timedelta
+    from features.activity_profile import ActivityProfileManager, PRUNE_AFTER_DAYS
+
+    mgr = ActivityProfileManager(bot=None)
+
+    async def fake_save():
+        pass
+    mgr.save_data = fake_save
+
+    now = datetime(2025, 3, 1, 12, 0, tzinfo=timezone.utc)
+    stale_date = (now.date() - timedelta(days=PRUNE_AFTER_DAYS + 1)).strftime('%Y-%m-%d')
+    recent_date = (now.date() - timedelta(days=PRUNE_AFTER_DAYS - 1)).strftime('%Y-%m-%d')
+
+    mgr.profiles['999'] = {
+        'name': 'Gone', 'first_seen': '2024-01-01', 'last_decay_date': stale_date,
+        'last_seen_in_faction': stale_date, 'hours': {'10': [5, 10]}, 'days': [], 'last_updated': 0,
+    }
+    mgr.profiles['888'] = {
+        'name': 'Recent', 'first_seen': '2024-01-01', 'last_decay_date': recent_date,
+        'last_seen_in_faction': recent_date, 'hours': {'10': [5, 10]}, 'days': [], 'last_updated': 0,
+    }
+
+    faction_members = {'1': {'name': 'Active', 'last_action': {'status': 'Online', 'timestamp': now.timestamp()}}}
+    asyncio.run(mgr.record_snapshot(faction_members, now=now))
+
+    assert '999' not in mgr.profiles  # absent long past the grace period -> pruned
+    assert '888' in mgr.profiles      # still within the grace period -> kept
+    assert '1' in mgr.profiles        # currently in the faction -> recorded normally
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -742,4 +822,6 @@ if __name__ == '__main__':
     test_activity_profile_chunk_detection()
     test_activity_profile_manager_queries()
     test_activity_profile_record_snapshot()
+    test_activity_profile_decay()
+    test_activity_profile_pruning()
     print('All smoke tests passed.')
