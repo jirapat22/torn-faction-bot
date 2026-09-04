@@ -135,10 +135,15 @@ class RoleSyncManager:
             logger.error(f'Error syncing role for {discord_member.name}: {e}')
             return False
 
-    async def sync_all_members(self):
+    async def sync_all_members(self, faction_members: dict = None):
         """
         Sync roles for all faction members
         Called by background task
+
+        Args:
+            faction_members: Pre-fetched {torn_id: member_data}, to avoid a
+                              second Torn API call when the caller already
+                              fetched it this tick. Fetches internally if omitted.
         """
         if not self.config.get('enabled', True):
             return
@@ -151,8 +156,9 @@ class RoleSyncManager:
             logger.warning('Role sync: Could not find guild')
             return
 
-        # Fetch faction members from Torn
-        faction_members = await fetch_faction_members()
+        # Fetch faction members from Torn (unless the caller already has them)
+        if faction_members is None:
+            faction_members = await fetch_faction_members()
         if not faction_members:
             logger.warning('Role sync: Could not fetch faction members')
             return

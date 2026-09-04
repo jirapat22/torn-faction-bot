@@ -590,6 +590,140 @@ def test_flytrack_autostop_trusts_war_tracker_not_raw_none():
     assert disabled4 == ['A different war is now active — re-toggle Fly tracking for it']
 
 
+def test_activity_profile_chunk_detection():
+    """Pure hour-probability-curve -> active-window chunking, including
+    midnight wraparound and the 5-chunk cap."""
+    from features.activity_profile import find_active_chunks, best_and_quiet_windows
+
+    # Two separate daily bursts (e.g. a quick morning check-in, then evening play)
+    probs = {h: 0.0 for h in range(24)}
+    for h in (8, 9):
+        probs[h] = 0.8
+    for h in (18, 19, 20, 21, 22):
+        probs[h] = 0.9
+    chunks = find_active_chunks(probs, threshold=0.3, max_chunks=5)
+    assert chunks == [(8, 10, 0.8), (18, 23, 0.9)]
+
+    # A single window straddling midnight must not get split at the array boundary
+    probs_wrap = {h: 0.0 for h in range(24)}
+    for h in (22, 23, 0, 1):
+        probs_wrap[h] = 0.7
+    assert find_active_chunks(probs_wrap, threshold=0.3, max_chunks=5) == [(22, 2, 0.7)]
+
+    # Nothing clears the threshold -> no pattern, not a false window
+    assert find_active_chunks({h: 0.1 for h in range(24)}, threshold=0.3, max_chunks=5) == []
+
+    # Always active -> one all-day window, not 24 tiny ones
+    assert find_active_chunks({h: 0.9 for h in range(24)}, threshold=0.3, max_chunks=5) == [(0, 24, 0.9)]
+
+    # 6 separate single-hour bursts, capped at 5 -> weakest dropped, rest kept in start order
+    probs_many = {h: 0.0 for h in range(24)}
+    strengths = {1: 0.9, 4: 0.8, 7: 0.7, 10: 0.6, 13: 0.5, 16: 0.4}
+    for h, p in strengths.items():
+        probs_many[h] = p
+    capped = find_active_chunks(probs_many, threshold=0.3, max_chunks=5)
+    assert len(capped) == 5
+    assert (16, 17, 0.4) not in capped  # weakest of the 6 dropped
+    assert [c[0] for c in capped] == sorted(c[0] for c in capped)  # sorted by start hour
+
+    # Faction-wide best/quiet sliding window
+    probs_cov = {h: 0.5 for h in range(24)}
+    for h in (20, 21, 22):
+        probs_cov[h] = 0.9
+    for h in (3, 4, 5):
+        probs_cov[h] = 0.1
+    best, quiet = best_and_quiet_windows(probs_cov, window_hours=3)
+    assert (best[0], best[1]) == (20, 23) and abs(best[2] - 0.9) < 1e-9
+    assert (quiet[0], quiet[1]) == (3, 6) and abs(quiet[2] - 0.1) < 1e-9
+
+
+def test_activity_profile_manager_queries():
+    """Manager-level queries: warm-up gating, roster summary, and coverage
+    aggregation correctly exclude members without enough tracked history."""
+    from features.activity_profile import ActivityProfileManager, best_and_quiet_windows
+    from datetime import datetime, timezone, timedelta
+
+    mgr = ActivityProfileManager(bot=None)
+    today = datetime.now(timezone.utc).date()
+
+    alice_probs = {h: (0.8 if h in (8, 9) else (0.9 if 18 <= h <= 22 else 0.0)) for h in range(24)}
+    days_list = [(today - timedelta(days=d)).strftime('%Y-%m-%d') for d in range(7) if d != 3]
+    mgr.profiles['1'] = {
+        'name': 'Alice',
+        'first_seen': (today - timedelta(days=6)).strftime('%Y-%m-%d'),
+        'hours': {str(h): [round(alice_probs[h] * 10), 10] for h in range(24)},
+        'days': days_list,
+        'last_updated': 0,
+    }
+    # Barely any samples yet -> must not be treated as ready
+    mgr.profiles['2'] = {
+        'name': 'Bob', 'first_seen': today.strftime('%Y-%m-%d'),
+        'hours': {'12': [1, 2]}, 'days': [], 'last_updated': 0,
+    }
+    # Plenty of samples, but no hour ever clears the threshold -> scattered, no pattern
+    cara_probs = {h: 0.1 for h in range(24)}
+    mgr.profiles['3'] = {
+        'name': 'Cara', 'first_seen': today.strftime('%Y-%m-%d'),
+        'hours': {str(h): [1, 10] for h in range(24)}, 'days': [], 'last_updated': 0,
+    }
+
+    assert mgr.has_enough_data('1') is True
+    assert mgr.has_enough_data('2') is False
+    assert mgr.has_enough_data('3') is True
+
+    assert mgr.get_active_windows('1') == [(8, 10, 0.8), (18, 23, 0.9)]
+    assert mgr.get_active_windows('3') == []
+
+    active, tracked = mgr.get_consistency('1')
+    assert (active, tracked) == (6, 7)
+
+    ready, warming_up = mgr.get_roster_summary()
+    assert ready == [('1', 'Alice', (18, 23, 0.9))]  # Alice's strongest window
+    assert warming_up == ['Bob', 'Cara']
+
+    # Coverage must average only Alice + Cara (Bob excluded for insufficient data)
+    expected_agg = {h: (alice_probs[h] + cara_probs[h]) / 2 for h in range(24)}
+    expected_best, expected_quiet = best_and_quiet_windows(expected_agg)
+    best, quiet, member_count = mgr.get_coverage()
+    assert member_count == 2
+    assert best == expected_best
+    assert quiet == expected_quiet
+
+
+def test_activity_profile_record_snapshot():
+    """record_snapshot correctly classifies Online/Idle/recent-offline as
+    active, ignores stale offline, and accumulates counts across calls."""
+    import asyncio
+    import time
+    from datetime import datetime, timezone
+    from features.activity_profile import ActivityProfileManager
+
+    mgr = ActivityProfileManager(bot=None)
+
+    async def fake_save():
+        pass
+    mgr.save_data = fake_save
+
+    now = datetime(2025, 6, 15, 14, 30, tzinfo=timezone.utc)
+    now_ts = now.timestamp()
+    faction_members = {
+        '100': {'name': 'Dan', 'last_action': {'status': 'Online', 'timestamp': now_ts}},
+        '200': {'name': 'Eve', 'last_action': {'status': 'Offline', 'timestamp': now_ts - 30 * 60}},  # recent
+        '300': {'name': 'Fay', 'last_action': {'status': 'Offline', 'timestamp': now_ts - 120 * 60}},  # stale
+    }
+    asyncio.run(mgr.record_snapshot(faction_members, now=now))
+
+    assert mgr.profiles['100']['hours']['14'] == [1, 1]  # Online -> active
+    assert mgr.profiles['200']['hours']['14'] == [1, 1]  # recently offline -> still active
+    assert mgr.profiles['300']['hours']['14'] == [0, 1]  # stale offline -> inactive
+    assert mgr.profiles['100']['days'] == ['2025-06-15']
+    assert mgr.profiles['300']['days'] == []  # never counted active -> no day recorded
+
+    # A second snapshot the same hour accumulates rather than overwrites
+    asyncio.run(mgr.record_snapshot(faction_members, now=now))
+    assert mgr.profiles['100']['hours']['14'] == [2, 2]
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -605,4 +739,7 @@ if __name__ == '__main__':
     test_flytrack_autostop_trusts_war_tracker_not_raw_none()
     test_chain_milestone_picks_highest_on_jump()
     test_alliance_announces_old_war_end_on_new_war()
+    test_activity_profile_chunk_detection()
+    test_activity_profile_manager_queries()
+    test_activity_profile_record_snapshot()
     print('All smoke tests passed.')

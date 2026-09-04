@@ -18,7 +18,7 @@ on Railway.
 | `enemy_status_check` | 15m | Enemy watchlist status (during war) |
 | `stakeout_check` | 15m | Enemy behavior/sleep-pattern tracking |
 | `alliance_war_check` | 5m | Ally-faction war alerts |
-| `role_sync_check` | 1h | Sync Discord roles to Torn faction positions |
+| `role_sync_check` | 1h | Sync Discord roles to Torn faction positions; also records an activity-profile snapshot (when/how often each member is typically online) from the same faction fetch |
 | `fly_check` | 60s | Enemy flight tracking during war (while toggled on) |
 | `poll_end_check` | 1m | Auto-close availability polls and post results |
 | `loop_watchdog` | 5m | Restart any loop that stopped |
@@ -30,7 +30,7 @@ on Railway.
 - `/myactivity`, `/status`, `/ping`, `/version`, `/help`
 - `/chain` — chain status / report / board
 - `/war` — status / board / xan calc / history / trends / fly (enemy flight tracking with landing ETAs)
-- `/avail` — availability polls (setup ⚙ / summary / mine / list / delete ⚙); `/tct_now` — current Torn time
+- `/avail` — availability polls (setup ⚙ / summary / mine / list / delete ⚙), plus coverage ⚙ (best time to schedule + quiet hours) and activity ⚙ (who's typically online when, roster-wide or per member); `/tct_now` — current Torn time
 - `/enemy` ⚙ — war enemy watchlist
 - `/stakeout` ⚙ — enemy behavior tracking
 - `/alliance` ⚙ — ally faction war tracking

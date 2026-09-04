@@ -22,6 +22,7 @@ from features.chains import ChainTracker
 from features.wars import WarTracker
 from features.verification import VerificationSystem, setup_verification_commands
 from features.roles import RoleSyncManager, setup_rolesync_commands
+from features.activity_profile import ActivityProfileManager
 from features.enemies import EnemyWatchlist, setup_enemy_commands
 from features.availability import AvailabilityManager, setup_availability_commands, restore_availability_views
 from features.event_reminders import EventReminderManager
@@ -79,6 +80,7 @@ chain_tracker = None
 war_tracker = None
 verification_system = None
 role_sync_manager = None
+activity_profile_manager = None
 enemy_watchlist = None
 availability_manager = None
 event_reminder_manager = None
@@ -141,7 +143,7 @@ async def _start_healthcheck_server():
 async def on_ready():
     """Called when the bot successfully connects to Discord"""
     global inactivity_tracker, chain_tracker, war_tracker, verification_system
-    global role_sync_manager, enemy_watchlist, availability_manager
+    global role_sync_manager, activity_profile_manager, enemy_watchlist, availability_manager
     global event_reminder_manager, stakeout_manager, alliance_manager, fly_tracker, _initialized
 
     try:
@@ -205,6 +207,11 @@ async def on_ready():
         await role_sync_manager.load_config()
         await setup_rolesync_commands(bot, role_sync_manager)
 
+        # Initialize activity profile manager (tracks typical online hours per
+        # member, fed by the same hourly faction fetch role sync already makes)
+        activity_profile_manager = ActivityProfileManager(bot)
+        await activity_profile_manager.load_data()
+
         # Initialize enemy watchlist — builds the /enemy command group
         # (stakeout attaches to it below; added to the tree once, after)
         enemy_watchlist = EnemyWatchlist(bot)
@@ -218,7 +225,8 @@ async def on_ready():
         from config import VERIFIED_ROLE_NAME
         availability_manager = AvailabilityManager(bot)
         await availability_manager.load_data()
-        await setup_availability_commands(bot, availability_manager, VERIFIED_ROLE_NAME)
+        await setup_availability_commands(bot, availability_manager, VERIFIED_ROLE_NAME,
+                                           activity_profile_manager=activity_profile_manager)
         await restore_availability_views(bot, availability_manager, VERIFIED_ROLE_NAME)
 
         # Initialize event reminder manager (35-hour advance reminders)
@@ -401,10 +409,22 @@ async def before_war_check():
 
 @tasks.loop(hours=1)
 async def role_sync_check():
-    """Background task that runs every hour to sync roles"""
+    """
+    Background task that runs every hour to sync roles, and to record an
+    activity-profile snapshot from the same faction fetch (avoids a second
+    Torn API call for the activity profile feature).
+    """
     try:
+        faction_members = None
+        if (role_sync_manager and role_sync_manager.config.get('enabled', True)
+                and role_sync_manager.position_roles) or activity_profile_manager:
+            from utils.torn_api import fetch_faction_members
+            faction_members = await fetch_faction_members()
+
         if role_sync_manager:
-            await role_sync_manager.sync_all_members()
+            await role_sync_manager.sync_all_members(faction_members=faction_members)
+        if activity_profile_manager and faction_members:
+            await activity_profile_manager.record_snapshot(faction_members)
     except Exception as e:
         logger.error(f'Error in role sync check: {e}')
 

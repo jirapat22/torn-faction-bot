@@ -18,6 +18,7 @@ from discord import app_commands
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict
 from utils.helpers import load_json, save_json, create_embed, is_management
+from features.activity_profile import format_window
 from config import (
     EMBED_COLOR_INFO,
     EMBED_COLOR_SUCCESS,
@@ -613,13 +614,14 @@ class AvailabilityButton(discord.ui.Button):
                 )
 
 
-async def setup_availability_commands(bot, manager: AvailabilityManager, verified_role_name: str):
+async def setup_availability_commands(bot, manager: AvailabilityManager, verified_role_name: str,
+                                       activity_profile_manager=None):
     """Register availability slash commands"""
 
     # ===== /avail command (unified) =====
     @bot.tree.command(
         name='avail',
-        description='Availability polls: create, view summary, check yours, list, or delete'
+        description='Availability polls: create, view summary, check yours, list, delete, or activity data'
     )
     @app_commands.describe(
         action='What to do',
@@ -628,7 +630,8 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
         end_time='[Setup] End time in TCT/UTC (HH:MM, e.g., 24:00)',
         end_date='[Setup] End date if multi-day (DD-MM-YYYY) — leave empty for same day',
         block_length='[Setup] Hours per time block (1-6, default: 2)',
-        poll_duration='[Setup] Hours until poll closes (default: 24)'
+        poll_duration='[Setup] Hours until poll closes (default: 24)',
+        member='[Activity] Check one member instead of the whole roster'
     )
     @app_commands.choices(action=[
         app_commands.Choice(name='Setup - Create availability poll (Management)', value='setup'),
@@ -636,6 +639,8 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
         app_commands.Choice(name='Mine - Check your selections', value='mine'),
         app_commands.Choice(name='List - Show all active polls', value='list'),
         app_commands.Choice(name='Delete - Remove a poll (Management)', value='delete'),
+        app_commands.Choice(name='Coverage - Best time to schedule & quiet hours (Management)', value='coverage'),
+        app_commands.Choice(name='Activity - Who is typically online when (Management)', value='activity'),
     ])
     async def avail(
         interaction: discord.Interaction,
@@ -645,7 +650,8 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
         end_time: Optional[str] = None,
         end_date: Optional[str] = None,
         block_length: int = 2,
-        poll_duration: int = 24
+        poll_duration: int = 24,
+        member: Optional[discord.Member] = None
     ):
         """Unified availability command"""
         action_value = action.value
@@ -989,6 +995,137 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
                                    description=f"Availability poll for {poll['start_date']} to {poll['end_date']} has been deleted.",
                                    color=EMBED_COLOR_SUCCESS),
                 ephemeral=True)
+
+        # ── Coverage ──
+        elif action_value == 'coverage':
+            if not is_management(interaction):
+                await interaction.response.send_message(
+                    embed=create_embed(title='Permission Denied',
+                                       description='You need Management permissions to view coverage.',
+                                       color=EMBED_COLOR_CRITICAL),
+                    ephemeral=True)
+                return
+
+            if not activity_profile_manager:
+                await interaction.response.send_message('Activity profile tracking is not available.', ephemeral=True)
+                return
+
+            result = activity_profile_manager.get_coverage()
+            if not result:
+                await interaction.response.send_message(
+                    embed=create_embed(title='Not Enough Data Yet',
+                                       description='Activity profiles need a couple days of history before '
+                                                    'Coverage can show anything useful. Check back soon.',
+                                       color=EMBED_COLOR_INFO),
+                    ephemeral=True)
+                return
+
+            best, quiet, member_count = result
+            best_start, best_end, best_avg = best
+            quiet_start, quiet_end, quiet_avg = quiet
+            best_count = round(best_avg * member_count)
+            quiet_count = round(quiet_avg * member_count)
+
+            embed = create_embed(
+                title='📊 Faction Coverage',
+                description=(
+                    f'Based on {member_count} member(s) with enough tracked history.\n\n'
+                    f'**Best overlap window:** {format_window(best_start, best_end)} UTC — '
+                    f'~{best_count}/{member_count} usually active\n'
+                    f'**Quietest window:** {format_window(quiet_start, quiet_end)} UTC — '
+                    f'~{quiet_count}/{member_count} usually active'
+                ),
+                color=EMBED_COLOR_INFO
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+
+        # ── Activity ──
+        elif action_value == 'activity':
+            if not is_management(interaction):
+                await interaction.response.send_message(
+                    embed=create_embed(title='Permission Denied',
+                                       description='You need Management permissions to view activity data.',
+                                       color=EMBED_COLOR_CRITICAL),
+                    ephemeral=True)
+                return
+
+            if not activity_profile_manager:
+                await interaction.response.send_message('Activity profile tracking is not available.', ephemeral=True)
+                return
+
+            if member is not None:
+                verified_users = load_json('data/verified_users.json', default={})
+                inactivity_users = load_json('data/discord_to_torn.json', default={})
+
+                torn_id = None
+                udata = verified_users.get(str(member.id))
+                if udata and udata.get('torn_id'):
+                    torn_id = str(udata['torn_id'])
+                elif str(member.id) in inactivity_users:
+                    torn_id = str(inactivity_users[str(member.id)])
+
+                if not torn_id or torn_id not in activity_profile_manager.profiles:
+                    await interaction.response.send_message(
+                        embed=create_embed(title='No Data',
+                                           description=f'No activity data for {member.mention} yet.',
+                                           color=EMBED_COLOR_INFO),
+                        ephemeral=True)
+                    return
+
+                if not activity_profile_manager.has_enough_data(torn_id):
+                    await interaction.response.send_message(
+                        embed=create_embed(title='Not Enough Data Yet',
+                                           description=f'{member.mention} needs a couple more days of '
+                                                        f'tracked activity first.',
+                                           color=EMBED_COLOR_INFO),
+                        ephemeral=True)
+                    return
+
+                chunks = activity_profile_manager.get_active_windows(torn_id)
+                consistency = activity_profile_manager.get_consistency(torn_id)
+                name = activity_profile_manager.profiles[torn_id].get('name', member.display_name)
+
+                if not chunks:
+                    windows_text = 'No clear pattern yet — activity looks scattered across the day.'
+                else:
+                    windows_text = '\n'.join(
+                        f'• {format_window(s, e)} UTC (~{round(p * 100)}% of days)' for s, e, p in chunks
+                    )
+
+                consistency_text = ''
+                if consistency and consistency[1] > 0:
+                    active, tracked = consistency
+                    consistency_text = f'\n\nActive {active}/{tracked} of the last {tracked} tracked day(s).'
+
+                embed = create_embed(
+                    title=f'🕒 Activity — {name}',
+                    description=f'**Typical active windows (UTC):**\n{windows_text}{consistency_text}',
+                    color=EMBED_COLOR_INFO
+                )
+                await interaction.response.send_message(embed=embed, ephemeral=True)
+                return
+
+            ready, warming_up = activity_profile_manager.get_roster_summary()
+            if not ready and not warming_up:
+                await interaction.response.send_message(
+                    embed=create_embed(title='No Data Yet',
+                                       description='Activity tracking just started — check back in a couple of days.',
+                                       color=EMBED_COLOR_INFO),
+                    ephemeral=True)
+                return
+
+            lines = [f'**{name}** — usually active {format_window(s, e)} UTC'
+                     for _tid, name, (s, e, _p) in ready]
+            description = '\n'.join(lines) if lines else 'No members have enough data yet.'
+            if warming_up:
+                description += f'\n\n*Still building a profile: {", ".join(warming_up)}*'
+
+            embed = create_embed(
+                title='🕒 Faction Activity',
+                description=description,
+                color=EMBED_COLOR_INFO
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
 
     # ===== /tct_now command =====
     @bot.tree.command(
