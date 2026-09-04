@@ -766,6 +766,48 @@ def test_activity_profile_decay():
     assert total2 == total + 1  # only the new sample added, no extra decay
 
 
+def test_activity_profile_decay_backfills_legacy_baseline():
+    """
+    Regression test for a bug in the decay fix itself: profiles written before
+    decay existed have no 'last_decay_date'. The original fallback read that
+    key defaulting to *today*, recomputed every call, so days_elapsed was
+    permanently 0 and the early return never wrote a baseline back — leaving
+    those profiles exempt from decay forever. A baseline must get stamped on
+    first sight, so decay actually kicks in from the next day onward.
+    """
+    import asyncio
+    from datetime import datetime, timezone
+    from features.activity_profile import ActivityProfileManager, DECAY_FACTOR
+
+    mgr = ActivityProfileManager(bot=None)
+
+    async def fake_save():
+        pass
+    mgr.save_data = fake_save
+
+    # Legacy shape: no 'last_decay_date' / 'last_seen_in_faction' keys at all
+    mgr.profiles['100'] = {
+        'name': 'Dan', 'first_seen': '2025-01-01',
+        'hours': {'10': [50, 100]}, 'days': [], 'last_updated': 0,
+    }
+
+    day1 = datetime(2025, 5, 1, 10, 0, tzinfo=timezone.utc)
+    faction_members = {'100': {'name': 'Dan', 'last_action': {'status': 'Offline', 'timestamp': 0}}}
+    asyncio.run(mgr.record_snapshot(faction_members, now=day1))
+
+    # First sight: no decay applied (unknown how stale), but a baseline is stamped
+    assert mgr.profiles['100']['last_decay_date'] == '2025-05-01'
+    assert mgr.profiles['100']['hours']['10'] == [50, 101]  # just the new sample
+
+    # Next day, decay must actually apply — under the old code it never would
+    day2 = datetime(2025, 5, 2, 10, 0, tzinfo=timezone.utc)
+    asyncio.run(mgr.record_snapshot(faction_members, now=day2))
+    active, total = mgr.profiles['100']['hours']['10']
+    assert total == round(101 * DECAY_FACTOR) + 1
+    assert active == min(round(50 * DECAY_FACTOR), round(101 * DECAY_FACTOR))
+    assert mgr.profiles['100']['last_decay_date'] == '2025-05-02'
+
+
 def test_activity_profile_pruning():
     """
     Regression test for an audit finding: profiles were never removed when a
@@ -823,5 +865,6 @@ if __name__ == '__main__':
     test_activity_profile_manager_queries()
     test_activity_profile_record_snapshot()
     test_activity_profile_decay()
+    test_activity_profile_decay_backfills_legacy_baseline()
     test_activity_profile_pruning()
     print('All smoke tests passed.')

@@ -207,7 +207,15 @@ class ActivityProfileManager:
         across any gap), so old samples gradually matter less than recent ones.
         No-op if already decayed today.
         """
-        last_decay_str = profile.get('last_decay_date', date_key)
+        last_decay_str = profile.get('last_decay_date')
+        if last_decay_str is None:
+            # Legacy profile with no baseline (predates this method). Stamp one
+            # now rather than leaving it unset — defaulting the read to "today"
+            # on every call would make days_elapsed permanently 0, exempting
+            # this profile from decay forever.
+            profile['last_decay_date'] = date_key
+            return
+
         last_decay_date = datetime.strptime(last_decay_str, '%Y-%m-%d').date()
         days_elapsed = (today - last_decay_date).days
         if days_elapsed < 1:
