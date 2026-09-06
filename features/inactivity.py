@@ -35,6 +35,12 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# Backoff schedule for the daily check's Torn fetch. Covers ~6 minutes of
+# transient API trouble (blip, brief maintenance) before giving up until
+# tomorrow — see check_and_alert_inactive for why this loop alone retries.
+DAILY_FETCH_RETRY_DELAYS = [60, 120, 180]
+
+
 class InactivityTracker:
     """Tracks member activity on Torn and sends inactivity alerts"""
 
@@ -336,11 +342,31 @@ class InactivityTracker:
             fetch_faction_crimes()
         )
 
+        # This is the only 24h loop in the bot: every other background check
+        # re-runs within 1-15 minutes, so a momentary Torn blip costs them one
+        # tick, while a blip here costs a full day of accountability data.
+        # Torn API failures aren't cached (only successes are), so an in-place
+        # retry genuinely re-hits the API rather than replaying the failure.
         if not torn_members:
-            logger.error('Error: Could not fetch Torn faction data')
+            for delay in DAILY_FETCH_RETRY_DELAYS:
+                logger.warning(f'Inactivity check: Torn fetch failed, retrying in {delay}s')
+                await asyncio.sleep(delay)
+                torn_members, crimes = await asyncio.gather(
+                    fetch_faction_members(),
+                    fetch_faction_crimes()
+                )
+                if torn_members:
+                    logger.info('Inactivity check: Torn fetch recovered on retry')
+                    break
+
+        if not torn_members:
+            total_wait = sum(DAILY_FETCH_RETRY_DELAYS) // 60
+            logger.error('Error: Could not fetch Torn faction data (all retries exhausted)')
             error_embed = create_embed(
                 title='Inactivity Check Failed',
-                description='Could not connect to Torn API to check member activity. Will retry tomorrow.',
+                description=f'Could not connect to Torn API to check member activity, after '
+                            f'{len(DAILY_FETCH_RETRY_DELAYS)} retries over ~{total_wait} minutes. '
+                            f'Will retry tomorrow.',
                 color=EMBED_COLOR_CRITICAL
             )
             await channel.send(embed=error_embed)

@@ -846,6 +846,95 @@ def test_activity_profile_pruning():
     assert '1' in mgr.profiles        # currently in the faction -> recorded normally
 
 
+def test_inactivity_daily_check_retries_transient_api_failure():
+    """
+    Regression test for a real production failure: the daily inactivity check
+    posted "Could not connect to Torn API ... Will retry tomorrow" after a
+    single failed fetch. It's the only 24h loop in the bot — every other check
+    re-runs within 1-15 minutes, so a momentary blip costs them one tick, but
+    costs this one a full day of accountability data. It must retry in place.
+    """
+    import asyncio
+    import features.inactivity as inactivity_mod
+    from features.inactivity import InactivityTracker, DAILY_FETCH_RETRY_DELAYS
+
+    class FakeChannel:
+        def __init__(self):
+            self.sent = []
+        async def send(self, *args, **kwargs):
+            self.sent.append(kwargs.get('embed'))
+
+    class FakeBot:
+        def __init__(self, channel):
+            self._channel = channel
+        def get_channel(self, _cid):
+            return self._channel
+        def get_guild(self, _gid):
+            return None
+
+    # Don't actually sleep through the backoff schedule during tests
+    real_sleep = asyncio.sleep
+    async def fast_sleep(_seconds):
+        await real_sleep(0)
+    asyncio.sleep = fast_sleep
+
+    # Case 1: fetch fails once, then recovers -> must NOT post the failure embed
+    calls = {'members': 0}
+    import time as _time
+
+    async def flaky_members():
+        calls['members'] += 1
+        if calls['members'] == 1:
+            return None  # transient blip on the first attempt
+        # Recovered. One currently-active member, so the downstream report
+        # finds nothing to alert on and the check completes quietly.
+        return {'1': {'name': 'Active', 'level': 10,
+                      'last_action': {'timestamp': int(_time.time()), 'status': 'Online'}}}
+
+    async def no_crimes():
+        return []
+
+    orig_members = inactivity_mod.fetch_faction_members
+    orig_crimes = inactivity_mod.fetch_faction_crimes
+    orig_save = inactivity_mod.save_json
+    inactivity_mod.fetch_faction_members = flaky_members
+    inactivity_mod.fetch_faction_crimes = no_crimes
+    inactivity_mod.save_json = lambda *a, **k: None  # keep the test off disk
+
+    try:
+        channel = FakeChannel()
+        tracker = InactivityTracker(FakeBot(channel))
+        asyncio.run(tracker.check_and_alert_inactive())
+
+        assert calls['members'] >= 2, 'must retry after a failed fetch, not give up immediately'
+        failure_posts = [e for e in channel.sent
+                         if e is not None and getattr(e, 'title', '') == 'Inactivity Check Failed']
+        assert failure_posts == [], 'recovered on retry, so no failure embed should be posted'
+
+        # Case 2: fetch fails every time -> exhausts retries, then reports failure
+        calls['members'] = 0
+
+        async def always_down():
+            calls['members'] += 1
+            return None
+
+        inactivity_mod.fetch_faction_members = always_down
+        channel2 = FakeChannel()
+        tracker2 = InactivityTracker(FakeBot(channel2))
+        asyncio.run(tracker2.check_and_alert_inactive())
+
+        # 1 initial attempt + one per configured backoff delay
+        assert calls['members'] == 1 + len(DAILY_FETCH_RETRY_DELAYS)
+        failure_posts2 = [e for e in channel2.sent
+                          if e is not None and getattr(e, 'title', '') == 'Inactivity Check Failed']
+        assert len(failure_posts2) == 1, 'should still report failure once retries are exhausted'
+    finally:
+        inactivity_mod.fetch_faction_members = orig_members
+        inactivity_mod.fetch_faction_crimes = orig_crimes
+        inactivity_mod.save_json = orig_save
+        asyncio.sleep = real_sleep
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -867,4 +956,5 @@ if __name__ == '__main__':
     test_activity_profile_decay()
     test_activity_profile_decay_backfills_legacy_baseline()
     test_activity_profile_pruning()
+    test_inactivity_daily_check_retries_transient_api_failure()
     print('All smoke tests passed.')
