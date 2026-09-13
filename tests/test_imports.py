@@ -1001,9 +1001,133 @@ def test_fetch_faction_crimes_distinguishes_outage_from_empty():
         api.fetch_faction_data = empty_v1
         assert asyncio.run(api.fetch_faction_crimes()) == [], \
             'API answered with no crimes -> empty list, not None'
+
+        # Defensive: if Torn ever changes v2's shape, an unreadable response
+        # must report an outage rather than degrade into "no crimes", which
+        # would empty the in-progress set and flag every participating member.
+        async def wrong_shape(*a, **k):
+            return {'crimes': {'not': 'a list'}}
+        api.fetch_faction_data_v2 = wrong_shape
+        api.fetch_faction_data = empty_v1
+        assert asyncio.run(api.fetch_faction_crimes()) is None, \
+            'unreadable v2 shape must be reported as an outage, not an empty crime list'
     finally:
         api.fetch_faction_data_v2 = orig_v2
         api.fetch_faction_data = orig_v1
+
+
+def test_stale_v1_crimes_fallback_rejected():
+    """
+    Re-audit finding: the previous fix only caught "both endpoints unreachable".
+    But for an OC2 faction the v1 endpoint keeps answering 200 with frozen OC1
+    history (measured live: newest record 585 days old, zero in progress). If v2
+    failed and that got served as current, every crime would look completed, the
+    in-progress set would be empty, and every member mid-OC would be flagged —
+    today's bug again, but invisible, because the list comes back populated.
+    """
+    import asyncio
+    import time
+    import utils.torn_api as api
+
+    orig_v2 = api.fetch_faction_data_v2
+    orig_v1 = api.fetch_faction_data
+    try:
+        async def v2_down(*a, **k):
+            return None
+        api.fetch_faction_data_v2 = v2_down
+
+        # v1 answers, but with ancient all-completed OC1 history
+        ancient = time.time() - 585 * 86400
+        async def v1_stale(*a, **k):
+            return {'crimes': {'1': {'time_completed': ancient,
+                                     'participants': [{'111': None}, {'222': None}]}}}
+        api.fetch_faction_data = v1_stale
+        assert asyncio.run(api.fetch_faction_crimes()) is None, \
+            'stale v1 history must not stand in for live data — report the outage instead'
+
+        # v1 with a crime actually in progress is live; trust it
+        async def v1_live(*a, **k):
+            return {'crimes': {'1': {'time_completed': 0,
+                                     'participants': [{'111': None}]}}}
+        api.fetch_faction_data = v1_live
+        live = asyncio.run(api.fetch_faction_crimes())
+        assert live is not None and len(live) == 1 and live[0]['completed'] is False, \
+            'a v1 feed with an in-progress crime is live data and must be used'
+
+        # v1 with a recent completion is also live
+        async def v1_recent(*a, **k):
+            return {'crimes': {'1': {'time_completed': time.time() - 3600,
+                                     'participants': [{'111': None}]}}}
+        api.fetch_faction_data = v1_recent
+        recent = asyncio.run(api.fetch_faction_crimes())
+        assert recent is not None and len(recent) == 1, 'recent v1 completion is live data'
+    finally:
+        api.fetch_faction_data_v2 = orig_v2
+        api.fetch_faction_data = orig_v1
+
+
+def test_retry_preserves_already_good_payload():
+    """
+    Re-audit finding: the retry loop now also fires when only the crimes fetch
+    failed. It reassigned both payloads from each retry, so a retry where the
+    member fetch blipped would overwrite good member data with None and abort
+    the whole report — turning a partial success into a total failure.
+    """
+    import asyncio
+    import features.inactivity as inactivity_mod
+    from features.inactivity import InactivityTracker
+
+    class FakeChannel:
+        def __init__(self):
+            self.sent = []
+        async def send(self, *a, **k):
+            self.sent.append(k.get('embed'))
+
+    class FakeBot:
+        def __init__(self, ch):
+            self._ch = ch
+        def get_channel(self, _):
+            return self._ch
+        def get_guild(self, _):
+            return None
+
+    real_sleep = asyncio.sleep
+    async def fast_sleep(_s):
+        await real_sleep(0)
+
+    orig_members = inactivity_mod.fetch_faction_members
+    orig_crimes = inactivity_mod.fetch_faction_crimes
+    orig_save = inactivity_mod.save_json
+    asyncio.sleep = fast_sleep
+    inactivity_mod.save_json = lambda *a, **k: None
+
+    state = {'n': 0}
+    good_members = {'1': {'name': 'Someone', 'level': 5,
+                          'last_action': {'timestamp': int(__import__('time').time())}}}
+
+    async def members():
+        # Succeeds first, then blips on every retry
+        state['n'] += 1
+        return good_members if state['n'] == 1 else None
+
+    async def crimes_down():
+        return None  # crimes never recovers -> retries all fire
+
+    inactivity_mod.fetch_faction_members = members
+    inactivity_mod.fetch_faction_crimes = crimes_down
+    try:
+        ch = FakeChannel()
+        asyncio.run(InactivityTracker(FakeBot(ch)).check_and_alert_inactive())
+        failures = [e for e in ch.sent
+                    if e is not None and getattr(e, 'title', '') == 'Inactivity Check Failed']
+        assert failures == [], \
+            'good member data from the first attempt must survive a later failed retry'
+        assert ch.sent, 'the report should still be posted using the member data we had'
+    finally:
+        inactivity_mod.fetch_faction_members = orig_members
+        inactivity_mod.fetch_faction_crimes = orig_crimes
+        inactivity_mod.save_json = orig_save
+        asyncio.sleep = real_sleep
 
 
 if __name__ == '__main__':
@@ -1030,4 +1154,6 @@ if __name__ == '__main__':
     test_inactivity_daily_check_retries_transient_api_failure()
     test_oc_check_skipped_when_crimes_unavailable()
     test_fetch_faction_crimes_distinguishes_outage_from_empty()
+    test_stale_v1_crimes_fallback_rejected()
+    test_retry_preserves_already_good_payload()
     print('All smoke tests passed.')

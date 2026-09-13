@@ -27,6 +27,12 @@ api_cache = {}
 _ffscouter_cache = {}
 FFSCOUTER_CACHE_SECONDS = 900  # 15 minutes — estimates don't change fast
 
+# How recent a v1 (legacy OC1) crime record must be for the fallback to be
+# treated as live data. An OC2 faction's v1 feed keeps returning 200 with
+# long-frozen history, which would otherwise masquerade as "no one is in a
+# crime right now". See fetch_faction_crimes.
+V1_CRIMES_MAX_AGE_SECONDS = 14 * 86400
+
 # Torn API base URL
 TORN_API_BASE = "https://api.torn.com"
 
@@ -401,7 +407,14 @@ async def fetch_user_messages():
 async def fetch_faction_crimes():
     """
     Fetch and normalize faction organized crimes.
-    Tries v2 API first (current OC2 system), falls back to v1.
+
+    v2 (OC2) is authoritative. The v1 fallback exists only for factions still
+    on legacy OC1 and is accepted ONLY if it actually looks live — for an OC2
+    faction, v1 keeps answering 200 with ancient OC1 records (measured: newest
+    585 days old, zero in progress). Serving those as current would leave the
+    "who is mid-crime" set empty and flag every participating member at once,
+    which is the same failure as an outage but invisible, since the list comes
+    back populated. Better to report None and skip the OC section.
 
     Returns:
         List of normalized crime dicts:
@@ -416,11 +429,21 @@ async def fetch_faction_crimes():
     """
     normalized = []
     reached = False
+    # Whether v2 answered in the shape we know how to read. An empty list is a
+    # valid "no crimes right now"; a missing key or a different type is not, and
+    # must not quietly degrade into "nobody is in a crime".
+    v2_shape_ok = False
 
     # Try v2 first (Torn OC2 system — slots-based)
     data = await fetch_faction_data_v2('crimes')
     if data is not None:
         reached = True
+        if isinstance(data.get('crimes'), list):
+            v2_shape_ok = True
+        else:
+            logger.error('Torn v2 crimes field is %s, not a list — response shape changed; '
+                         'treating as unusable rather than as "no crimes"',
+                         type(data.get('crimes')).__name__)
     if data and isinstance(data.get('crimes'), list) and data['crimes']:
         for crime in data['crimes']:
             if not isinstance(crime, dict):
@@ -443,10 +466,9 @@ async def fetch_faction_crimes():
         if normalized:
             return normalized
 
-    # Fall back to v1 (legacy OC1 system)
+    # Fall back to v1 (legacy OC1 system) — only trusted if it looks live
+    v1_normalized = []
     data = await fetch_faction_data('crimes')
-    if data is not None:
-        reached = True
     if data:
         for crime_data in (data.get('crimes') or {}).values():
             if not isinstance(crime_data, dict):
@@ -459,15 +481,36 @@ async def fetch_faction_crimes():
             for p in (raw_parts if isinstance(raw_parts, list) else []):
                 if isinstance(p, dict):
                     participants.extend(str(tid) for tid in p.keys())
-            normalized.append({
+            v1_normalized.append({
                 'completed': bool(time_completed),
                 'completion_ts': float(time_completed) if time_completed else 0.0,
                 'participants': participants,
             })
 
+    if v1_normalized:
+        # Accept v1 only with evidence it reflects the present: an in-progress
+        # crime, or a completion inside the staleness window. An OC2 faction's
+        # v1 feed is frozen history and must never stand in for live data.
+        newest = max((c['completion_ts'] for c in v1_normalized), default=0.0)
+        has_in_progress = any(not c['completed'] for c in v1_normalized)
+        if has_in_progress or (time.time() - newest) <= V1_CRIMES_MAX_AGE_SECONDS:
+            return v1_normalized
+        logger.error(
+            'Ignoring v1 crimes fallback: newest record is %.0f days old with no crime in '
+            'progress, so this is stale OC1 history, not live data. Reporting an outage '
+            'instead of emptying the in-progress set.' % ((time.time() - newest) / 86400)
+        )
+
     if not reached:
         logger.error('Torn crimes fetch failed on both v2 and v1 — returning None so callers '
                      'can tell an outage apart from "no active crimes"')
+        return None
+
+    if not v2_shape_ok:
+        # v2 answered but not in a shape we could read, and v1 gave nothing
+        # usable either. Returning [] here would read as "no one is in a crime".
+        logger.error('No usable crimes data (v2 shape unreadable, no live v1 fallback) — '
+                     'reporting an outage rather than an empty crime list')
         return None
 
     return normalized

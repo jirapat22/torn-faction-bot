@@ -366,10 +366,18 @@ class InactivityTracker:
                                f'crimes={"ok" if crimes is not None else "FAILED"}), '
                                f'retrying in {delay}s')
                 await asyncio.sleep(delay)
-                torn_members, crimes = await asyncio.gather(
+                retry_members, retry_crimes = await asyncio.gather(
                     fetch_faction_members(),
                     fetch_faction_crimes()
                 )
+                # Keep whichever payload already succeeded. A retry fired for a
+                # failed crimes fetch must never throw away good member data by
+                # overwriting it with a fresh failure — that would turn a
+                # partial success into a skipped report.
+                if retry_members:
+                    torn_members = retry_members
+                if retry_crimes is not None:
+                    crimes = retry_crimes
                 if torn_members and crimes is not None:
                     logger.info('Inactivity check: Torn fetch recovered on retry')
                     break
