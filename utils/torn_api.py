@@ -408,11 +408,19 @@ async def fetch_faction_crimes():
         - 'completed': bool
         - 'completion_ts': float (Unix timestamp, 0 if active)
         - 'participants': list of torn_id strings
+
+        Or None if the API could not be reached at all. That is deliberately
+        distinct from [] ("the API answered; there are no crimes"): callers
+        must not read an outage as "nobody is currently in an OC", or every
+        member mid-crime loses their in-progress protection at once.
     """
     normalized = []
+    reached = False
 
     # Try v2 first (Torn OC2 system — slots-based)
     data = await fetch_faction_data_v2('crimes')
+    if data is not None:
+        reached = True
     if data and isinstance(data.get('crimes'), list) and data['crimes']:
         for crime in data['crimes']:
             if not isinstance(crime, dict):
@@ -437,6 +445,8 @@ async def fetch_faction_crimes():
 
     # Fall back to v1 (legacy OC1 system)
     data = await fetch_faction_data('crimes')
+    if data is not None:
+        reached = True
     if data:
         for crime_data in (data.get('crimes') or {}).values():
             if not isinstance(crime_data, dict):
@@ -454,6 +464,11 @@ async def fetch_faction_crimes():
                 'completion_ts': float(time_completed) if time_completed else 0.0,
                 'participants': participants,
             })
+
+    if not reached:
+        logger.error('Torn crimes fetch failed on both v2 and v1 — returning None so callers '
+                     'can tell an outage apart from "no active crimes"')
+        return None
 
     return normalized
 

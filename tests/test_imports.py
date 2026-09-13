@@ -935,6 +935,77 @@ def test_inactivity_daily_check_retries_transient_api_failure():
         asyncio.sleep = real_sleep
 
 
+def test_oc_check_skipped_when_crimes_unavailable():
+    """
+    Regression test for a real production incident: the daily report flagged 17
+    members as "no OC for 4+ days" plus 13 warnings — nearly the whole faction —
+    while most of them were demonstrably mid-OC at that moment.
+
+    Cause: fetch_faction_crimes() returned [] on API failure, indistinguishable
+    from "no crimes exist". _get_oc_status then built an empty active_in_oc, so
+    every member currently in an unexecuted crime lost their in-progress
+    protection and got judged against a stale last-completion timestamp.
+    An unreachable endpoint must skip the OC section, not invent absentees.
+    """
+    import time
+    from features.inactivity import InactivityTracker
+
+    tracker = InactivityTracker(bot=None)
+    long_ago = time.time() - 30 * 86400
+    # Two members, both with old completions, both currently mid-crime
+    tracker.last_oc_completion = {'1': long_ago, '2': long_ago}
+    members = {
+        '1': {'name': 'InCrimeA', 'level': 20, 'days_in_faction': 100},
+        '2': {'name': 'InCrimeB', 'level': 30, 'days_in_faction': 100},
+    }
+    active_crime = [{'completed': False, 'completion_ts': 0, 'participants': ['1', '2']}]
+
+    # Normal case: crimes visible -> both protected by being mid-crime
+    warn, crit, _ = tracker._get_oc_status(members, active_crime)
+    assert warn == [] and crit == [], 'members in an unexecuted crime must never be flagged'
+
+    # Outage: crimes endpoint unreachable (None) -> skip, do NOT flag everyone
+    warn_none, crit_none, updated_none = tracker._get_oc_status(members, None)
+    assert warn_none == [] and crit_none == [], \
+        'an unreachable crimes endpoint must skip the OC section, not flag every member'
+    assert updated_none is False, 'nothing to persist when crimes data is unavailable'
+
+    # The old failure mode, preserved as the contrast: [] genuinely means "no
+    # crimes exist", so stale members legitimately get flagged. This is exactly
+    # why an outage must not be collapsed into [].
+    warn_empty, crit_empty, _ = tracker._get_oc_status(members, [])
+    assert len(crit_empty) == 2, 'with a real empty crime list, stale members do get flagged'
+
+
+def test_fetch_faction_crimes_distinguishes_outage_from_empty():
+    """fetch_faction_crimes must return None on total API failure, [] only when
+    the API actually answered with no crimes."""
+    import asyncio
+    import utils.torn_api as api
+
+    orig_v2 = api.fetch_faction_data_v2
+    orig_v1 = api.fetch_faction_data
+    try:
+        async def down(*a, **k):
+            return None
+        api.fetch_faction_data_v2 = down
+        api.fetch_faction_data = down
+        assert asyncio.run(api.fetch_faction_crimes()) is None, \
+            'both endpoints unreachable must report None, not an empty list'
+
+        async def empty_v2(*a, **k):
+            return {'crimes': []}
+        async def empty_v1(*a, **k):
+            return {'crimes': {}}
+        api.fetch_faction_data_v2 = empty_v2
+        api.fetch_faction_data = empty_v1
+        assert asyncio.run(api.fetch_faction_crimes()) == [], \
+            'API answered with no crimes -> empty list, not None'
+    finally:
+        api.fetch_faction_data_v2 = orig_v2
+        api.fetch_faction_data = orig_v1
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -957,4 +1028,6 @@ if __name__ == '__main__':
     test_activity_profile_decay_backfills_legacy_baseline()
     test_activity_profile_pruning()
     test_inactivity_daily_check_retries_transient_api_failure()
+    test_oc_check_skipped_when_crimes_unavailable()
+    test_fetch_faction_crimes_distinguishes_outage_from_empty()
     print('All smoke tests passed.')

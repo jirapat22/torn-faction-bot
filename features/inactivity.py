@@ -175,6 +175,15 @@ class InactivityTracker:
         Returns:
             (oc_warning, oc_critical, data_updated) — lists and a bool flag.
         """
+        # crimes is None when the Torn crimes endpoint was unreachable. Treating
+        # that as "no crimes exist" would leave active_in_oc empty, stripping
+        # in-progress protection from every member currently mid-OC and flagging
+        # them against a stale last-completion timestamp. Report nothing instead
+        # of reporting garbage.
+        if crimes is None:
+            logger.error('OC participation check SKIPPED: crimes data unavailable this run')
+            return [], [], False
+
         now = time.time()
         data_updated = False
 
@@ -347,15 +356,21 @@ class InactivityTracker:
         # tick, while a blip here costs a full day of accountability data.
         # Torn API failures aren't cached (only successes are), so an in-place
         # retry genuinely re-hits the API rather than replaying the failure.
-        if not torn_members:
+        # Retry if either payload is missing. A failed crimes fetch matters as
+        # much as a failed member fetch: without it the OC section can't tell
+        # who is mid-crime, so it gets skipped entirely below.
+        if not torn_members or crimes is None:
             for delay in DAILY_FETCH_RETRY_DELAYS:
-                logger.warning(f'Inactivity check: Torn fetch failed, retrying in {delay}s')
+                logger.warning(f'Inactivity check: Torn fetch failed '
+                               f'(members={"ok" if torn_members else "FAILED"}, '
+                               f'crimes={"ok" if crimes is not None else "FAILED"}), '
+                               f'retrying in {delay}s')
                 await asyncio.sleep(delay)
                 torn_members, crimes = await asyncio.gather(
                     fetch_faction_members(),
                     fetch_faction_crimes()
                 )
-                if torn_members:
+                if torn_members and crimes is not None:
                     logger.info('Inactivity check: Torn fetch recovered on retry')
                     break
 
@@ -372,8 +387,11 @@ class InactivityTracker:
             await channel.send(embed=error_embed)
             return
 
-        if not crimes:
-            crimes = []
+        # Deliberately NOT coerced to [] — _get_oc_status needs to see None to
+        # tell "crimes endpoint down" apart from "no crimes right now".
+        if crimes is None:
+            logger.error('Inactivity check: proceeding without OC data (crimes endpoint '
+                         'unreachable after retries) — OC section will be skipped')
 
         # Track inactive members
         warning_members = []  # 3+ days inactive
@@ -461,8 +479,8 @@ class InactivityTracker:
         )
         if not torn_members:
             return None
-        if not crimes:
-            crimes = []
+        # crimes may be None (endpoint unreachable); _get_oc_status skips the
+        # OC section in that case rather than flagging everyone mid-crime.
 
         warning_members = []
         critical_members = []
