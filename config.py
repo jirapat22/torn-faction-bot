@@ -73,7 +73,10 @@ OC_CRITICAL_DAYS = int(os.getenv("OC_CRITICAL_DAYS", "4"))
 OC_NEW_MEMBER_GRACE_DAYS = int(os.getenv("OC_NEW_MEMBER_GRACE_DAYS", "3"))
 
 # Left-faction alert threshold (days before alerting about a verified member not in faction)
-LEFT_FACTION_ALERT_DAYS = int(os.getenv("LEFT_FACTION_ALERT_DAYS", "7"))
+# Grace period for someone who leaves the faction: they keep their verified
+# role (and so their channel access) this many days before it is revoked, and
+# management is alerted at the same moment rather than after the fact.
+LEFT_FACTION_ALERT_DAYS = int(os.getenv("LEFT_FACTION_ALERT_DAYS", "3"))
 
 # Embed color (Discord color codes)
 EMBED_COLOR_INFO = 0x3498db     # Blue for info messages

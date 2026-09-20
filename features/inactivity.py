@@ -16,6 +16,7 @@ from datetime import datetime
 from utils.helpers import load_json, save_json, create_embed, format_timestamp, get_days_since, get_current_timestamp
 from utils.torn_api import fetch_faction_members, fetch_faction_crimes
 from config import (
+    VERIFIED_ROLE_NAME,
     INACTIVITY_ALERTS_CHANNEL_ID,
     INACTIVITY_WARNING_DAYS,
     INACTIVITY_CRITICAL_DAYS,
@@ -51,7 +52,10 @@ class InactivityTracker:
         self.oc_data_file = 'data/oc_participation.json'
         self.last_oc_completion = {}  # {torn_id_str: float timestamp} — accumulated across runs
         self.left_faction_file = 'data/left_faction.json'
-        self.left_faction = {}  # {torn_id_str: {first_gone, torn_name, discord_id}}
+        self.left_faction = {}  # {torn_id_str: {first_gone, torn_name, discord_id, access_revoked}}
+        # Set by bot.py once the verification system exists; used to find the
+        # verified role when revoking access after the grace period.
+        self.verification_system = None
 
     async def load_user_mapping(self):
         """Load Discord to Torn ID mapping from JSON file"""
@@ -243,6 +247,75 @@ class InactivityTracker:
                 oc_warning.append(member_data)
 
         return oc_warning, oc_critical, data_updated
+
+    async def _revoke_left_faction_access(self, guild, left_alerts):
+        """
+        Strip the verified role from members who have been out of the faction
+        past the grace period, so they fall back to whatever @everyone can see
+        (the welcome channel) instead of keeping full access indefinitely.
+
+        Only ever called with a successfully-fetched roster — check_and_alert_inactive
+        bails out before this if the member fetch failed — so a Torn outage can
+        never be mistaken for "everyone left the faction". The grace period is the
+        second guard: it takes several consecutive daily runs to reach.
+
+        Each member is revoked once; the flag persists so a rejoin-then-leave
+        cycle re-arms it (the entry is deleted on rejoin).
+
+        Returns:
+            list of torn_names actually revoked this run
+        """
+        if not guild:
+            return []
+
+        role = None
+        vs = getattr(self, 'verification_system', None)
+        role_id = vs.config.get('verified_role_id') if vs and vs.config else None
+        if role_id:
+            role = guild.get_role(role_id)
+        if role is None:
+            # Fall back to matching by configured name
+            role = discord.utils.find(
+                lambda r: r.name.lower() == VERIFIED_ROLE_NAME.lower(), guild.roles
+            )
+        if role is None:
+            logger.warning('Left-faction revoke: no verified role found — skipping')
+            return []
+
+        revoked = []
+        for data in left_alerts:
+            tid = str(data['torn_id'])
+            entry = self.left_faction.get(tid)
+            if not entry or entry.get('access_revoked'):
+                continue
+
+            member = guild.get_member(int(data['discord_id']))
+            if not member:
+                # Gone from Discord entirely — nothing to revoke
+                entry['access_revoked'] = True
+                continue
+
+            if role not in member.roles:
+                entry['access_revoked'] = True
+                continue
+
+            try:
+                await member.remove_roles(
+                    role,
+                    reason=f'Left the faction {data["days_gone"]:.0f}d ago '
+                           f'(grace period {LEFT_FACTION_ALERT_DAYS}d)'
+                )
+                entry['access_revoked'] = True
+                revoked.append(data['torn_name'])
+                logger.info(f'Left-faction: revoked {role.name} from {data["torn_name"]} '
+                            f'({data["days_gone"]:.0f}d gone)')
+            except discord.Forbidden:
+                logger.error(f'Left-faction: no permission to remove {role.name} from '
+                             f'{data["torn_name"]} — is the bot role above it?')
+            except Exception as e:
+                logger.error(f'Left-faction: failed revoking role from {data["torn_name"]}: {e}')
+
+        return revoked
 
     def _get_left_faction_status(self, torn_members, guild_member_ids=None):
         """
@@ -464,9 +537,13 @@ class InactivityTracker:
         # Left-faction check (verified Discord members no longer in Torn faction)
         guild_member_ids = {str(m.id) for m in guild.members} if guild else None
         left_alerts, left_updated = self._get_left_faction_status(torn_members, guild_member_ids)
-        if left_updated:
+        # Revoke access for anyone past the grace period, then persist — the
+        # revoke marks entries, so save after it rather than before.
+        revoked = await self._revoke_left_faction_access(guild, left_alerts)
+        if left_updated or revoked:
             await self.save_left_faction_data()
-        logger.info(f'Left-faction check: {len(left_alerts)} alert(s), tracking {len(self.left_faction)} members')
+        logger.info(f'Left-faction check: {len(left_alerts)} alert(s), {len(revoked)} access revoked, '
+                    f'tracking {len(self.left_faction)} members')
 
         # Always post daily summary
         total_inactive = len(warning_members) + len(critical_members)
@@ -711,9 +788,13 @@ class InactivityTracker:
                 # Try to mention the Discord member
                 discord_member = guild.get_member(int(discord_id)) if guild else None
                 mention = discord_member.mention if discord_member else f'(ID:{discord_id})'
-                lines.append(f'**{torn_name}** {mention} — {days_gone:.0f}d since leaving faction')
+                revoked = self.left_faction.get(str(data['torn_id']), {}).get('access_revoked')
+                suffix = ' · 🔒 access removed' if revoked else ''
+                lines.append(f'**{torn_name}** {mention} — {days_gone:.0f}d since leaving faction{suffix}')
 
-            header = f'**{len(left_faction)} verified Discord member(s)** have not returned to the faction in {LEFT_FACTION_ALERT_DAYS}+ days:\n\n'
+            header = (f'**{len(left_faction)} verified Discord member(s)** have not returned to the '
+                      f'faction in {LEFT_FACTION_ALERT_DAYS}+ days. Their verified role is removed, '
+                      f'so they keep only the access @everyone has:\n\n')
             chunks = []
             current = header
             for line in lines:

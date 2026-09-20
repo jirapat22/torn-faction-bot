@@ -1130,6 +1130,78 @@ def test_retry_preserves_already_good_payload():
         asyncio.sleep = real_sleep
 
 
+def test_left_faction_access_revoked_after_grace_period():
+    """
+    Someone who leaves the faction keeps their verified role (and so their
+    channel access) for the grace period, then loses it — falling back to what
+    @everyone can see. Revocation must be once-only, must not touch members
+    still inside the grace window, and must not fire for people already back.
+    """
+    import asyncio
+    import time
+    from features.inactivity import InactivityTracker
+    from config import LEFT_FACTION_ALERT_DAYS
+
+    class FakeRole:
+        id = 99
+        name = 'Ascended punks'
+
+    role = FakeRole()
+
+    class FakeMember:
+        def __init__(self):
+            self.roles = [role]
+            self.removed = []
+        async def remove_roles(self, *roles, reason=None):
+            self.removed.extend(roles)
+            for r in roles:
+                if r in self.roles:
+                    self.roles.remove(r)
+
+    member = FakeMember()
+
+    class FakeGuild:
+        roles = [role]
+        def get_role(self, rid):
+            return role if rid == role.id else None
+        def get_member(self, _mid):
+            return member
+
+    class FakeVS:
+        config = {'verified_role_id': 99}
+
+    tracker = InactivityTracker(bot=None)
+    tracker.verification_system = FakeVS()
+    now = time.time()
+    tracker.left_faction = {
+        '1': {'first_gone': now - (LEFT_FACTION_ALERT_DAYS + 1) * 86400,
+              'torn_name': 'Leaver', 'discord_id': '1000'},
+    }
+    alert = [{'torn_id': '1', 'torn_name': 'Leaver', 'discord_id': '1000',
+              'days_gone': LEFT_FACTION_ALERT_DAYS + 1}]
+
+    revoked = asyncio.run(tracker._revoke_left_faction_access(FakeGuild(), alert))
+    assert revoked == ['Leaver'], 'past the grace period, access must be revoked'
+    assert member.removed == [role]
+    assert tracker.left_faction['1']['access_revoked'] is True
+
+    # Running again must not re-attempt (already marked)
+    revoked_again = asyncio.run(tracker._revoke_left_faction_access(FakeGuild(), alert))
+    assert revoked_again == [], 'revocation is once-only, not retried every day'
+
+    # Nobody past the grace period -> nothing revoked. _get_left_faction_status
+    # only emits alerts past the threshold, so an empty alert list is the
+    # in-grace case, and it must be a no-op.
+    fresh = InactivityTracker(bot=None)
+    fresh.verification_system = FakeVS()
+    fresh.left_faction = {'2': {'first_gone': now, 'torn_name': 'JustLeft', 'discord_id': '2000'}}
+    assert asyncio.run(fresh._revoke_left_faction_access(FakeGuild(), [])) == [], \
+        'members still inside the grace period keep their access'
+
+    # No guild (bot not in server / cache cold) -> safe no-op, never a crash
+    assert asyncio.run(fresh._revoke_left_faction_access(None, alert)) == []
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -1156,4 +1228,5 @@ if __name__ == '__main__':
     test_fetch_faction_crimes_distinguishes_outage_from_empty()
     test_stale_v1_crimes_fallback_rejected()
     test_retry_preserves_already_good_payload()
+    test_left_faction_access_revoked_after_grace_period()
     print('All smoke tests passed.')

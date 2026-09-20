@@ -199,6 +199,9 @@ async def on_ready():
         # Initialize verification system
         verification_system = VerificationSystem(bot)
         verification_system.inactivity_tracker = inactivity_tracker  # Sync both databases
+        # Reverse link: the daily left-faction check needs the configured
+        # verified role id to revoke access once the grace period expires.
+        inactivity_tracker.verification_system = verification_system
         await verification_system.load_config()
         await setup_verification_commands(bot, verification_system)
 
