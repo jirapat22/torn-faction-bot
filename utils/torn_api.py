@@ -209,19 +209,24 @@ async def fetch_faction_data(selections='basic'):
     return data
 
 
-async def fetch_faction_data_v2(selections='wars'):
+async def fetch_faction_data_v2(selections='wars', path_id=None):
     """
     Fetch faction data from Torn API v2 endpoint.
     Some selections (like 'wars') are only available in v2.
 
     Args:
         selections: Comma-separated API selections
+        path_id: Overrides the id in the URL path. Defaults to our faction.
+                 Not every v2 selection keys off a faction id —
+                 `rankedwarreport` keys off a WAR id, and passing a faction id
+                 there silently returns a different faction's war rather than
+                 erroring. Callers must pass the id that selection expects.
 
     Returns:
         Dict with faction data or None if error
     """
     data = await _make_api_request(
-        f'v2/faction/{TORN_FACTION_ID}',
+        f'v2/faction/{path_id or TORN_FACTION_ID}',
         {'selections': selections}
     )
 

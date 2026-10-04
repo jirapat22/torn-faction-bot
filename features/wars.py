@@ -151,6 +151,46 @@ class WarTracker:
             return None
         return rankedwars
 
+    @staticmethod
+    def _normalise_rankedwarreport(report):
+        """
+        Reshape a v2 ranked war report into the v1 shape every consumer here
+        expects: factions as {faction_id: {..., members: {user_id: stats}}}.
+
+        v2 returns both `factions` and each faction's `members` as LISTS. Left
+        as-is, `.items()` on a list raises and `.get('members', {})` yields an
+        unusable list, so one endpoint migration would break several report
+        paths. Normalising at the boundary keeps the blast radius to this
+        method; a dict (a v1 payload, or a report cached before this change)
+        is passed through untouched.
+
+        Note: v2 members carry id/name/level/attacks/score but no `defends`,
+        so defend counts now read as 0 — the data is simply no longer offered.
+        """
+        if not isinstance(report, dict):
+            return report
+        factions = report.get('factions')
+        if not isinstance(factions, list):
+            return report  # already v1-shaped, or nothing usable to convert
+
+        converted = {}
+        for faction in factions:
+            if not isinstance(faction, dict) or faction.get('id') is None:
+                continue
+            members = faction.get('members')
+            if isinstance(members, list):
+                members = {
+                    str(m['id']): m for m in members
+                    if isinstance(m, dict) and m.get('id') is not None
+                }
+            elif not isinstance(members, dict):
+                members = {}
+            converted[str(faction['id'])] = {**faction, 'members': members}
+
+        normalised = dict(report)
+        normalised['factions'] = converted
+        return normalised
+
     async def _fetch_rankedwarreport(self, war_id=None):
         """
         Fetch ranked war report with complete per-member stats.
@@ -166,9 +206,26 @@ class WarTracker:
         """
         cache_file = 'data/warreport_cache.json'
 
-        data = await fetch_faction_data('rankedwarreport')
+        # v2 only — Torn retired this selection from v1, which now answers
+        # "error 23: This selection is only available in API v2", so the whole
+        # per-member war report was silently coming back empty.
+        #
+        # The v2 path id is the WAR id, NOT the faction id. Passing a faction id
+        # does not error, it returns whichever war happens to carry that number:
+        # faction 45635 came back as war 45635, a Nirvana vs Unicorn Apocalypse
+        # match we were never in. So without a war id we must not ask at all,
+        # and whatever comes back is checked for our faction before it is used.
+        # A report only exists once the war has finished; an in-progress war
+        # answers "error 6: Incorrect ID", which falls through to the cache.
+        data = await fetch_faction_data_v2('rankedwarreport', path_id=war_id) if war_id else None
         if data:
-            report = data.get('rankedwarreport', {})
+            report = self._normalise_rankedwarreport(data.get('rankedwarreport', {}))
+            if report and str(TORN_FACTION_ID) not in (report.get('factions') or {}):
+                logger.warning(
+                    f'War report: ignoring report for war {war_id} — it covers factions '
+                    f'{list((report.get("factions") or {}))} and not ours ({TORN_FACTION_ID})'
+                )
+                report = {}
             if report:
                 factions = report.get('factions', {})
                 if factions:

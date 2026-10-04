@@ -1289,6 +1289,124 @@ def test_flytrack_eta_window_biases_early():
     assert mgr._eta_text(eta_known, None) == f'<t:{eta_known}:t> (<t:{eta_known}:R>)'
 
 
+def test_war_report_v2_shape_normalised():
+    """
+    Found in production logs: Torn retired `rankedwarreport` from API v1, which
+    now answers "error 23: only available in API v2", so the per-member war
+    report was silently coming back empty ("No data from API and no cache").
+
+    v2 also changed shape — factions and members are LISTS where v1 used dicts
+    keyed by id. Consumers here call .items() on factions and index members by
+    user id, so the payload must be normalised at the boundary.
+    """
+    from features.wars import WarTracker
+
+    # Exactly the shape the live v2 endpoint returns
+    v2 = {
+        'id': 50398, 'start': 1790938800, 'end': 0, 'winner': None, 'forfeit': False,
+        'factions': [
+            {'id': 45635, 'name': 'Ascended Punks', 'score': 1200, 'rank': 'Gold',
+             'attacks': 300, 'rewards': {},
+             'members': [
+                 {'id': 3571142, 'name': 'Ikaros22', 'level': 67, 'attacks': 40, 'score': 210},
+                 {'id': 2094609, 'name': 'Someone', 'level': 30, 'attacks': 12, 'score': 66},
+             ]},
+            {'id': 53421, 'name': 'The Naughty Kids', 'score': 900, 'rank': 'Gold',
+             'attacks': 250, 'rewards': {}, 'members': []},
+        ],
+    }
+
+    out = WarTracker._normalise_rankedwarreport(v2)
+    factions = out['factions']
+    assert isinstance(factions, dict), 'factions must be keyed by id for .items() consumers'
+    assert set(factions) == {'45635', '53421'}, 'faction ids become string keys'
+
+    members = factions['45635']['members']
+    assert isinstance(members, dict), 'members must be keyed by user id'
+    assert members['3571142']['name'] == 'Ikaros22'
+    assert members['3571142']['attacks'] == 40
+    # Fields consumers read survive; defends is absent in v2 and must default safely
+    assert members['3571142'].get('defends', 0) == 0
+    assert factions['45635']['score'] == 1200, 'faction-level fields are preserved'
+    assert factions['53421']['members'] == {}, 'an empty member list becomes an empty dict'
+    assert out['id'] == 50398, 'top-level report fields are preserved'
+
+    # A v1-shaped payload (or a report cached before this change) passes through
+    v1 = {'factions': {'45635': {'name': 'X', 'members': {'1': {'attacks': 2}}}}}
+    assert WarTracker._normalise_rankedwarreport(v1) == v1
+
+    # Junk must not raise
+    assert WarTracker._normalise_rankedwarreport({}) == {}
+    assert WarTracker._normalise_rankedwarreport(None) is None
+    assert WarTracker._normalise_rankedwarreport(
+        {'factions': [{'name': 'no id'}, 'garbage']})['factions'] == {}
+
+
+def test_war_report_rejects_another_factions_war():
+    """
+    The v2 path id is a WAR id, not a faction id — and passing the wrong one
+    does not error, it returns somebody else's war. Verified live: asking with
+    faction id 45635 returned war 45635, a Nirvana vs Unicorn Apocalypse match
+    this faction was never in. Importing that as our own war history would be
+    worse than the broken state it replaced, so the report is checked for our
+    faction before it is accepted.
+    """
+    import asyncio
+    import features.wars as wars_mod
+    from features.wars import WarTracker
+    from config import TORN_FACTION_ID
+
+    foreign = {'rankedwarreport': {
+        'id': 45635,
+        'factions': [
+            {'id': 49837, 'name': 'Nirvana', 'score': 2565, 'members': []},
+            {'id': 51559, 'name': 'Unicorn Apocalypse', 'score': 10867, 'members': []},
+        ],
+    }}
+    ours = {'rankedwarreport': {
+        'id': 47427,
+        'factions': [
+            {'id': int(TORN_FACTION_ID), 'name': 'Ascended Punks', 'score': 100,
+             'members': [{'id': 1, 'name': 'A', 'attacks': 2, 'score': 5}]},
+            {'id': 50426, 'name': 'Opponent', 'score': 90, 'members': []},
+        ],
+    }}
+
+    tracker = WarTracker(bot=None)
+    calls = []
+    orig_fetch = wars_mod.fetch_faction_data_v2
+    orig_save = wars_mod.save_json
+    orig_load = wars_mod.load_json
+    wars_mod.save_json = lambda *a, **k: None
+    wars_mod.load_json = lambda *a, **k: {}          # no cache to fall back on
+    try:
+        async def fake_fetch(selections, path_id=None):
+            calls.append(path_id)
+            return foreign
+        wars_mod.fetch_faction_data_v2 = fake_fetch
+        assert asyncio.run(tracker._fetch_rankedwarreport(war_id=47427)) is None, \
+            "a report that doesn't include our faction must be rejected"
+        assert calls == [47427], 'the WAR id must be sent as the path id, not the faction id'
+
+        # Without a war id we must not ask at all — asking with the faction id
+        # is exactly what returned a stranger's war.
+        calls.clear()
+        assert asyncio.run(tracker._fetch_rankedwarreport(war_id=None)) is None
+        assert calls == [], 'no war id means no API call'
+
+        # Our own war is accepted and normalised
+        async def fake_ours(selections, path_id=None):
+            return ours
+        wars_mod.fetch_faction_data_v2 = fake_ours
+        got = asyncio.run(tracker._fetch_rankedwarreport(war_id=47427))
+        assert got and str(TORN_FACTION_ID) in got['factions']
+        assert got['factions'][str(TORN_FACTION_ID)]['members']['1']['attacks'] == 2
+    finally:
+        wars_mod.fetch_faction_data_v2 = orig_fetch
+        wars_mod.save_json = orig_save
+        wars_mod.load_json = orig_load
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -1306,6 +1424,8 @@ if __name__ == '__main__':
     test_flytrack_autostop_trusts_war_tracker_not_raw_none()
     test_chain_milestone_picks_highest_on_jump()
     test_alliance_announces_old_war_end_on_new_war()
+    test_war_report_v2_shape_normalised()
+    test_war_report_rejects_another_factions_war()
     test_activity_profile_chunk_detection()
     test_activity_profile_manager_queries()
     test_activity_profile_record_snapshot()
