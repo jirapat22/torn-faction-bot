@@ -1120,6 +1120,22 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
             if warming_up:
                 description += f'\n\n*Still building a profile: {", ".join(warming_up)}*'
 
+            # Discord rejects an embed description over 4096 chars outright, which
+            # would make the whole command fail rather than degrade. At ~53 chars a
+            # row that is reachable near Torn's 100-member faction cap, so trim
+            # rather than risk a 400 on a bigger roster.
+            if len(description) > 3900:
+                kept = []
+                used = 0
+                for line in lines:
+                    if used + len(line) + 1 > 3700:
+                        break
+                    kept.append(line)
+                    used += len(line) + 1
+                description = ('\n'.join(kept) +
+                               f'\n\n*…and {len(lines) - len(kept)} more. '
+                               f'Use `member:` to look someone up directly.*')
+
             embed = create_embed(
                 title='🕒 Faction Activity',
                 description=description,
