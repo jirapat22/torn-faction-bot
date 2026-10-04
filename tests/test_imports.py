@@ -140,11 +140,14 @@ def test_flytrack_logic():
     mgr._learn_tier('42', 'Testy', 'Mexico', 13 * 60)
     assert mgr.tiers['42']['tier'] == 'wlt'
 
-    # Default assumption is airstrip; ETA = start + std * 0.70
+    # Unmeasured player falls back to the empirical median ratio across the
+    # faction (0.669), not the theoretical airstrip bucket — measured against
+    # 82 real flights, the buckets ran ~6% slow and always predicted late.
+    from features.flytrack import DEFAULT_RATIO
     eta = mgr._eta_ts('999', 'Mexico', 1_000_000)
-    assert eta == 1_000_000 + int(STANDARD_FLIGHT_MINUTES['Mexico'] * 0.70 * 60)
+    assert eta == 1_000_000 + int(STANDARD_FLIGHT_MINUTES['Mexico'] * DEFAULT_RATIO * 60)
 
-    # Learned tier overrides the default
+    # A measured player uses their own timed speed, not a rounded bucket
     eta_wlt = mgr._eta_ts('42', 'Mexico', 1_000_000)
     assert eta_wlt == 1_000_000 + int(STANDARD_FLIGHT_MINUTES['Mexico'] * 0.50 * 60)
 
@@ -159,7 +162,8 @@ def test_flytrack_estimate_leg():
     error 7 "Incorrect ID-entity relation" for any ID but the key owner's own —
     confirmed live in production — so there is no exact-time path for enemies).
     """
-    from features.flytrack import FlyTracker, PHASE_OUT, PHASE_RETURNING, STANDARD_FLIGHT_MINUTES
+    from features.flytrack import (FlyTracker, PHASE_OUT, PHASE_RETURNING,
+                                   STANDARD_FLIGHT_MINUTES, DEFAULT_RATIO)
 
     mgr = FlyTracker(bot=None)
     now_ts = 1_000_000
@@ -167,7 +171,7 @@ def test_flytrack_estimate_leg():
     resolved = mgr._estimate_leg('1', PHASE_OUT, 'Mexico', now_ts)
     assert resolved['phase'] == PHASE_OUT
     assert resolved['dest'] == 'Mexico'
-    assert resolved['eta'] == int(now_ts + STANDARD_FLIGHT_MINUTES['Mexico'] * 0.70 * 60)
+    assert resolved['eta'] == int(now_ts + STANDARD_FLIGHT_MINUTES['Mexico'] * DEFAULT_RATIO * 60)
     assert 'estimate' in resolved['note']
 
     # Returning with no destination in the text must inherit the last-known
@@ -175,7 +179,7 @@ def test_flytrack_estimate_leg():
     resolved = mgr._estimate_leg('2', PHASE_RETURNING, None, now_ts, prev={'dest': 'Switzerland'})
     assert resolved['phase'] == PHASE_RETURNING
     assert resolved['dest'] == 'Switzerland'
-    assert resolved['eta'] == int(now_ts + STANDARD_FLIGHT_MINUTES['Switzerland'] * 0.70 * 60)
+    assert resolved['eta'] == int(now_ts + STANDARD_FLIGHT_MINUTES['Switzerland'] * DEFAULT_RATIO * 60)
 
     # Genuinely unknown destination (no text match, no prior dest) — no ETA,
     # but the caller still gets a phase and a graceful "unknown" message
@@ -1202,12 +1206,97 @@ def test_left_faction_access_revoked_after_grace_period():
     assert asyncio.run(fresh._revoke_left_faction_access(None, alert)) == []
 
 
+def test_flytrack_uses_measured_speed_not_rounded_bucket():
+    """
+    Regression test for a real report: "he landed like 5 minute earlier than
+    what was said". MegaBates had been MEASURED at 143 min to South Africa, but
+    the ETA was computed from the WLT bucket (0.50 x 297 = 148.5 min) — so the
+    bot ignored its own measurement and predicted 5.5 min late. Across 82 stored
+    flights every single prediction ran late (avg 8 min, worst 24) for the same
+    reason: each bucket is ~6% slower than reality.
+    """
+    from features.flytrack import FlyTracker, STANDARD_FLIGHT_MINUTES, DEFAULT_RATIO
+
+    mgr = FlyTracker(bot=None)
+    sa = STANDARD_FLIGHT_MINUTES['South Africa']  # 297
+    start = 1_000_000
+
+    # Exactly the stored production record that produced the complaint
+    mgr.tiers['mega'] = {'tier': 'wlt', 'name': 'MegaBates',
+                         'observed_minutes': 143.0, 'dest': 'South Africa'}
+
+    eta = mgr._eta_ts('mega', 'South Africa', start)
+    bucket_eta = int(start + sa * 0.50 * 60)          # what the old code gave
+    measured_eta = int(start + 143.0 * 60)            # what we actually timed
+
+    assert eta == measured_eta, 'must use the measured 143 min, not the bucket'
+    assert eta < bucket_eta, 'measured time is earlier than the bucket predicted'
+    assert round((bucket_eta - eta) / 60, 1) == 5.5, 'the exact 5.5 min the member saw'
+
+    # A legacy record with no ratios list still yields a measured ratio
+    ratio, measured = mgr._ratio_for('mega')
+    assert measured is True and abs(ratio - 143.0 / sa) < 1e-9
+
+    # Never-seen player falls back to the empirical median, not a bucket
+    ratio_unknown, measured_unknown = mgr._ratio_for('nobody')
+    assert measured_unknown is False and ratio_unknown == DEFAULT_RATIO
+
+    # Learning stores the real ratio, and the median damps a single noisy leg
+    mgr._learn_tier('p2', 'Flyer', 'South Africa', 143 * 60)
+    mgr._learn_tier('p2', 'Flyer', 'South Africa', 145 * 60)
+    mgr._learn_tier('p2', 'Flyer', 'South Africa', 144 * 60)
+    assert len(mgr.tiers['p2']['ratios']) == 3
+    # Ratios persist rounded to 4dp, so compare at that precision
+    assert abs(mgr._ratio_for('p2')[0] - (144.0 / sa)) < 1e-3, 'median of the samples'
+
+    # Physically implausible timings are still rejected as glitches
+    mgr._learn_tier('p3', 'Glitch', 'South Africa', 5 * 60)
+    assert 'p3' not in mgr.tiers
+
+
+def test_flytrack_eta_window_biases_early():
+    """
+    Landing times show as a window whose EARLY edge is the "be ready by" moment.
+    The error is asymmetric: an enemy landing sooner than advertised gets people
+    hit, landing later just costs a short wait. A measured player gets a tighter
+    window than one we are only guessing at.
+    """
+    from features.flytrack import FlyTracker, POLL_LAG_SECONDS
+
+    mgr = FlyTracker(bot=None)
+    start = 1_000_000
+    mgr.tiers['known'] = {'tier': 'wlt', 'name': 'Known',
+                          'observed_minutes': 143.0, 'dest': 'South Africa'}
+
+    eta_known = mgr._eta_ts('known', 'South Africa', start)
+    early_known = mgr._eta_window('known', 'South Africa', eta_known)
+    eta_guess = mgr._eta_ts('guess', 'South Africa', start)
+    early_guess = mgr._eta_window('guess', 'South Africa', eta_guess)
+
+    assert early_known < eta_known, 'the window opens before the expected landing'
+    assert (eta_known - early_known) >= POLL_LAG_SECONDS, 'must cover the poll lag'
+    # Guessed players get a wider window than measured ones
+    assert (eta_guess - early_guess) > (eta_known - early_known)
+
+    # No ETA (unknown destination) -> no window, and no crash
+    assert mgr._eta_window('known', None, None) is None
+    assert mgr._eta_window('known', 'Nowhere', 12345) is None
+
+    # Rendering: the countdown tracks the EARLY edge, never the optimistic one
+    text = mgr._eta_text(eta_known, early_known)
+    assert f'<t:{early_known}:R>' in text and f'<t:{eta_known}:t>' in text
+    # Without an early edge it degrades to a single time
+    assert mgr._eta_text(eta_known, None) == f'<t:{eta_known}:t> (<t:{eta_known}:R>)'
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
     test_torn_api_helpers()
     test_stakeout_algorithm()
     test_flytrack_logic()
+    test_flytrack_uses_measured_speed_not_rounded_bucket()
+    test_flytrack_eta_window_biases_early()
     test_flytrack_estimate_leg()
     test_flytrack_group_formatting()
     test_flytrack_status_reuses_persisted_eta()

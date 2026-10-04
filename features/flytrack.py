@@ -21,6 +21,7 @@ channel. Auto-stops when the ranked war ends.
 """
 
 import discord
+import statistics
 from datetime import datetime, timezone
 from typing import Optional, Dict, Tuple
 
@@ -83,6 +84,29 @@ TIER_LABELS = {
     'wlt': 'WLT',
     'business': 'business class',
 }
+
+# The tiers above are LABELS ONLY — the ETA maths uses a player's measured
+# speed ratio (actual flight minutes / standard minutes), never the bucket.
+#
+# Why: snapping a measurement to the nearest bucket threw away the accurate
+# number we had just observed. Measured against 82 real flights, every single
+# prediction landed LATE (avg 8 min, worst 24) because every bucket is a touch
+# slower than reality — e.g. MegaBates was measured at 143 min to South Africa,
+# then predicted with the WLT bucket's 148.5 min, so he landed ~5.5 min early.
+#
+# Empirical ratios from those 82 flights: median 0.669, p25 0.657, p75 0.692.
+DEFAULT_RATIO = 0.669          # used until we have measured that player
+MIN_PLAUSIBLE_RATIO = 0.15     # faster than this is a glitch, not a perk
+MAX_PLAUSIBLE_RATIO = 1.30
+MAX_RATIO_SAMPLES = 5          # keep a few and take the median, to damp noise
+
+# Landing times are shown as a window, not a single minute. The early edge is
+# the "be ready by" moment, because the cost of error is asymmetric: an enemy
+# landing sooner than advertised gets your people hit, while landing later
+# only costs them a short wait.
+POLL_LAG_SECONDS = 60          # we spot a departure up to one poll late
+MEASURED_SPREAD = 0.03         # tight — we have watched this player fly
+ASSUMED_SPREAD = 0.10          # loose — we are guessing their travel perks
 
 # Abroad-hospital descriptions read "In a <adjective> hospital"
 HOSPITAL_ADJECTIVES = {
@@ -268,7 +292,9 @@ class FlyTracker:
                         'name': name, 'phase': resolved['phase'], 'dest': resolved['dest'],
                         'eta': resolved['eta'], 'leg_start': None, 'leg_observed': False,
                     }
-                    line = self._format_group_line(name, resolved['phase'], resolved['dest'], resolved['eta'])
+                    line = self._format_group_line(
+                        name, resolved['phase'], resolved['dest'], resolved['eta'],
+                        self._eta_window(tid, resolved['dest'], resolved['eta']))
                     entry = (resolved['eta'] or float('inf'), line)
                     (returning_lines if resolved['phase'] == PHASE_RETURNING else outbound_lines).append(entry)
                 elif phase == PHASE_ABROAD:
@@ -382,7 +408,8 @@ class FlyTracker:
                 else:
                     resolved = self._estimate_leg(tid, phase, dest, now_ts, prev)
                     r_phase, r_dest, r_eta = resolved['phase'], resolved['dest'], resolved['eta']
-                line = self._format_group_line(name, r_phase, r_dest, r_eta)
+                line = self._format_group_line(name, r_phase, r_dest, r_eta,
+                                               self._eta_window(tid, r_dest, r_eta))
                 entry = (r_eta or float('inf'), line)
                 (returning_lines if r_phase == PHASE_RETURNING else outbound_lines).append(entry)
             elif phase == PHASE_ABROAD:
@@ -514,10 +541,13 @@ class FlyTracker:
             if text_phase in (PHASE_OUT, PHASE_RETURNING):
                 resolved = self._estimate_leg(tid, text_phase, text_dest, now_ts, prev)
 
+                early = self._eta_window(tid, resolved['dest'], resolved['eta'])
                 if resolved['phase'] == PHASE_OUT:
-                    alerts.append(self._format_outbound_alert(resolved['dest'], name, resolved['eta']))
+                    alerts.append(self._format_outbound_alert(
+                        resolved['dest'], name, resolved['eta'], early))
                 else:
-                    alerts.append(self._format_return_alert(tid, name, resolved['dest'], resolved['eta']))
+                    alerts.append(self._format_return_alert(
+                        tid, name, resolved['dest'], resolved['eta'], early))
 
                 self.players[tid] = {
                     'name': name, 'phase': resolved['phase'], 'dest': resolved['dest'],
@@ -574,24 +604,75 @@ class FlyTracker:
     # ===== ETA / tier logic =====
 
     def _tier_for(self, torn_id: str) -> Tuple[str, bool]:
-        """Return (tier, learned) for a player — learned=False means assumption."""
+        """Return (tier, learned) for a player — learned=False means assumption.
+        Label only; the ETA maths uses _ratio_for."""
         entry = self.tiers.get(str(torn_id))
         if entry and entry.get('tier') in TIER_MULTIPLIERS:
             return entry['tier'], True
         return DEFAULT_TIER, False
+
+    def _ratio_for(self, torn_id: str) -> Tuple[float, bool]:
+        """
+        Return (speed_ratio, measured) — the player's actual flight minutes as a
+        fraction of the standard time, taken from flights we have watched them
+        complete. measured=False means nobody has timed them yet, so we fall
+        back to the empirical median across the faction.
+
+        Median of the stored samples, so one mistimed leg can't skew a player.
+        """
+        entry = self.tiers.get(str(torn_id)) or {}
+
+        samples = [r for r in (entry.get('ratios') or [])
+                   if isinstance(r, (int, float)) and MIN_PLAUSIBLE_RATIO <= r <= MAX_PLAUSIBLE_RATIO]
+
+        # Records written before ratios existed still carry the raw measurement,
+        # so derive one rather than discarding real observed data.
+        if not samples:
+            std = STANDARD_FLIGHT_MINUTES.get(entry.get('dest') or '')
+            observed = entry.get('observed_minutes')
+            if std and observed:
+                derived = observed / std
+                if MIN_PLAUSIBLE_RATIO <= derived <= MAX_PLAUSIBLE_RATIO:
+                    samples = [derived]
+
+        if samples:
+            return statistics.median(samples), True
+        return DEFAULT_RATIO, False
 
     def _eta_ts(self, torn_id: str, dest: Optional[str], leg_start: float) -> Optional[int]:
         """Estimated landing timestamp for a leg, or None if destination unknown."""
         std = STANDARD_FLIGHT_MINUTES.get(dest or '')
         if not std:
             return None
-        tier, _ = self._tier_for(torn_id)
-        return int(leg_start + std * TIER_MULTIPLIERS[tier] * 60)
+        ratio, _ = self._ratio_for(torn_id)
+        return int(leg_start + std * ratio * 60)
+
+    def _eta_window(self, torn_id: str, dest: Optional[str],
+                    eta: Optional[int]) -> Optional[int]:
+        """
+        Earliest plausible landing for an ETA — the "be ready by" edge of the
+        window. Covers the poll lag (we see a departure up to 60s after it
+        happened, so the clock starts late) plus how confident we are in this
+        player's speed. Returns None when there is no ETA to bound.
+        """
+        if not eta:
+            return None
+        std = STANDARD_FLIGHT_MINUTES.get(dest or '')
+        if not std:
+            return None
+        ratio, measured = self._ratio_for(torn_id)
+        spread = MEASURED_SPREAD if measured else ASSUMED_SPREAD
+        margin = POLL_LAG_SECONDS + std * ratio * spread * 60
+        early = int(eta - margin)
+        return early if early < eta else None
 
     def _tier_note(self, torn_id: str) -> str:
         tier, learned = self._tier_for(torn_id)
+        ratio, measured = self._ratio_for(torn_id)
         label = TIER_LABELS[tier]
-        return f'{label} — learned' if learned else f'assuming {label}'
+        if measured:
+            return f'{label} — measured at {ratio:.0%} of standard'
+        return f'assuming {label}'
 
     def _learn_tier(self, torn_id: str, name: str, dest: Optional[str], elapsed_seconds: float):
         """Infer a player's travel tier from a fully-observed flight leg (departure and
@@ -600,56 +681,78 @@ class FlyTracker:
         if not std or elapsed_seconds <= 0:
             return
 
-        best_tier, best_err = None, None
-        for tier, mult in TIER_MULTIPLIERS.items():
-            expected = std * mult * 60
-            err = abs(elapsed_seconds - expected) / expected
-            if best_err is None or err < best_err:
-                best_tier, best_err = tier, err
+        ratio = (elapsed_seconds / 60) / std
 
-        # Reject measurements that don't sit near any tier (glitchy data)
-        if best_err is None or best_err > 0.25:
-            logger.info(f'Fly: tier learn rejected for {name} [{torn_id}] — '
-                        f'{elapsed_seconds/60:.1f}min to {dest} matches no tier well')
+        # Reject only physically implausible timings (a missed poll, a status
+        # we misread). Anything inside the plausible band is kept as measured —
+        # we no longer round it to a tier, because that rounding was itself the
+        # source of the "landed early" complaints.
+        if not (MIN_PLAUSIBLE_RATIO <= ratio <= MAX_PLAUSIBLE_RATIO):
+            logger.info(f'Fly: speed sample rejected for {name} [{torn_id}] — '
+                        f'{elapsed_seconds/60:.1f}min to {dest} is {ratio:.2f}x standard')
             return
 
-        old = self.tiers.get(str(torn_id), {}).get('tier')
+        entry = self.tiers.get(str(torn_id), {})
+        samples = [r for r in (entry.get('ratios') or [])
+                   if isinstance(r, (int, float))]
+        samples.append(round(ratio, 4))
+        samples = samples[-MAX_RATIO_SAMPLES:]
+
+        # Nearest tier is kept purely as a human-readable label in alerts.
+        best_tier = min(TIER_MULTIPLIERS, key=lambda t: abs(ratio - TIER_MULTIPLIERS[t]))
+
         self.tiers[str(torn_id)] = {
             'tier': best_tier,
             'name': name,
+            'ratios': samples,
             'observed_minutes': round(elapsed_seconds / 60, 1),
             'dest': dest,
             'ts': datetime.now(timezone.utc).timestamp(),
         }
-        if old != best_tier:
-            logger.info(f'Fly: learned tier for {name} [{torn_id}]: {best_tier} '
-                        f'({elapsed_seconds/60:.1f}min to {dest})')
+        logger.info(f'Fly: measured {name} [{torn_id}] at {ratio:.3f}x standard '
+                    f'({elapsed_seconds/60:.1f}min to {dest}, {len(samples)} sample(s))')
 
     # ===== Message formatting =====
 
-    def _format_outbound_alert(self, dest: Optional[str], name: str, eta: Optional[int]) -> str:
+    @staticmethod
+    def _eta_text(eta: Optional[int], early: Optional[int]) -> str:
+        """
+        Landing time as a window ("5:31–5:36 pm") when we have an early edge,
+        otherwise a single time. The relative countdown always tracks the EARLY
+        edge, so "in 5 minutes" is the moment to be ready by, never an optimistic
+        one that leaves people exposed.
+        """
+        if early:
+            return f'<t:{early}:t>–<t:{eta}:t> (<t:{early}:R>)'
+        return f'<t:{eta}:t> (<t:{eta}:R>)'
+
+    def _format_outbound_alert(self, dest: Optional[str], name: str, eta: Optional[int],
+                               early: Optional[int] = None) -> str:
         # 🔴/🟢 instead of plane emoji — ✈️/🛬 look nearly identical at a
         # glance, which was the actual reason out/in was hard to tell apart.
         dest_label = dest or 'an unknown destination'
         if eta:
-            return f'🔴 **{name}** → **{dest_label}** — lands <t:{eta}:t> (<t:{eta}:R>)'
+            return f'🔴 **{name}** → **{dest_label}** — lands {self._eta_text(eta, early)}'
         return f'🔴 **{name}** → **{dest_label}** — flight time unknown'
 
-    def _format_return_alert(self, torn_id: str, name: str, dest: Optional[str], eta: Optional[int]) -> str:
+    def _format_return_alert(self, torn_id: str, name: str, dest: Optional[str],
+                             eta: Optional[int], early: Optional[int] = None) -> str:
         dest_label = dest or 'abroad'
         attack = f'https://www.torn.com/loader.php?sid=attack&user2ID={torn_id}'
         if eta:
-            return f'🟢 **{name}** ← **{dest_label}** — lands <t:{eta}:t> (<t:{eta}:R>) · [Attack]({attack})'
+            return (f'🟢 **{name}** ← **{dest_label}** — lands {self._eta_text(eta, early)} '
+                    f'· [Attack]({attack})')
         return f'🟢 **{name}** ← **{dest_label}** — landing time unknown · [Attack]({attack})'
 
-    def _format_group_line(self, name: str, phase: str, dest: Optional[str], eta: Optional[int]) -> str:
+    def _format_group_line(self, name: str, phase: str, dest: Optional[str], eta: Optional[int],
+                           early: Optional[int] = None) -> str:
         """One row for the grouped Returning/Outbound lists. Takes the fields
         directly (not a self.players lookup) so it's safe to use for a
         read-only status peek that must not touch persisted tracking state."""
         icon = '🔴 →' if phase == PHASE_OUT else '🟢 ←'
         dest_label = dest or 'unknown'
         if eta:
-            return f'{icon} **{name}** **{dest_label}** — <t:{eta}:t> (<t:{eta}:R>)'
+            return f'{icon} **{name}** **{dest_label}** — {self._eta_text(eta, early)}'
         return f'{icon} **{name}** **{dest_label}** — ETA unknown'
 
     def _format_abroad_line(self, name: str, dest: Optional[str]) -> str:
