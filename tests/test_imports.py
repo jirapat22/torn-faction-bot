@@ -1407,6 +1407,244 @@ def test_war_report_rejects_another_factions_war():
         wars_mod.load_json = orig_load
 
 
+# ===== Follow warnings (enemy flying to a country we are sitting in) =====
+
+def _fly_mgr(own_roster, enemy_roster, ff=None, ff_key=''):
+    """Build a FlyTracker wired to fake rosters.
+
+    Both the enemy roster and our own come from the same
+    fetch_any_faction_data helper, so the fake dispatches on faction id.
+    Returns (manager, posted_list, restore_callable).
+    """
+    import features.flytrack as fly_mod
+    from features.flytrack import FlyTracker
+    from config import TORN_FACTION_ID
+
+    posted = []
+
+    class FakeVS:
+        # Torn 100 -> Discord 555; Torn 101 deliberately absent (unregistered)
+        verified_users = {'555': {'torn_id': 100}}
+
+    mgr = FlyTracker(bot=None, war_tracker=None)
+    mgr.enabled = True
+    mgr.enemy_faction_id = '999'
+    mgr.verification_system = FakeVS()
+
+    async def fake_post(content=None, embed=None):
+        posted.append(content if content is not None else embed)
+    mgr._post = fake_post
+
+    async def fake_fetch(faction_id, selections='basic', **kw):
+        if str(faction_id) == str(TORN_FACTION_ID):
+            return own_roster if own_roster is None else {'members': own_roster}
+        return {'members': enemy_roster}
+
+    async def fake_ff(ids):
+        return ff or {}
+
+    orig = (fly_mod.fetch_any_faction_data, fly_mod.fetch_ffscouter_stats,
+            fly_mod.save_json, fly_mod.FFSCOUTER_API_KEY)
+    fly_mod.fetch_any_faction_data = fake_fetch
+    fly_mod.fetch_ffscouter_stats = fake_ff
+    fly_mod.save_json = lambda *a, **k: None
+    fly_mod.FFSCOUTER_API_KEY = ff_key
+
+    def restore():
+        (fly_mod.fetch_any_faction_data, fly_mod.fetch_ffscouter_stats,
+         fly_mod.save_json, fly_mod.FFSCOUTER_API_KEY) = orig
+
+    return mgr, posted, restore
+
+
+def _abroad(name, country):
+    return {'name': name, 'status': {'state': 'Abroad', 'description': f'In {country}'}}
+
+
+def _flying_to(name, country):
+    return {'name': name, 'status': {'state': 'Traveling',
+            'description': f'Traveling from Torn to {country}'}}
+
+
+def _home(name):
+    return {'name': name, 'status': {'state': 'Okay', 'description': 'Okay'}}
+
+
+def test_follow_warning_pings_only_the_member_in_that_country():
+    """
+    The feature SirAua asked for: warn a member when an enemy takes off toward
+    the country they are sitting in.
+
+    Three things have to hold or it's either useless or spam:
+      - only the member actually IN that country is pinged, by Discord mention
+      - enemies departing in the same tick are ONE message, not one each
+      - a departure toward an empty country produces nothing at all
+    """
+    import asyncio
+
+    own = {
+        '100': _abroad('OurGuy', 'Switzerland'),
+        '101': _flying_to('MidAir', 'Switzerland'),  # not landed -> not "sitting"
+    }
+    enemy_home = {'200': _home('EnemyA'), '201': _home('EnemyB'), '202': _home('EnemyC')}
+    mgr, posted, restore = _fly_mgr(own, enemy_home)
+    try:
+        # First tick baselines everyone silently
+        asyncio.run(mgr.check_flights())
+        assert posted == [], 'baseline tick must not alert'
+
+        # Two enemies head for Switzerland (where OurGuy is), one for Mexico
+        enemy_home['200'] = _flying_to('EnemyA', 'Switzerland')
+        enemy_home['201'] = _flying_to('EnemyB', 'Switzerland')
+        enemy_home['202'] = _flying_to('EnemyC', 'Mexico')
+        asyncio.run(mgr.check_flights())
+
+        follow = [p for p in posted if isinstance(p, str) and 'where you are' in p]
+        assert len(follow) == 1, f'expected one grouped warning, got {len(follow)}'
+        msg = follow[0]
+        assert '<@555>' in msg, 'must ping the member via their Discord account'
+        assert 'Switzerland' in msg
+        assert 'EnemyA' in msg and 'EnemyB' in msg, 'both same-tick departures in one message'
+        assert 'EnemyC' not in msg, 'Mexico has nobody of ours - no warning'
+        assert 'MidAir' not in msg, 'still in the air, not sitting in Switzerland'
+    finally:
+        restore()
+
+
+def test_follow_warning_cooldown_suppresses_repeats():
+    """
+    Ikaros's objection was noise. Once someone has been told enemies are heading
+    to Switzerland, saying it again minutes later adds nothing - they already
+    know to watch that country.
+    """
+    import asyncio
+    from features.flytrack import FOLLOW_ALERT_COOLDOWN_SECONDS
+
+    own = {'100': _abroad('OurGuy', 'Switzerland')}
+    mgr, posted, restore = _fly_mgr(own, {})
+    try:
+        deps = [{'tid': '200', 'name': 'EnemyA', 'dest': 'Switzerland',
+                 'eta': 1_000_500, 'early': 1_000_400}]
+
+        first = asyncio.run(mgr._follow_alerts(deps, 1_000_000))
+        assert len(first) == 1, 'first warning must go out'
+
+        again = asyncio.run(mgr._follow_alerts(deps, 1_000_060))
+        assert again == [], 'inside the cooldown -> silent'
+
+        later = asyncio.run(mgr._follow_alerts(
+            deps, 1_000_000 + FOLLOW_ALERT_COOLDOWN_SECONDS + 1))
+        assert len(later) == 1, 'past the cooldown it warns again'
+    finally:
+        restore()
+
+
+def test_follow_warning_skips_enemies_too_weak_to_matter():
+    """
+    Stat filter: an enemy with a fraction of the member's battle stats can't
+    realistically hurt them, so they aren't worth a notification. It must fail
+    OPEN though - a missing estimate keeps the warning, because a warning not
+    sent gets someone hit while a surplus one costs a single ping.
+    """
+    import asyncio
+
+    own = {'100': _abroad('OurGuy', 'Switzerland')}
+    ff = {
+        '100': {'bs_estimate': 10_000_000_000},  # our member
+        '200': {'bs_estimate': 1_000_000_000},   # 0.1x - no threat
+        '201': {'bs_estimate': 20_000_000_000},  # 2x - very much a threat
+        # 202 absent from FFScouter entirely -> must be kept
+    }
+    mgr, posted, restore = _fly_mgr(own, {}, ff=ff, ff_key='test-key')
+    try:
+        deps = [
+            {'tid': '200', 'name': 'Weakling', 'dest': 'Switzerland', 'eta': 1_000_500, 'early': 1_000_400},
+            {'tid': '201', 'name': 'Monster', 'dest': 'Switzerland', 'eta': 1_000_600, 'early': 1_000_500},
+            {'tid': '202', 'name': 'Unknown', 'dest': 'Switzerland', 'eta': 1_000_700, 'early': 1_000_600},
+        ]
+        msgs = asyncio.run(mgr._follow_alerts(deps, 1_000_000))
+        assert len(msgs) == 1
+        assert 'Monster' in msgs[0], 'a stronger enemy is a real threat'
+        assert 'Unknown' in msgs[0], 'no estimate must fail open, not silently drop'
+        assert 'Weakling' not in msgs[0], 'far weaker enemy is not worth a ping'
+        assert '~20.0b' in msgs[0], 'the estimate is shown so the member can judge'
+    finally:
+        restore()
+
+
+def test_follow_warning_silent_when_own_roster_unavailable():
+    """
+    The None-vs-empty contract, applied to our own roster. A failed fetch must
+    NOT read as "nobody is abroad" - that would quietly switch follow warnings
+    off for as long as the API misbehaves, the same failure mode that once
+    flagged the whole faction for missing OCs.
+
+    Also: the cooldown must not be stamped on a tick we stayed silent, or the
+    outage would go on suppressing the next real warning.
+    """
+    import asyncio
+
+    mgr, posted, restore = _fly_mgr(None, {})  # own roster fetch returns None
+    try:
+        # The contract itself: a failed fetch must report None, NOT an empty
+        # mapping. Both happen to stay silent here, but only None lets a future
+        # caller tell "the API is down" apart from "nobody is abroad".
+        assert asyncio.run(mgr._fetch_own_abroad()) is None
+
+        deps = [{'tid': '200', 'name': 'EnemyA', 'dest': 'Switzerland',
+                 'eta': 1_000_500, 'early': 1_000_400}]
+        assert asyncio.run(mgr._follow_alerts(deps, 1_000_000)) == []
+        assert mgr.follow_cooldowns == {}, 'an outage must not burn the cooldown'
+
+        # A genuinely empty answer (200 OK, nobody abroad) is also silent, but
+        # for the right reason - it is a real answer, not a failure.
+        import features.flytrack as fly_mod
+        async def empty_own(faction_id, selections='basic', **kw):
+            from config import TORN_FACTION_ID
+            if str(faction_id) == str(TORN_FACTION_ID):
+                return {'members': {'100': _home('OurGuy')}}
+            return {'members': {}}
+        fly_mod.fetch_any_faction_data = empty_own
+        assert asyncio.run(mgr._follow_alerts(deps, 1_000_000)) == []
+    finally:
+        restore()
+
+
+def test_fly_status_shows_destination_hotspots():
+    """
+    The other half of the request: "a list where the most are flying to or
+    sitting". Busiest country first, with sitting and inbound counted
+    separately. Someone RETURNING from a country is in neither bucket - they
+    are leaving it, not occupying it.
+    """
+    import asyncio
+
+    enemy = {
+        '200': _abroad('SatA', 'Switzerland'),
+        '201': _abroad('SatB', 'Switzerland'),
+        '202': _abroad('SatC', 'Switzerland'),
+        '203': _flying_to('InA', 'Switzerland'),
+        '204': _flying_to('InB', 'Switzerland'),
+        '205': _flying_to('InC', 'Mexico'),
+        '206': {'name': 'Homeward', 'status': {
+            'state': 'Traveling', 'description': 'Traveling from Japan to Torn'}},
+    }
+    mgr, posted, restore = _fly_mgr({}, enemy)
+    try:
+        embed = asyncio.run(mgr.status_embed())
+        hotspots = [f for f in embed.fields if 'Hotspots' in f.name]
+        assert hotspots, 'the Fly view must show a destination tally'
+        value = hotspots[0].value
+        lines = value.split('\n')
+        assert 'Switzerland' in lines[0] and '5' in lines[0], \
+            f'busiest country first, got: {lines[0]!r}'
+        assert '3 there' in lines[0] and '2 inbound' in lines[0]
+        assert any('Mexico' in ln and '1 inbound' in ln for ln in lines)
+        assert 'Japan' not in value, 'returning players do not occupy a country'
+    finally:
+        restore()
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -1438,4 +1676,9 @@ if __name__ == '__main__':
     test_stale_v1_crimes_fallback_rejected()
     test_retry_preserves_already_good_payload()
     test_left_faction_access_revoked_after_grace_period()
+    test_follow_warning_pings_only_the_member_in_that_country()
+    test_follow_warning_cooldown_suppresses_repeats()
+    test_follow_warning_skips_enemies_too_weak_to_matter()
+    test_follow_warning_silent_when_own_roster_unavailable()
+    test_fly_status_shows_destination_hotspots()
     print('All smoke tests passed.')

@@ -252,6 +252,9 @@ async def on_ready():
 
         # Initialize fly tracker (enemy flight tracking during ranked war)
         fly_tracker = FlyTracker(bot, war_tracker=war_tracker)
+        # Needed to turn a Torn id into a Discord mention when warning a member
+        # that an enemy is flying to the country they're sitting in.
+        fly_tracker.verification_system = verification_system
         await fly_tracker.load_data()
 
         # Initialize faction tools

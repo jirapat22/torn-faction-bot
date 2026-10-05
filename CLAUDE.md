@@ -7,7 +7,7 @@ A Discord bot for a Torn.com faction (Ascended Punks), deployed on Railway. `dis
 ## Commands
 
 ```bash
-py -3 -m pytest -q tests/          # full suite (31 tests) — use this
+py -3 -m pytest -q tests/          # full suite (38 tests) — use this
 py -3 -m pytest -q tests/test_imports.py::test_flytrack_logic   # single test
 py -3 tests/test_imports.py        # runs test_imports.py ONLY, see note below
 py -3 bot.py                       # run locally (needs .env)
@@ -88,6 +88,17 @@ ETA = standard flight minutes × that player's **measured** speed ratio (their o
 The travel "tiers" (airstrip/WLT/business) are **display labels only** — never use them for arithmetic. Rounding measurements into those buckets was itself a bug: it made every one of 82 stored flights predict late (avg 8 min), because each bucket runs ~6% slower than reality.
 
 Landing times render as a window whose **early edge** drives the countdown. The error is asymmetric: an enemy landing sooner than advertised gets people hurt; landing later only costs a wait.
+
+### Follow warnings
+
+Flytrack also pings one of our members when an enemy departs for the country they are *sitting in* (landed, not mid-flight). This is the only place the bot compares enemy state against **our own** roster, which it fetches lazily — only on ticks where someone actually departed, so quiet ticks cost nothing.
+
+Two dials keep it off the noise cliff, and both matter: the faction rejected an unfiltered version of this idea as too spammy before it was built.
+
+- A **per-member-per-country cooldown**. Enemies departing in the same tick are grouped into one message; across ticks the member is not re-told about a country they already know to watch.
+- A **stat threshold** (`FOLLOW_THREAT_RATIO`) via FFScouter. It fails **open** — no key, a failed lookup or a missing estimate all keep the warning, because a warning not sent gets someone hit while a surplus one costs one ping. FFScouter's own `fair_fight` is relative to the *key owner*, so it cannot be used for a per-member comparison; only estimate-vs-estimate works.
+
+The cooldown is stamped only when a warning actually goes out, so an outage or a filtered-out weakling never silences the next real threat.
 
 ### State and persistence
 

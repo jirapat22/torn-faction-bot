@@ -18,6 +18,9 @@ from production logs.
 
 Toggled via /war view:Fly (management only). Alerts post to the war-tracker
 channel. Auto-stops when the ranked war ends.
+
+Also warns our own members when an enemy takes off toward the country they
+are currently sitting in ("someone is following you") — see _follow_alerts.
 """
 
 import discord
@@ -28,12 +31,13 @@ from typing import Optional, Dict, Tuple
 from utils.helpers import load_json, save_json, create_embed
 from config import (
     TORN_FACTION_ID,
+    FFSCOUTER_API_KEY,
     WAR_TRACKER_CHANNEL_ID,
     EMBED_COLOR_INFO,
     EMBED_COLOR_SUCCESS,
     EMBED_COLOR_WARNING,
 )
-from utils.torn_api import fetch_any_faction_data
+from utils.torn_api import fetch_any_faction_data, fetch_ffscouter_stats
 
 import logging
 
@@ -107,6 +111,21 @@ MAX_RATIO_SAMPLES = 5          # keep a few and take the median, to damp noise
 POLL_LAG_SECONDS = 60          # we spot a departure up to one poll late
 MEASURED_SPREAD = 0.03         # tight — we have watched this player fly
 ASSUMED_SPREAD = 0.10          # loose — we are guessing their travel perks
+
+# ===== Follow warnings =====
+# When an enemy departs for a country one of our members is sitting in, that
+# member gets pinged. Two dials keep it from becoming the noise Ikaros was
+# worried about during a busy war:
+#
+# 1. A per-member-per-country cooldown. Once someone has been told "enemies are
+#    heading to Switzerland", repeating it every few minutes adds nothing — they
+#    already know to watch that country. Enemies departing in the SAME poll tick
+#    are still grouped into one message, so a 6-man wave is one ping, not six.
+# 2. A stat threshold. An enemy with a fraction of the member's battle stats
+#    can't realistically hurt them, so they aren't worth a notification.
+FOLLOW_ALERT_COOLDOWN_SECONDS = 15 * 60
+FOLLOW_THREAT_RATIO = 0.5      # skip enemies under half the member's est. stats
+FOLLOW_COOLDOWN_RETENTION = 4  # prune cooldown rows older than N x the cooldown
 
 # Abroad-hospital descriptions read "In a <adjective> hospital"
 HOSPITAL_ADJECTIVES = {
@@ -207,6 +226,7 @@ class FlyTracker:
     def __init__(self, bot, war_tracker=None):
         self.bot = bot
         self.war_tracker = war_tracker  # Set by bot.py
+        self.verification_system = None  # Set by bot.py — maps Torn id -> Discord id
         self.data_file = 'data/flytrack.json'
         self.enabled = False
         self.war_id = None
@@ -214,6 +234,9 @@ class FlyTracker:
         self.enemy_faction_name = ''
         self.players = {}  # {torn_id: {name, phase, dest, eta, leg_start, leg_observed}}
         self.tiers = {}    # {torn_id: {tier, name, observed_minutes, dest, ts}} — persists across wars
+        # {f'{our_member_torn_id}:{country}': last_alert_ts} — persisted so a
+        # restart mid-war doesn't re-ping everyone we already warned.
+        self.follow_cooldowns = {}
         self._war_end_strikes = 0
 
     async def load_data(self):
@@ -224,6 +247,7 @@ class FlyTracker:
         self.enemy_faction_name = data.get('enemy_faction_name', '')
         self.players = data.get('players', {})
         self.tiers = data.get('tiers', {})
+        self.follow_cooldowns = data.get('follow_cooldowns', {})
         if self.enabled:
             logger.info(f'Fly tracking resumed for faction {self.enemy_faction_id} ({self.enemy_faction_name})')
 
@@ -235,6 +259,7 @@ class FlyTracker:
             'enemy_faction_name': self.enemy_faction_name,
             'players': self.players,
             'tiers': self.tiers,
+            'follow_cooldowns': self.follow_cooldowns,
         })
 
     # ===== Toggle =====
@@ -273,6 +298,9 @@ class FlyTracker:
         self.enemy_faction_id = enemy_id
         self.enemy_faction_name = enemy_name
         self.players = {}
+        # A cooldown left over from the previous war would silently swallow the
+        # first warning for that member+country in this one.
+        self.follow_cooldowns = {}
         self._war_end_strikes = 0
 
         # Baseline snapshot: record phases without alerting, so toggling on
@@ -388,6 +416,9 @@ class FlyTracker:
             )
 
         returning_lines, outbound_lines, abroad_entries = [], [], []
+        # country -> [sitting there, currently inbound]. Returning players are
+        # counted in neither: they're leaving that country, not occupying it.
+        tally = {}
         now_ts = datetime.now(timezone.utc).timestamp()
         for tid, m in members.items():
             tid = str(tid)
@@ -412,8 +443,12 @@ class FlyTracker:
                                                self._eta_window(tid, r_dest, r_eta))
                 entry = (r_eta or float('inf'), line)
                 (returning_lines if r_phase == PHASE_RETURNING else outbound_lines).append(entry)
+                if r_phase == PHASE_OUT and r_dest:
+                    tally.setdefault(r_dest, [0, 0])[1] += 1
             elif phase == PHASE_ABROAD:
                 abroad_entries.append((name, self._format_abroad_line(name, dest)))
+                if dest:
+                    tally.setdefault(dest, [0, 0])[0] += 1
 
         returning_lines.sort(key=lambda e: e[0])
         outbound_lines.sort(key=lambda e: e[0])
@@ -425,6 +460,20 @@ class FlyTracker:
             description='Live snapshot — tracking keeps running in the background regardless.',
             color=EMBED_COLOR_INFO
         )
+        # Where the enemy is massing, busiest country first. Sits above the
+        # per-player lists because it's the one thing you want at a glance.
+        if tally:
+            rows = sorted(tally.items(), key=lambda kv: (-(kv[1][0] + kv[1][1]), kv[0]))
+            hotspots = []
+            for dest, (sitting, inbound) in rows[:8]:
+                bits = []
+                if sitting:
+                    bits.append(f'{sitting} there')
+                if inbound:
+                    bits.append(f'{inbound} inbound')
+                hotspots.append(f'**{dest}** {sitting + inbound} — {" · ".join(bits)}')
+            embed.add_field(name='🗺️ Hotspots',
+                            value='\n'.join(hotspots), inline=False)
         if returning_lines:
             embed.add_field(
                 name=f'🛬 Returning — attack window ({len(returning_lines)})',
@@ -504,6 +553,7 @@ class FlyTracker:
 
         now_ts = datetime.now(timezone.utc).timestamp()
         alerts = []
+        departures = []  # outbound legs this tick, for the follow warnings below
         changed = False
 
         for tid, m in members.items():
@@ -545,6 +595,13 @@ class FlyTracker:
                 if resolved['phase'] == PHASE_OUT:
                     alerts.append(self._format_outbound_alert(
                         resolved['dest'], name, resolved['eta'], early))
+                    if resolved['dest']:
+                        # Only outbound legs with a known destination can be
+                        # matched against where our own members are sitting.
+                        departures.append({
+                            'tid': tid, 'name': name, 'dest': resolved['dest'],
+                            'eta': resolved['eta'], 'early': early,
+                        })
                 else:
                     alerts.append(self._format_return_alert(
                         tid, name, resolved['dest'], resolved['eta'], early))
@@ -580,6 +637,14 @@ class FlyTracker:
         if alerts:
             await self._post(content='\n'.join(alerts))
 
+        # Follow warnings are posted one message per member rather than folded
+        # into the feed above, because each one @-mentions a specific person and
+        # must not get chunked together with unrelated flights.
+        if departures:
+            for line in await self._follow_alerts(departures, now_ts):
+                await self._post(content=line)
+                changed = True  # cooldowns were stamped - persist them
+
         if changed:
             await self.save_data()
 
@@ -589,6 +654,187 @@ class FlyTracker:
         if not data:
             return None
         return data.get('members', {})
+
+    # ===== Follow warnings =====
+
+    async def _fetch_own_abroad(self) -> Optional[Dict]:
+        """Our own members currently SITTING in a foreign country, grouped by
+        country: {'Switzerland': [{'tid': .., 'name': ..}, ...]}.
+
+        Returns None when the roster can't be read. The caller must then stay
+        silent instead of concluding "nobody is abroad" - that would quietly
+        switch follow warnings off for as long as the API misbehaves, which is
+        exactly the None-vs-empty failure that once flagged the whole faction
+        for missing OCs (see CLAUDE.md).
+
+        Only fetched on ticks where an enemy actually departed, so quiet ticks
+        cost no extra API call at all.
+        """
+        data = await fetch_any_faction_data(TORN_FACTION_ID, 'basic', cache_seconds=0)
+        if not data:
+            return None
+        members = data.get('members')
+        if not members:
+            # HTTP 200 with no roster is a malformed answer, not a real empty
+            # faction - we always have members.
+            return None
+
+        by_country = {}
+        for tid, m in members.items():
+            tid = str(tid)
+            name = m.get('name', tid)
+            phase, dest = parse_phase(m.get('status', {}), tid, name)
+            # Landed only. Someone still in the air isn't sitting anywhere yet,
+            # and an enemy leaving now could easily land after they do.
+            # Abroad-hospital counts as sitting: they're stuck in that country
+            # and become attackable the moment they're out.
+            if phase == PHASE_ABROAD and dest:
+                by_country.setdefault(dest, []).append({'tid': tid, 'name': name})
+        return by_country
+
+    async def _filter_threats(self, pairs: list) -> list:
+        """Drop (departure, our member) pairs where the enemy is far too weak to
+        threaten that particular member. Returns (departure, member, enemy_bs)
+        triples, enemy_bs being None when unknown.
+
+        Fails OPEN by design: no FFScouter key, a failed lookup, or a missing
+        estimate all keep the pair. A warning we didn't send gets somebody hit;
+        a warning we didn't need costs one notification.
+
+        Note FFScouter's own `fair_fight` number is relative to the API key
+        owner, not to each of our members, so it can't be used here - the
+        comparison has to be estimate vs estimate.
+        """
+        if not FFSCOUTER_API_KEY:
+            return [(dep, mem, None) for dep, mem in pairs]
+
+        ids = sorted({dep['tid'] for dep, _ in pairs} | {mem['tid'] for _, mem in pairs})
+        try:
+            ff = await fetch_ffscouter_stats(ids)
+        except Exception as e:
+            logger.error(f'Fly: FFScouter lookup failed for follow warning: {e}')
+            return [(dep, mem, None) for dep, mem in pairs]
+        if not ff:
+            return [(dep, mem, None) for dep, mem in pairs]
+
+        def bs(tid):
+            rec = ff.get(str(tid)) or {}
+            val = rec.get('bs_estimate')
+            try:
+                return int(val) if val else None
+            except (TypeError, ValueError):
+                return None
+
+        kept = []
+        for dep, mem in pairs:
+            enemy_bs, member_bs = bs(dep['tid']), bs(mem['tid'])
+            if enemy_bs is None or member_bs is None:
+                kept.append((dep, mem, enemy_bs))
+                continue
+            if enemy_bs >= member_bs * FOLLOW_THREAT_RATIO:
+                kept.append((dep, mem, enemy_bs))
+            else:
+                logger.info(
+                    f"Fly: skipped follow warning - {dep['name']} [{dep['tid']}] "
+                    f"({enemy_bs:,} est) is below {FOLLOW_THREAT_RATIO:g}x "
+                    f"{mem['name']} [{mem['tid']}] ({member_bs:,} est)")
+        return kept
+
+    def _mention_for(self, torn_id: str) -> Optional[str]:
+        """Discord mention for a Torn id, via the verification database.
+        None for anyone who never registered with the bot - they get named in
+        the alert instead, so leadership can still nudge them manually."""
+        vs = self.verification_system
+        if not vs:
+            return None
+        for discord_id, rec in (getattr(vs, 'verified_users', None) or {}).items():
+            if str((rec or {}).get('torn_id')) == str(torn_id):
+                return f'<@{discord_id}>'
+        return None
+
+    def _prune_follow_cooldowns(self, now_ts: float):
+        """Cooldown rows would otherwise accumulate one per member-country pair
+        forever. Anything well past its cooldown can never suppress again."""
+        cutoff = now_ts - (FOLLOW_ALERT_COOLDOWN_SECONDS * FOLLOW_COOLDOWN_RETENTION)
+        stale = [k for k, ts in self.follow_cooldowns.items() if ts < cutoff]
+        for k in stale:
+            del self.follow_cooldowns[k]
+
+    @staticmethod
+    def _format_bs(value: Optional[int]) -> str:
+        """Compact battle-stat estimate, e.g. 2140000000 -> '~2.1b'."""
+        if not value:
+            return ''
+        for div, suffix in ((1e9, 'b'), (1e6, 'm'), (1e3, 'k')):
+            if value >= div:
+                return f'~{value / div:.1f}{suffix}'
+        return f'~{value}'
+
+    def _format_follow_alert(self, mem: Dict, items: list) -> str:
+        """One warning message aimed at a single member, listing every enemy
+        that just took off toward the country they're sitting in."""
+        mention = self._mention_for(mem['tid'])
+        who = f"{mention} **{mem['name']}**" if mention else f"**{mem['name']}** (not registered)"
+        dest = items[0][0]['dest']
+        count = '**1 enemy**' if len(items) == 1 else f'**{len(items)} enemies**'
+        lines = [f"\u26a0\ufe0f {who} \u2014 {count} heading to **{dest}**, where you are:"]
+        for dep, enemy_bs in items:
+            profile = f"https://www.torn.com/profiles.php?XID={dep['tid']}"
+            stat = f" \u00b7 {self._format_bs(enemy_bs)}" if enemy_bs else ''
+            when = (f"lands {self._eta_text(dep['eta'], dep['early'])}"
+                    if dep['eta'] else 'landing time unknown')
+            lines.append(f"\u2003\u2022 **{dep['name']}** {when}{stat} \u00b7 [Profile]({profile})")
+        return '\n'.join(lines)
+
+    async def _follow_alerts(self, departures: list, now_ts: float) -> list:
+        """Build the "someone is following you" warnings for this tick.
+
+        Returns a list of ready-to-post message strings (one per member) and
+        stamps the cooldowns for everyone warned.
+        """
+        own = await self._fetch_own_abroad()
+        if own is None:
+            logger.warning('Fly: own roster unavailable - skipping follow warnings this tick')
+            return []
+        if not own:
+            return []  # genuinely nobody abroad, nothing to follow
+
+        # Pair every departure with our members already sitting at that destination
+        pairs = [(dep, mem) for dep in departures for mem in own.get(dep['dest'], [])]
+        if not pairs:
+            return []
+
+        # Cooldown first, so suppressed pairs never cost an FFScouter lookup.
+        # The stamp is only written once a warning actually goes out, so a pair
+        # the stat filter drops doesn't silence the next real threat.
+        fresh = []
+        for dep, mem in pairs:
+            last = self.follow_cooldowns.get(f"{mem['tid']}:{dep['dest']}", 0)
+            if now_ts - last >= FOLLOW_ALERT_COOLDOWN_SECONDS:
+                fresh.append((dep, mem))
+        if not fresh:
+            return []
+
+        threats = await self._filter_threats(fresh)
+        if not threats:
+            return []
+
+        # Group by the member being warned so each person gets one message
+        grouped = {}
+        for dep, mem, enemy_bs in threats:
+            key = f"{mem['tid']}:{dep['dest']}"
+            grouped.setdefault(key, (mem, []))[1].append((dep, enemy_bs))
+
+        messages = []
+        for key, (mem, items) in grouped.items():
+            items.sort(key=lambda it: it[0]['eta'] or float('inf'))
+            messages.append(self._format_follow_alert(mem, items))
+            self.follow_cooldowns[key] = now_ts
+            logger.info(f"Fly: follow warning for {mem['name']} [{mem['tid']}] in "
+                        f"{items[0][0]['dest']} - {len(items)} enemy(s) inbound")
+
+        self._prune_follow_cooldowns(now_ts)
+        return messages
 
     # ===== Leg estimation =====
 
