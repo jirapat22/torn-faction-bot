@@ -7,7 +7,7 @@ A Discord bot for a Torn.com faction (Ascended Punks), deployed on Railway. `dis
 ## Commands
 
 ```bash
-py -3 -m pytest -q tests/          # full suite (40 tests) — use this
+py -3 -m pytest -q tests/          # full suite (41 tests) — use this
 py -3 -m pytest -q tests/test_imports.py::test_flytrack_logic   # single test
 py -3 tests/test_imports.py        # runs test_imports.py ONLY, see note below
 py -3 bot.py                       # run locally (needs .env)

@@ -1289,6 +1289,81 @@ def test_flytrack_eta_window_biases_early():
     assert mgr._eta_text(eta_known, None) == f'<t:{eta_known}:t> (<t:{eta_known}:R>)'
 
 
+def test_xan_counts_friendly_hosps():
+    """
+    Friendly hosps are reimbursed like any other hit: they cost the same energy
+    and are thrown on instruction to put a teammate out of reach.
+
+    The tricky part is double-counting. _get_war_attack_stats matches a friendly
+    hosp FIRST and `continue`s, so it never lands in war_hits or outside/chain
+    hits; the ranked war report likewise only counts attacks on the war
+    opponent. This test pins both halves: the hosp is added exactly once, and a
+    member who ONLY threw hosps still shows up (they used to be invisible,
+    because the list is filtered on total > 0).
+    """
+    import asyncio
+    from features.wars import WarTracker
+    import utils.torn_api as torn_api_mod
+    from config import TORN_FACTION_ID
+
+    mgr = WarTracker(bot=None)
+
+    members = {'111': {'name': 'Fighter'}, '222': {'name': 'Medic'}, '333': {'name': 'Idle'}}
+
+    async def fake_members():
+        return members
+    orig_members = torn_api_mod.fetch_faction_members
+    torn_api_mod.fetch_faction_members = fake_members
+
+    async def no_report(war_id=None):
+        return {}
+    mgr._fetch_rankedwarreport = no_report
+
+    async def fake_stats(enemy_faction_id, war_start):
+        return {
+            # 10 war hits, 2 chain-outside, 1 hosp -> 13
+            '111': {'war_hits': 10, 'chain_outside_hits': 2, 'hosps_given': 1},
+            # hosps ONLY - must still appear
+            '222': {'war_hits': 0, 'chain_outside_hits': 0, 'hosps_given': 4},
+            # nothing at all - must stay out
+            '333': {'war_hits': 0, 'chain_outside_hits': 0, 'hosps_given': 0},
+            '_friendly_hosps': [],
+        }
+    mgr._get_war_attack_stats = fake_stats
+
+    try:
+        war_info = {
+            'war_id': 999,
+            'is_active': True,
+            'data': {
+                'war': {'start': 1_000_000},
+                'factions': {
+                    str(TORN_FACTION_ID): {'name': 'Us', 'score': 100},
+                    '53421': {'name': 'Them', 'score': 50},
+                },
+            },
+        }
+        result = asyncio.run(mgr.format_xan_embed(war_info))
+        embed = result[0] if isinstance(result, list) else result
+
+        fields = {f.name: f.value for f in embed.fields}
+        assert fields['War Hits'] == '10'
+        assert fields['Chain Outside'] == '2'
+        assert fields['Friendly Hosps'] == '5', 'hosps are totalled across members'
+        assert fields['Total'] == '17', 'war + chain + hosps, each counted once'
+
+        table = next(v for k, v in fields.items() if k.startswith('Members'))
+        assert 'Hsp' in table, 'the table needs its own hosps column'
+        assert 'Medic' in table, 'a hosps-only member must not be filtered out'
+        assert 'Idle' not in table, 'someone with no contribution stays off the list'
+
+        # Fighter's row: 10 war, 2 chain, 1 hosp, 13 total - all on one line
+        row = next(ln for ln in table.split('\n') if 'Fighter' in ln)
+        assert row.split()[-4:] == ['10', '2', '1', '13'], row
+    finally:
+        torn_api_mod.fetch_faction_members = orig_members
+
+
 def test_war_report_v2_shape_normalised():
     """
     Found in production logs: Torn retired `rankedwarreport` from API v1, which
@@ -1747,6 +1822,7 @@ if __name__ == '__main__':
     test_alliance_announces_old_war_end_on_new_war()
     test_war_report_v2_shape_normalised()
     test_war_report_rejects_another_factions_war()
+    test_xan_counts_friendly_hosps()
     test_activity_profile_chunk_detection()
     test_activity_profile_manager_queries()
     test_activity_profile_record_snapshot()

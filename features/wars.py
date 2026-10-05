@@ -901,7 +901,14 @@ class WarTracker:
     async def format_xan_embed(self, war_info):
         """
         Create Discord embed for Xanax reimbursement calculation.
-        Shows war hits + chain outside hits per member.
+        Shows war hits + chain outside hits + friendly hosps per member.
+
+        Friendly hosps count because they cost the same energy as any other
+        hit and are thrown on instruction to keep a teammate out of reach -
+        reimbursing the war hit but not the defensive one would under-pay the
+        people doing as they were told. They are excluded from war/outside hit
+        counting upstream (see _get_war_attack_stats), so adding them here
+        cannot double-count.
 
         Args:
             war_info: War data from get_latest_war()
@@ -977,6 +984,9 @@ class WarTracker:
             member_name = member_data.get('name', f'ID:{user_id}')
             log_stats = attack_stats.get(user_id, {})
             chain_outside = log_stats.get('chain_outside_hits', 0)
+            # Always from the attacks log: the ranked war report only counts
+            # attacks on the war opponent, so it never sees a friendly hosp.
+            friendly_hosps = log_stats.get('hosps_given', 0)
 
             if our_war_members:
                 war_stats = our_war_members.get(user_id, {})
@@ -984,12 +994,13 @@ class WarTracker:
             else:
                 war_hits = log_stats.get('war_hits', 0)
 
-            total = war_hits + chain_outside
+            total = war_hits + chain_outside + friendly_hosps
             if total > 0:
                 member_list.append({
                     'name': member_name,
                     'war_hits': war_hits,
                     'chain_outside': chain_outside,
+                    'friendly_hosps': friendly_hosps,
                     'total': total,
                 })
 
@@ -999,7 +1010,8 @@ class WarTracker:
         # Totals
         total_war = sum(m['war_hits'] for m in member_list)
         total_chain = sum(m['chain_outside'] for m in member_list)
-        total_all = total_war + total_chain
+        total_hosp = sum(m['friendly_hosps'] for m in member_list)
+        total_all = total_war + total_chain + total_hosp
 
         # War status header
         enemy_name = enemy_faction_data.get('name', 'Unknown') if enemy_faction_data else 'Unknown'
@@ -1021,7 +1033,7 @@ class WarTracker:
         embeds = []
         legend = (
             '\n\n**War** = Hits on war opponent | **Chn** = Outside hits during chain\n'
-            '**Tot** = War + Chn combined'
+            '**Hsp** = Friendly hosps (teammate put safe) | **Tot** = all three combined'
         )
         embed = create_embed(
             title='Xanax Reimbursement Report',
@@ -1030,6 +1042,7 @@ class WarTracker:
             fields=[
                 {'name': 'War Hits', 'value': str(total_war), 'inline': True},
                 {'name': 'Chain Outside', 'value': str(total_chain), 'inline': True},
+                {'name': 'Friendly Hosps', 'value': str(total_hosp), 'inline': True},
                 {'name': 'Total', 'value': str(total_all), 'inline': True},
             ]
         )
@@ -1038,13 +1051,14 @@ class WarTracker:
         max_name = max((len(m['name']) for m in sorted_members), default=10)
         max_name = min(max_name, 15)
 
-        header = f'{"#":>2}  {"Name":<{max_name}}  War  Chn  Tot'
+        header = f'{"#":>2}  {"Name":<{max_name}}  War  Chn  Hsp  Tot'
         separator = '-' * len(header)
         table_lines = [header, separator]
 
         for i, m in enumerate(sorted_members):
             name = m['name'][:max_name]
-            line = f'{i+1:>2}  {name:<{max_name}}  {m["war_hits"]:>3}  {m["chain_outside"]:>3}  {m["total"]:>3}'
+            line = (f'{i+1:>2}  {name:<{max_name}}  {m["war_hits"]:>3}  '
+                    f'{m["chain_outside"]:>3}  {m["friendly_hosps"]:>3}  {m["total"]:>3}')
             table_lines.append(line)
 
         # Split into chunks for Discord field limits
