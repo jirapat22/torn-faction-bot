@@ -1289,6 +1289,41 @@ def test_flytrack_eta_window_biases_early():
     assert mgr._eta_text(eta_known, None) == f'<t:{eta_known}:t> (<t:{eta_known}:R>)'
 
 
+def test_incoming_split_does_not_dump_war_hits_into_outside():
+    """
+    War 50338's participation board read "War Incoming 0 / Outside Incoming
+    1005" - every single hit taken filed as an outsider, in the middle of a
+    ranked war lost 1952-5290.
+
+    Cause: outside was derived as `total_incoming - defends`, and v2 dropped
+    `defends`. .get('defends', 0) cannot tell a missing field from a real zero,
+    so the subtraction handed the entire total to the outside bucket.
+
+    The true split for that war was 931 war / 74 outside.
+    """
+    from features.wars import WarTracker
+
+    split = WarTracker._incoming_split
+
+    # v2 report: no `defends` at all -> trust the attacks log's own split
+    war_inc, outside_inc = split({'attacks': 79}, {
+        'total_incoming': 1005, 'war_incoming': 931, 'outside_incoming': 74})
+    assert (war_inc, outside_inc) == (931, 74), \
+        'war hits must not be dumped into the outside bucket'
+
+    # v1-era cached report: `defends` is authoritative, outside is the remainder
+    war_inc, outside_inc = split({'defends': 900}, {
+        'total_incoming': 1005, 'war_incoming': 931, 'outside_incoming': 74})
+    assert (war_inc, outside_inc) == (900, 105), 'a real defends value still wins'
+
+    # A genuine zero is NOT the same as a missing field
+    war_inc, outside_inc = split({'defends': 0}, {'total_incoming': 12})
+    assert (war_inc, outside_inc) == (0, 12), 'defends=0 means truly never hit in war'
+
+    # No log and no defends -> zeros, not a crash
+    assert split({}, {}) == (0, 0)
+
+
 def test_war_report_counts_hits_taken_from_attack_log():
     """
     War 50338's management report said "Total Times Hit: 0" for every member
@@ -1892,6 +1927,7 @@ if __name__ == '__main__':
     test_war_report_v2_shape_normalised()
     test_war_report_rejects_another_factions_war()
     test_xan_counts_friendly_hosps()
+    test_incoming_split_does_not_dump_war_hits_into_outside()
     test_war_report_counts_hits_taken_from_attack_log()
     test_activity_profile_chunk_detection()
     test_activity_profile_manager_queries()

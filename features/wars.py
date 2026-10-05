@@ -473,6 +473,31 @@ class WarTracker:
         logger.info(f'War: Fetched {len(all_attacks)} total attacks since war start')
         return all_attacks
 
+    @staticmethod
+    def _incoming_split(war_stats, log_stats):
+        """Split hits taken into (war, outside).
+
+        Shared by the participation board and the management report so the two
+        can never disagree about the same war.
+
+        The ranked war report's `defends` is authoritative when it is actually
+        there, so it still wins - but v2 dropped the field, and reading a
+        MISSING field with .get('defends', 0) is indistinguishable from a real
+        zero. That is what made war 50338 show "War Incoming 0 / Outside
+        Incoming 1005": every one of the 931 war hits fell through into the
+        outside bucket, because outside was derived as total minus a defends
+        that was never there.
+
+        Falling back to the attacks log fixes it. The log classifies by the war
+        modifier, which survives stealth attacks - 395 of those 931 had blank
+        attacker fields, so anything keyed on attacker_faction would miss them.
+        """
+        defends = war_stats.get('defends')
+        if defends is not None:
+            total_inc = log_stats.get('total_incoming', 0)
+            return defends, max(0, total_inc - defends)
+        return log_stats.get('war_incoming', 0), log_stats.get('outside_incoming', 0)
+
     async def _get_war_attack_stats(self, enemy_faction_id, war_start):
         """
         Compute per-member war statistics from the faction attacks log.
@@ -710,9 +735,7 @@ class WarTracker:
                 war_stats = our_war_members.get(user_id, {})
                 log_stats = attack_stats.get(user_id, {})
 
-                war_inc = war_stats.get('defends', 0)
-                total_inc = log_stats.get('total_incoming', 0)
-                outside_inc = max(0, total_inc - war_inc)
+                war_inc, outside_inc = self._incoming_split(war_stats, log_stats)
 
                 member_list.append({
                     'name': member_name,
@@ -1175,8 +1198,7 @@ class WarTracker:
             # fallback for cached v1-era reports; live v2 reports no longer
             # carry it, which is why this read 0 for the whole faction.
             log_stats = (attack_stats or {}).get(user_id) or {}
-            incoming = log_stats.get('war_incoming', stats.get('defends', 0))
-            outside_incoming = log_stats.get('outside_incoming', 0)
+            incoming, outside_incoming = self._incoming_split(stats, log_stats)
 
             score = stats.get('score', 0)
 
