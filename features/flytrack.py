@@ -124,8 +124,27 @@ ASSUMED_SPREAD = 0.10          # loose — we are guessing their travel perks
 # 2. A stat threshold. An enemy with a fraction of the member's battle stats
 #    can't realistically hurt them, so they aren't worth a notification.
 FOLLOW_ALERT_COOLDOWN_SECONDS = 15 * 60
-FOLLOW_THREAT_RATIO = 0.5      # skip enemies under half the member's est. stats
+FOLLOW_THREAT_RATIO = 0.5      # below this x the member's stats, never worth a ping
 FOLLOW_COOLDOWN_RETENTION = 4  # prune cooldown rows older than N x the cooldown
+
+# Enemies are split into bands RELATIVE TO THE MEMBER being warned, because
+# "strong" has no absolute meaning here - measured live, the same enemy (PUAD,
+# ~817k) is a genuine threat to Trizzy973 (516k) and completely irrelevant to
+# TrevorLahey420 (7.5m) standing in the same country.
+#
+# Only a non-trivial enemy can TRIGGER a message; once one has, every other
+# enemy heading to that country in the same tick is listed too, since the extra
+# context is free - it rides along in a message that was being sent anyway.
+BAND_STRONGER = 'stronger'   # at or above the member's estimate
+BAND_UNKNOWN = 'unknown'     # no estimate - treated as a threat, never hidden
+BAND_WEAKER = 'weaker'       # below the member, but still above the trigger bar
+BAND_TRIVIAL = 'trivial'     # too weak to warrant a notification on its own
+BAND_LABELS = {
+    BAND_STRONGER: '\U0001f534 **Stronger than you**',
+    BAND_UNKNOWN: '\U0001f7e1 **Unknown strength**',
+    BAND_WEAKER: '\U0001f7e2 **Weaker than you**',
+}
+BAND_ORDER = [BAND_STRONGER, BAND_UNKNOWN, BAND_WEAKER]
 
 # Abroad-hospital descriptions read "In a <adjective> hospital"
 HOSPITAL_ADJECTIVES = {
@@ -692,30 +711,29 @@ class FlyTracker:
                 by_country.setdefault(dest, []).append({'tid': tid, 'name': name})
         return by_country
 
-    async def _filter_threats(self, pairs: list) -> list:
-        """Drop (departure, our member) pairs where the enemy is far too weak to
-        threaten that particular member. Returns (departure, member, enemy_bs)
-        triples, enemy_bs being None when unknown.
+    async def _classify_threats(self, pairs: list) -> list:
+        """Band each (departure, our member) pair by how the enemy compares to
+        THAT member. Returns (departure, member, enemy_bs, band) tuples.
 
-        Fails OPEN by design: no FFScouter key, a failed lookup, or a missing
-        estimate all keep the pair. A warning we didn't send gets somebody hit;
-        a warning we didn't need costs one notification.
+        Nothing is dropped here - banding and the decision to send are kept
+        apart on purpose, so a message triggered by a real threat can also list
+        the harmless enemies heading the same way without costing a second ping.
+
+        Fails OPEN: no FFScouter key, a failed lookup, or a missing estimate all
+        land in BAND_UNKNOWN, which triggers. A warning we didn't send gets
+        somebody hit; a warning we didn't need costs one notification.
 
         Note FFScouter's own `fair_fight` number is relative to the API key
         owner, not to each of our members, so it can't be used here - the
         comparison has to be estimate vs estimate.
         """
-        if not FFSCOUTER_API_KEY:
-            return [(dep, mem, None) for dep, mem in pairs]
-
-        ids = sorted({dep['tid'] for dep, _ in pairs} | {mem['tid'] for _, mem in pairs})
-        try:
-            ff = await fetch_ffscouter_stats(ids)
-        except Exception as e:
-            logger.error(f'Fly: FFScouter lookup failed for follow warning: {e}')
-            return [(dep, mem, None) for dep, mem in pairs]
-        if not ff:
-            return [(dep, mem, None) for dep, mem in pairs]
+        ff = {}
+        if FFSCOUTER_API_KEY:
+            ids = sorted({dep['tid'] for dep, _ in pairs} | {mem['tid'] for _, mem in pairs})
+            try:
+                ff = await fetch_ffscouter_stats(ids) or {}
+            except Exception as e:
+                logger.error(f'Fly: FFScouter lookup failed for follow warning: {e}')
 
         def bs(tid):
             rec = ff.get(str(tid)) or {}
@@ -725,20 +743,19 @@ class FlyTracker:
             except (TypeError, ValueError):
                 return None
 
-        kept = []
+        banded = []
         for dep, mem in pairs:
             enemy_bs, member_bs = bs(dep['tid']), bs(mem['tid'])
             if enemy_bs is None or member_bs is None:
-                kept.append((dep, mem, enemy_bs))
-                continue
-            if enemy_bs >= member_bs * FOLLOW_THREAT_RATIO:
-                kept.append((dep, mem, enemy_bs))
+                band = BAND_UNKNOWN
+            elif enemy_bs >= member_bs:
+                band = BAND_STRONGER
+            elif enemy_bs >= member_bs * FOLLOW_THREAT_RATIO:
+                band = BAND_WEAKER
             else:
-                logger.info(
-                    f"Fly: skipped follow warning - {dep['name']} [{dep['tid']}] "
-                    f"({enemy_bs:,} est) is below {FOLLOW_THREAT_RATIO:g}x "
-                    f"{mem['name']} [{mem['tid']}] ({member_bs:,} est)")
-        return kept
+                band = BAND_TRIVIAL
+            banded.append((dep, mem, enemy_bs, band))
+        return banded
 
     def _mention_for(self, torn_id: str) -> Optional[str]:
         """Discord mention for a Torn id, via the verification database.
@@ -772,18 +789,38 @@ class FlyTracker:
 
     def _format_follow_alert(self, mem: Dict, items: list) -> str:
         """One warning message aimed at a single member, listing every enemy
-        that just took off toward the country they're sitting in."""
+        that just took off toward the country they're sitting in, split into
+        stronger/weaker bands relative to that member.
+
+        The mention alone identifies the person - Discord already renders it as
+        their nickname, which in this server carries the Torn name, so also
+        printing mem['name'] produced "@Trizzy973 [3266373] Trizzy973".
+        """
         mention = self._mention_for(mem['tid'])
-        who = f"{mention} **{mem['name']}**" if mention else f"**{mem['name']}** (not registered)"
+        who = mention or f"**{mem['name']}** (not registered)"
         dest = items[0][0]['dest']
         count = '**1 enemy**' if len(items) == 1 else f'**{len(items)} enemies**'
         lines = [f"\u26a0\ufe0f {who} \u2014 {count} heading to **{dest}**, where you are:"]
-        for dep, enemy_bs in items:
-            profile = f"https://www.torn.com/profiles.php?XID={dep['tid']}"
-            stat = f" \u00b7 {self._format_bs(enemy_bs)}" if enemy_bs else ''
-            when = (f"lands {self._eta_text(dep['eta'], dep['early'])}"
-                    if dep['eta'] else 'landing time unknown')
-            lines.append(f"\u2003\u2022 **{dep['name']}** {when}{stat} \u00b7 [Profile]({profile})")
+
+        # BAND_TRIVIAL shares the "weaker" heading - the split the faction asked
+        # for is strong vs weak, not a third tier nobody would act on.
+        grouped = {}
+        for dep, enemy_bs, band in items:
+            grouped.setdefault(BAND_WEAKER if band == BAND_TRIVIAL else band, []).append(
+                (dep, enemy_bs))
+
+        for band in BAND_ORDER:
+            rows = grouped.get(band)
+            if not rows:
+                continue
+            lines.append(BAND_LABELS[band])
+            for dep, enemy_bs in rows:
+                profile = f"https://www.torn.com/profiles.php?XID={dep['tid']}"
+                stat = f" \u00b7 {self._format_bs(enemy_bs)}" if enemy_bs else ''
+                when = (f"lands {self._eta_text(dep['eta'], dep['early'])}"
+                        if dep['eta'] else 'landing time unknown')
+                lines.append(f"\u2003\u2022 **{dep['name']}** {when}{stat} "
+                             f"\u00b7 [Profile]({profile})")
         return '\n'.join(lines)
 
     async def _follow_alerts(self, departures: list, now_ts: float) -> list:
@@ -815,23 +852,32 @@ class FlyTracker:
         if not fresh:
             return []
 
-        threats = await self._filter_threats(fresh)
-        if not threats:
-            return []
+        banded = await self._classify_threats(fresh)
 
-        # Group by the member being warned so each person gets one message
+        # Group by the member being warned so each person gets one message.
+        # Messages stay per-member rather than one per country because the
+        # bands are relative to that member's own stats - the same enemy is a
+        # threat to one of two people standing in the same place.
         grouped = {}
-        for dep, mem, enemy_bs in threats:
+        for dep, mem, enemy_bs, band in banded:
             key = f"{mem['tid']}:{dep['dest']}"
-            grouped.setdefault(key, (mem, []))[1].append((dep, enemy_bs))
+            grouped.setdefault(key, (mem, []))[1].append((dep, enemy_bs, band))
 
         messages = []
         for key, (mem, items) in grouped.items():
+            # Trivial enemies ride along in a message, but never cause one.
+            if all(band == BAND_TRIVIAL for _, _, band in items):
+                logger.info(f"Fly: no follow warning for {mem['name']} [{mem['tid']}] in "
+                            f"{items[0][0]['dest']} - all {len(items)} enemy(s) too weak")
+                continue
             items.sort(key=lambda it: it[0]['eta'] or float('inf'))
             messages.append(self._format_follow_alert(mem, items))
             self.follow_cooldowns[key] = now_ts
             logger.info(f"Fly: follow warning for {mem['name']} [{mem['tid']}] in "
                         f"{items[0][0]['dest']} - {len(items)} enemy(s) inbound")
+
+        if not messages:
+            return []
 
         self._prune_follow_cooldowns(now_ts)
         return messages

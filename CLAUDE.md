@@ -7,7 +7,7 @@ A Discord bot for a Torn.com faction (Ascended Punks), deployed on Railway. `dis
 ## Commands
 
 ```bash
-py -3 -m pytest -q tests/          # full suite (38 tests) — use this
+py -3 -m pytest -q tests/          # full suite (39 tests) — use this
 py -3 -m pytest -q tests/test_imports.py::test_flytrack_logic   # single test
 py -3 tests/test_imports.py        # runs test_imports.py ONLY, see note below
 py -3 bot.py                       # run locally (needs .env)
@@ -91,11 +91,14 @@ Landing times render as a window whose **early edge** drives the countdown. The 
 
 ### Follow warnings
 
+Messages stay **per member**, not per country, precisely because the bands are personal. Measured volume on a live war: ~2 enemy departures/hour faction-wide, about **one ping per abroad member every 5-10 hours**, 1.3 messages/hour channel-wide with 12 members abroad - so the cooldown almost never binds and exists for bursts.
+
 Flytrack also pings one of our members when an enemy departs for the country they are *sitting in* (landed, not mid-flight). This is the only place the bot compares enemy state against **our own** roster, which it fetches lazily — only on ticks where someone actually departed, so quiet ticks cost nothing.
 
 Two dials keep it off the noise cliff, and both matter: the faction rejected an unfiltered version of this idea as too spammy before it was built.
 
 - A **per-member-per-country cooldown**. Enemies departing in the same tick are grouped into one message; across ticks the member is not re-told about a country they already know to watch.
+- Enemies are **banded relative to the member being warned** (stronger / unknown / weaker), because "strong" has no absolute meaning: measured live, PUAD at ~817k was a real threat to Trizzy973 (516k) and irrelevant to TrevorLahey420 (7.5m) standing in the same country. Banding and the send decision are kept apart - a trivial enemy rides along in a message a real threat already triggered, but never causes one.
 - A **stat threshold** (`FOLLOW_THREAT_RATIO`) via FFScouter. It fails **open** — no key, a failed lookup or a missing estimate all keep the warning, because a warning not sent gets someone hit while a surplus one costs one ping. FFScouter's own `fair_fight` is relative to the *key owner*, so it cannot be used for a per-member comparison; only estimate-vs-estimate works.
 
 The cooldown is stamped only when a warning actually goes out, so an outage or a filtered-out weakling never silences the next real threat.

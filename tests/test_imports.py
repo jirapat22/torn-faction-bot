@@ -1539,35 +1539,86 @@ def test_follow_warning_cooldown_suppresses_repeats():
         restore()
 
 
-def test_follow_warning_skips_enemies_too_weak_to_matter():
+def test_follow_warning_splits_stronger_from_weaker():
     """
-    Stat filter: an enemy with a fraction of the member's battle stats can't
-    realistically hurt them, so they aren't worth a notification. It must fail
-    OPEN though - a missing estimate keeps the warning, because a warning not
-    sent gets someone hit while a surplus one costs a single ping.
+    Enemies are banded against the stats of the member being warned, because
+    "strong" has no absolute meaning - measured live, PUAD (~817k) was a real
+    threat to Trizzy973 (516k) and irrelevant to TrevorLahey420 (7.5m) standing
+    in the same country.
+
+    Banding and the decision to send are deliberately separate: a trivial enemy
+    rides along in a message a real threat already triggered (free context), but
+    can never cause one on its own. A missing estimate fails OPEN.
     """
     import asyncio
 
     own = {'100': _abroad('OurGuy', 'Switzerland')}
     ff = {
         '100': {'bs_estimate': 10_000_000_000},  # our member
-        '200': {'bs_estimate': 1_000_000_000},   # 0.1x - no threat
-        '201': {'bs_estimate': 20_000_000_000},  # 2x - very much a threat
-        # 202 absent from FFScouter entirely -> must be kept
+        '200': {'bs_estimate': 1_000_000_000},   # 0.1x - trivial
+        '201': {'bs_estimate': 20_000_000_000},  # 2x    - stronger
+        '203': {'bs_estimate': 6_000_000_000},   # 0.6x  - weaker, still worth knowing
+        # 202 absent from FFScouter entirely -> unknown, must trigger
     }
     mgr, posted, restore = _fly_mgr(own, {}, ff=ff, ff_key='test-key')
     try:
         deps = [
             {'tid': '200', 'name': 'Weakling', 'dest': 'Switzerland', 'eta': 1_000_500, 'early': 1_000_400},
             {'tid': '201', 'name': 'Monster', 'dest': 'Switzerland', 'eta': 1_000_600, 'early': 1_000_500},
-            {'tid': '202', 'name': 'Unknown', 'dest': 'Switzerland', 'eta': 1_000_700, 'early': 1_000_600},
+            {'tid': '202', 'name': 'Nameless', 'dest': 'Switzerland', 'eta': 1_000_700, 'early': 1_000_600},
+            {'tid': '203', 'name': 'Middling', 'dest': 'Switzerland', 'eta': 1_000_800, 'early': 1_000_700},
         ]
         msgs = asyncio.run(mgr._follow_alerts(deps, 1_000_000))
         assert len(msgs) == 1
-        assert 'Monster' in msgs[0], 'a stronger enemy is a real threat'
-        assert 'Unknown' in msgs[0], 'no estimate must fail open, not silently drop'
-        assert 'Weakling' not in msgs[0], 'far weaker enemy is not worth a ping'
-        assert '~20.0b' in msgs[0], 'the estimate is shown so the member can judge'
+        msg = msgs[0]
+        assert 'Stronger than you' in msg and 'Weaker than you' in msg, \
+            'the faction asked for the two groups to be separated in the text'
+        assert 'Unknown strength' in msg, 'no estimate fails open into its own band'
+        assert '~20.0b' in msg, 'the estimate is shown so the member can judge'
+
+        # Each enemy must land under the right heading
+        strong_at = msg.index('Stronger than you')
+        unknown_at = msg.index('Unknown strength')
+        weak_at = msg.index('Weaker than you')
+        assert strong_at < msg.index('Monster') < unknown_at, 'Monster is the strong one'
+        assert unknown_at < msg.index('Nameless') < weak_at, 'no estimate -> Unknown'
+        assert msg.index('Middling') > weak_at and msg.index('Weakling') > weak_at, \
+            'both below-par enemies sit under Weaker'
+
+        # The member must not be named twice: the mention already renders as
+        # their nickname, which carries the Torn name in this server.
+        assert '<@555>' in msg
+        assert 'OurGuy' not in msg, 'mention alone identifies a registered member'
+    finally:
+        restore()
+
+
+def test_follow_warning_not_triggered_by_weak_enemies_alone():
+    """
+    The send gate. Confirmed live: PUAD departing for Switzerland pinged
+    Trizzy973 and Kiwisupercar but correctly stayed silent for TrevorLahey420,
+    who outguns them ~9x. Without this, every member abroad hears about every
+    takeoff regardless of whether it could hurt them - the noise objection that
+    nearly killed the feature before it was built.
+    """
+    import asyncio
+
+    own = {'100': _abroad('OurGuy', 'Switzerland')}
+    ff = {
+        '100': {'bs_estimate': 10_000_000_000},
+        '200': {'bs_estimate': 1_000_000_000},  # 0.1x
+        '201': {'bs_estimate': 500_000_000},    # 0.05x
+    }
+    mgr, posted, restore = _fly_mgr(own, {}, ff=ff, ff_key='test-key')
+    try:
+        deps = [
+            {'tid': '200', 'name': 'Weakling', 'dest': 'Switzerland', 'eta': 1_000_500, 'early': 1_000_400},
+            {'tid': '201', 'name': 'Tiny', 'dest': 'Switzerland', 'eta': 1_000_600, 'early': 1_000_500},
+        ]
+        assert asyncio.run(mgr._follow_alerts(deps, 1_000_000)) == [], \
+            'nobody who could hurt this member departed - say nothing'
+        assert mgr.follow_cooldowns == {}, \
+            'a silent tick must not burn the cooldown and mask the next real threat'
     finally:
         restore()
 
@@ -1678,7 +1729,8 @@ if __name__ == '__main__':
     test_left_faction_access_revoked_after_grace_period()
     test_follow_warning_pings_only_the_member_in_that_country()
     test_follow_warning_cooldown_suppresses_repeats()
-    test_follow_warning_skips_enemies_too_weak_to_matter()
+    test_follow_warning_splits_stronger_from_weaker()
+    test_follow_warning_not_triggered_by_weak_enemies_alone()
     test_follow_warning_silent_when_own_roster_unavailable()
     test_fly_status_shows_destination_hotspots()
     print('All smoke tests passed.')
