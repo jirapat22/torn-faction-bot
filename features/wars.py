@@ -580,7 +580,12 @@ class WarTracker:
 
                     _ensure(defender_id)
                     stats[defender_id]['total_incoming'] += 1
-                    # Use war modifier as fallback classification
+                    # Classify by the war modifier, NOT by attacker_faction ==
+                    # enemy. A stealth attack blanks attacker_name/_faction in
+                    # the defender's log, and measured on war 50338 that was 395
+                    # of 931 war hits taken - keying off the faction id would
+                    # have silently dropped 42% of them. The modifier survives
+                    # stealth, so it is the only complete signal.
                     modifiers = attack.get('modifiers', {})
                     war_modifier = modifiers.get('war', 1.0) if isinstance(modifiers, dict) else 1.0
                     if war_modifier > 1.0:
@@ -1101,7 +1106,8 @@ class WarTracker:
         embeds.append(embed)
         return embeds[0] if len(embeds) == 1 else embeds
 
-    async def format_war_management_report(self, war_info, final_data=None):
+    async def format_war_management_report(self, war_info, final_data=None,
+                                           attack_stats=None):
         """
         Create a detailed management report with incoming/outgoing attacks
         Posted to private war management channel for leaders/management
@@ -1109,6 +1115,12 @@ class WarTracker:
         Args:
             war_info: War data from Torn API
             final_data: Final war data snapshot (if war ended)
+            attack_stats: Output of _get_war_attack_stats, supplying the
+                per-member incoming counts. Without it every member reports 0
+                hits taken - Torn's v2 ranked war report dropped the `defends`
+                field that used to carry them, so the attacks log is now the
+                only source. Passed in rather than fetched here because the
+                war-end handler already pages the whole log for friendly hosps.
 
         Returns:
             discord.Embed
@@ -1159,9 +1171,12 @@ class WarTracker:
             # Get outgoing attacks (attacks made)
             outgoing = stats.get('attacks', 0)
 
-            # Get incoming attacks (times they got hit)
-            # This is in the 'defends' field
-            incoming = stats.get('defends', 0)
+            # Times this member was hit. `defends` is kept only as a
+            # fallback for cached v1-era reports; live v2 reports no longer
+            # carry it, which is why this read 0 for the whole faction.
+            log_stats = (attack_stats or {}).get(user_id) or {}
+            incoming = log_stats.get('war_incoming', stats.get('defends', 0))
+            outside_incoming = log_stats.get('outside_incoming', 0)
 
             score = stats.get('score', 0)
 
@@ -1170,6 +1185,7 @@ class WarTracker:
                 'user_id': user_id,
                 'outgoing': outgoing,
                 'incoming': incoming,
+                'outside_incoming': outside_incoming,
                 'score': score
             })
 
@@ -1203,11 +1219,19 @@ class WarTracker:
         # Add summary stats
         total_outgoing = sum(m['outgoing'] for m in member_stats)
         total_incoming = sum(m['incoming'] for m in member_stats)
+        total_outside_in = sum(m['outside_incoming'] for m in member_stats)
         total_score = sum(m['score'] for m in member_stats)
+
+        # Outside hits are called out separately rather than folded in, so a
+        # big number can't be mistaken for the enemy faction farming us.
+        hit_line = f'**Total Times Hit:** {total_incoming}'
+        if total_outside_in:
+            hit_line += f' (+{total_outside_in} outside the war)'
 
         embed.add_field(
             name='📊 Summary',
-            value=f'**Total Attacks Made:** {total_outgoing}\n**Total Times Hit:** {total_incoming}\n**Total Score:** {total_score}',
+            value=f'**Total Attacks Made:** {total_outgoing}\n{hit_line}\n'
+                  f'**Total Score:** {total_score}',
             inline=False
         )
 
@@ -1652,6 +1676,18 @@ class WarTracker:
                 report = await self._fetch_rankedwarreport(war_id=self.current_war_id)
                 report_factions = report.get('factions', {}) if report else {}
 
+                # Page the attacks log once. Both the management report (for
+                # per-member incoming, which the v2 war report no longer
+                # carries) and the friendly-hosp log below come from this pass.
+                attack_stats = {}
+                war_start_ts = final_war_data.get('start', 0)
+                enemy_fid = final_war_data.get('enemy_faction_id')
+                if war_start_ts and enemy_fid:
+                    try:
+                        attack_stats = await self._get_war_attack_stats(enemy_fid, war_start_ts)
+                    except Exception as e:
+                        logger.error(f'War end: failed to compute attack stats: {e}')
+
                 # Post detailed management report (use rankedwarreport for per-member stats)
                 if management_channel:
                     # Fall back to rankedwars data if report unavailable (no member data though)
@@ -1661,7 +1697,8 @@ class WarTracker:
                         final_data={
                             'war_id': self.current_war_id,
                             'factions': mgmt_factions
-                        }
+                        },
+                        attack_stats=attack_stats,
                     )
                     if management_embeds:
                         for i, mgmt_embed in enumerate(management_embeds):
@@ -1677,17 +1714,10 @@ class WarTracker:
                 else:
                     logger.warning('Warning: War management channel not configured')
 
-                # Compute friendly hospitalisations from the attack log
-                friendly_hosps = []
-                war_start_ts = final_war_data.get('start', 0)
-                enemy_fid = final_war_data.get('enemy_faction_id')
-                if war_start_ts and enemy_fid:
-                    try:
-                        attack_stats = await self._get_war_attack_stats(enemy_fid, war_start_ts)
-                        friendly_hosps = attack_stats.get('_friendly_hosps', [])
-                        logger.info(f'War end: collected {len(friendly_hosps)} friendly hosp event(s)')
-                    except Exception as e:
-                        logger.error(f'War end: failed to collect friendly hosps: {e}')
+                # Friendly hospitalisations, from the same single pass above
+                friendly_hosps = attack_stats.get('_friendly_hosps', [])
+                if friendly_hosps:
+                    logger.info(f'War end: collected {len(friendly_hosps)} friendly hosp event(s)')
 
                 # Save per-member war stats + friendly-hosp log. Save even when
                 # report_factions is empty so the friendly-hosp event log alone

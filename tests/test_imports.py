@@ -1289,6 +1289,75 @@ def test_flytrack_eta_window_biases_early():
     assert mgr._eta_text(eta_known, None) == f'<t:{eta_known}:t> (<t:{eta_known}:R>)'
 
 
+def test_war_report_counts_hits_taken_from_attack_log():
+    """
+    War 50338's management report said "Total Times Hit: 0" for every member
+    after a 1952-5290 defeat. Cause: it read the ranked war report's `defends`
+    field, which Torn dropped when it retired v1 - so it was absent, and
+    .get('defends', 0) turned an outage into a confident zero.
+
+    The attacks log has the real numbers (1005 hits taken, 931 of them war),
+    and cross-checks: its war-hit count matched the report's "Total Attacks
+    Made: 421" exactly. The log is now the source, with `defends` kept only as
+    a fallback for cached v1-era reports.
+    """
+    import asyncio
+    from features.wars import WarTracker
+    import utils.torn_api as torn_api_mod
+    from config import TORN_FACTION_ID
+
+    mgr = WarTracker(bot=None)
+    members = {'111': {'name': 'Tank'}, '222': {'name': 'Glass'}}
+
+    async def fake_members():
+        return members
+    orig = torn_api_mod.fetch_faction_members
+    torn_api_mod.fetch_faction_members = fake_members
+
+    final_data = {
+        'war_id': 50338,
+        'factions': {
+            # v2 shape: `defends` simply isn't here any more
+            str(TORN_FACTION_ID): {
+                'name': 'Us', 'score': 1952,
+                'members': {'111': {'attacks': 79, 'score': 384.0},
+                            '222': {'attacks': 0, 'score': 0}},
+            },
+            '53421': {'name': 'The Naughty Kids', 'score': 5290, 'members': {}},
+        },
+    }
+
+    try:
+        # Without the log the old bug reproduces: everyone reads 0 hits taken
+        res = asyncio.run(mgr.format_war_management_report(None, final_data=final_data))
+        summary = next(f.value for f in res[0].fields if 'Summary' in f.name)
+        assert 'Total Times Hit:** 0' in summary, 'no log -> nothing to report'
+
+        # With the log, real counts appear
+        attack_stats = {
+            '111': {'war_incoming': 68, 'outside_incoming': 3},
+            '222': {'war_incoming': 12, 'outside_incoming': 0},
+            '_friendly_hosps': [],
+        }
+        res = asyncio.run(mgr.format_war_management_report(
+            None, final_data=final_data, attack_stats=attack_stats))
+        fields = {f.name: f.value for f in res[0].fields}
+        summary = next(v for k, v in fields.items() if 'Summary' in k)
+
+        assert 'Total Times Hit:** 80' in summary, summary
+        assert 'outside the war' in summary, 'outside hits must not inflate the war number'
+        assert 'Total Attacks Made:** 79' in summary, 'outgoing still comes from the report'
+
+        detail = next(v for k, v in fields.items() if 'Member' in k)
+        assert 'Hit: 68x' in detail, detail
+
+        # The "most targeted" list was dead while every count was zero
+        targeted = next((v for k, v in fields.items() if 'Targeted' in k), '')
+        assert 'Tank' in targeted and '68' in targeted, targeted
+    finally:
+        torn_api_mod.fetch_faction_members = orig
+
+
 def test_xan_counts_friendly_hosps():
     """
     Friendly hosps are reimbursed like any other hit: they cost the same energy
@@ -1823,6 +1892,7 @@ if __name__ == '__main__':
     test_war_report_v2_shape_normalised()
     test_war_report_rejects_another_factions_war()
     test_xan_counts_friendly_hosps()
+    test_war_report_counts_hits_taken_from_attack_log()
     test_activity_profile_chunk_detection()
     test_activity_profile_manager_queries()
     test_activity_profile_record_snapshot()

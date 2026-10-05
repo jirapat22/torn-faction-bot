@@ -7,7 +7,7 @@ A Discord bot for a Torn.com faction (Ascended Punks), deployed on Railway. `dis
 ## Commands
 
 ```bash
-py -3 -m pytest -q tests/          # full suite (41 tests) — use this
+py -3 -m pytest -q tests/          # full suite (42 tests) — use this
 py -3 -m pytest -q tests/test_imports.py::test_flytrack_logic   # single test
 py -3 tests/test_imports.py        # runs test_imports.py ONLY, see note below
 py -3 bot.py                       # run locally (needs .env)
@@ -70,6 +70,8 @@ The established fix is a strike counter — require N consecutive confirmations 
 The single most expensive bug class in this repo. A fetch helper returning `[]`/`{}` for *both* "the API failed" and "there genuinely is nothing" has twice caused the bot to confidently report nonsense — most recently flagging nearly the whole faction for missing OCs because an unreachable crimes endpoint read as "nobody is in a crime".
 
 The convention now: **`None` means "could not fetch"; an empty container means "fetched, nothing there."** Callers must branch on `is None` and skip the affected section rather than degrade into a confident wrong answer. See `fetch_faction_crimes()` and `_get_oc_status()`.
+
+A third shape of the same trap: a field that simply **disappears** from an API. Torn's v2 ranked war report dropped `defends`, so `stats.get('defends', 0)` turned a missing field into a confident "0 hits taken" for the entire faction after a heavy defeat. Per-member incoming now comes from the attacks log instead.
 
 A related trap: an endpoint can return HTTP 200 and still be useless. Torn's v1 crimes endpoint keeps serving OC1 history frozen ~585 days ago for an OC2 faction, which would silently empty the "who is mid-crime" set. Staleness is checked explicitly before that fallback is trusted.
 
