@@ -795,6 +795,11 @@ class FlyTracker:
         The mention alone identifies the person - Discord already renders it as
         their nickname, which in this server carries the Torn name, so also
         printing mem['name'] produced "@Trizzy973 [3266373] Trizzy973".
+
+        An unregistered member can't be mentioned at all, so the warning names
+        them and closes with how to fix that. Deliberately NOT escalated to a
+        role ping: the right fix is them linking up, not routing their alerts
+        through someone else forever.
         """
         mention = self._mention_for(mem['tid'])
         who = mention or f"**{mem['name']}** (not registered)"
@@ -821,6 +826,13 @@ class FlyTracker:
                         if dep['eta'] else 'landing time unknown')
                 lines.append(f"\u2003\u2022 **{dep['name']}** {when}{stat} "
                              f"\u00b7 [Profile]({profile})")
+
+        if not mention:
+            # Discord subtext (-#) keeps this small and grey so it nags the one
+            # person who needs it without cluttering the alert for everyone.
+            lines.append('-# Not getting pinged? Run `/register` in this server, '
+                         'or link your Torn account to Discord on Torn itself '
+                         'and the bot will pick you up automatically.')
         return '\n'.join(lines)
 
     async def _follow_alerts(self, departures: list, now_ts: float) -> list:

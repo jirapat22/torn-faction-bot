@@ -1511,6 +1511,38 @@ def test_follow_warning_pings_only_the_member_in_that_country():
         restore()
 
 
+def test_follow_warning_tells_unregistered_members_how_to_fix_it():
+    """
+    An unregistered member (Kiwisupercar, live) can't be mentioned, so the
+    warning is posted but notifies nobody. Rather than escalating to a role
+    ping - which would route their alerts through someone else indefinitely -
+    the message tells them how to get pinged themselves.
+
+    Registered members must NOT see the hint; it would be noise on every alert.
+    """
+    import asyncio
+
+    # Torn 100 is registered in the fake verification db, 101 is not
+    own = {'100': _abroad('Registered', 'Switzerland'),
+           '101': _abroad('Unregistered', 'Switzerland')}
+    mgr, posted, restore = _fly_mgr(own, {})
+    try:
+        deps = [{'tid': '200', 'name': 'EnemyA', 'dest': 'Switzerland',
+                 'eta': 1_000_500, 'early': 1_000_400}]
+        msgs = asyncio.run(mgr._follow_alerts(deps, 1_000_000))
+        assert len(msgs) == 2
+
+        pinged = [m for m in msgs if '<@555>' in m]
+        named = [m for m in msgs if 'not registered' in m]
+        assert len(pinged) == 1 and len(named) == 1
+
+        assert '/register' in named[0], 'tell them how to get pinged'
+        assert named[0].startswith('\u26a0\ufe0f'), 'hint must not displace the warning'
+        assert '/register' not in pinged[0], 'registered members do not need the hint'
+    finally:
+        restore()
+
+
 def test_follow_warning_cooldown_suppresses_repeats():
     """
     Ikaros's objection was noise. Once someone has been told enemies are heading
@@ -1729,6 +1761,7 @@ if __name__ == '__main__':
     test_left_faction_access_revoked_after_grace_period()
     test_follow_warning_pings_only_the_member_in_that_country()
     test_follow_warning_cooldown_suppresses_repeats()
+    test_follow_warning_tells_unregistered_members_how_to_fix_it()
     test_follow_warning_splits_stronger_from_weaker()
     test_follow_warning_not_triggered_by_weak_enemies_alone()
     test_follow_warning_silent_when_own_roster_unavailable()
