@@ -1289,6 +1289,71 @@ def test_flytrack_eta_window_biases_early():
     assert mgr._eta_text(eta_known, None) == f'<t:{eta_known}:t> (<t:{eta_known}:R>)'
 
 
+def test_saved_war_history_records_real_hits_taken():
+    """
+    The audit's worst find, because it is the only one that is PERMANENT.
+
+    _save_war_member_data wrote `defends` straight from the ranked war report,
+    which v2 no longer carries - so every future war would have recorded "0
+    hits taken" into war history. The display bugs could be fixed after the
+    fact; this one could not, because the attacks log is only queryable for so
+    long. Once a war is archived with zeros, the real numbers are gone.
+
+    The stored key keeps the name `defends` so records written before this
+    still render in the per-member history view.
+    """
+    import asyncio
+    from features.wars import WarTracker
+    import features.wars as wars_mod
+    import utils.torn_api as torn_api_mod
+    from config import TORN_FACTION_ID
+
+    mgr = WarTracker(bot=None)
+    mgr.war_member_stats = {'wars': []}
+
+    saved = {}
+
+    def fake_save(path, data):
+        saved['data'] = data
+    orig_save = wars_mod.save_json
+    wars_mod.save_json = fake_save
+
+    async def fake_members():
+        return {'111': {'name': 'Tank'}}
+    orig_members = torn_api_mod.fetch_faction_members
+    torn_api_mod.fetch_faction_members = fake_members
+
+    # v2 report shape: attacks and score, but no `defends` anywhere
+    report_factions = {
+        str(TORN_FACTION_ID): {'members': {'111': {'attacks': 79, 'score': 384.0}}},
+    }
+    attack_stats = {
+        '111': {'total_incoming': 71, 'war_incoming': 68, 'outside_incoming': 3},
+        '_friendly_hosps': [],
+    }
+
+    try:
+        asyncio.run(mgr._save_war_member_data(
+            50338, report_factions, 1952, 5290, 'The Naughty Kids',
+            friendly_hosps=[], attack_stats=attack_stats))
+
+        wars = saved['data']['wars'] if 'wars' in saved['data'] else saved['data']
+        rec = None
+        for w in (wars.values() if isinstance(wars, dict) else wars):
+            if isinstance(w, dict) and '111' in (w.get('members') or {}):
+                rec = w['members']['111']
+                break
+        assert rec is not None, f'no member record saved: {saved["data"]!r}'
+
+        assert rec['defends'] == 68, \
+            f'war history must archive real hits taken, got {rec["defends"]}'
+        assert rec['outside_incoming'] == 3
+        assert rec['attacks'] == 79, 'outgoing still comes from the report'
+    finally:
+        wars_mod.save_json = orig_save
+        torn_api_mod.fetch_faction_members = orig_members
+
+
 def test_incoming_split_does_not_dump_war_hits_into_outside():
     """
     War 50338's participation board read "War Incoming 0 / Outside Incoming
@@ -1928,6 +1993,7 @@ if __name__ == '__main__':
     test_war_report_rejects_another_factions_war()
     test_xan_counts_friendly_hosps()
     test_incoming_split_does_not_dump_war_hits_into_outside()
+    test_saved_war_history_records_real_hits_taken()
     test_war_report_counts_hits_taken_from_attack_log()
     test_activity_profile_chunk_detection()
     test_activity_profile_manager_queries()

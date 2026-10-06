@@ -82,11 +82,18 @@ class WarTracker:
         save_json(self.war_member_stats_file, self.war_member_stats)
 
     async def _save_war_member_data(self, war_id, report_factions, our_score, enemy_score,
-                                     enemy_name, friendly_hosps=None):
+                                     enemy_name, friendly_hosps=None, attack_stats=None):
         """Save per-member war data + friendly-hosp log to persistent history. Keeps last 10 wars.
 
         Saves even if rankedwarreport member data is missing — the friendly-hosp
         event log alone is still valuable to preserve.
+
+        attack_stats (from _get_war_attack_stats) supplies hits taken. Without
+        it `defends` persists as 0 for everyone, and unlike the display bugs
+        this one is permanent: it writes a wrong number into war history that
+        no later fix can recover, because the attacks log is only queryable for
+        so long. The stored key keeps its `defends` name so records written
+        before this still render.
         """
         our_members = {}
         for fid, fdata in (report_factions or {}).items():
@@ -109,10 +116,13 @@ class WarTracker:
             name = 'Unknown'
             if faction_members and user_id in faction_members:
                 name = faction_members[user_id].get('name', f'ID:{user_id}')
+            war_inc, outside_inc = self._incoming_split(
+                stats, (attack_stats or {}).get(user_id) or {})
             members_data[user_id] = {
                 'name': name,
                 'attacks': stats.get('attacks', 0),
-                'defends': stats.get('defends', 0),
+                'defends': war_inc,
+                'outside_incoming': outside_inc,
                 'score': stats.get('score', 0),
                 'hosps_given': hosps_given.get(str(user_id), 0),
                 'hosps_received': hosps_received.get(str(user_id), 0),
@@ -194,8 +204,9 @@ class WarTracker:
     async def _fetch_rankedwarreport(self, war_id=None):
         """
         Fetch ranked war report with complete per-member stats.
-        Uses v1 'rankedwarreport' selection which includes attacks, defends,
-        and score for every member in both factions.
+        Uses the v2 'rankedwarreport' selection (v1 answers error 23 since
+        Torn retired it). v2 gives attacks/score per member but NOT defends —
+        hits taken come from the attacks log instead, see _incoming_split.
         Caches the report so it remains available after the war ends.
 
         Args:
@@ -1749,6 +1760,7 @@ class WarTracker:
                         self.current_war_id, report_factions or {},
                         our_score, enemy_score, enemy_name,
                         friendly_hosps=friendly_hosps,
+                        attack_stats=attack_stats,
                     )
 
             # Reset state
