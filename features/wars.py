@@ -449,14 +449,20 @@ class WarTracker:
 
         return embed
 
-    async def _fetch_all_attacks_since(self, war_start):
+    async def _fetch_all_attacks_since(self, war_start, war_end=None):
         """
-        Fetch ALL faction attacks since war_start by paginating through the API.
+        Fetch ALL faction attacks in the war window by paginating through the API.
         The Torn attacks API returns ~100 attacks per call, so we page through
         using ascending sort and shifting the 'from' timestamp.
 
         Args:
             war_start: Unix timestamp to start fetching from
+            war_end: Unix timestamp to stop at, or None for an ongoing war.
+                Without it the window never closes, so every later hit on the
+                former opponent keeps counting as a war hit — measured on war
+                50338, the log read 422 against the official 421 because one
+                member hit them again after it was over. Left unbounded, Xanax
+                reimbursement for a finished war grows the longer you wait.
 
         Returns:
             Dict of {attack_id: attack_data} with all attacks since war_start,
@@ -474,7 +480,8 @@ class WarTracker:
         for page in range(max_pages):
             attacks = None
             for attempt in range(ATTACK_PAGE_RETRIES):
-                attacks = await fetch_faction_attacks(from_ts=current_from, sort='asc')
+                attacks = await fetch_faction_attacks(
+                    from_ts=current_from, to_ts=war_end, sort='asc')
                 if attacks is not None:
                     break
                 if attempt + 1 < ATTACK_PAGE_RETRIES:
@@ -556,7 +563,7 @@ class WarTracker:
             return defends, max(0, total_inc - defends)
         return log_stats.get('war_incoming', 0), log_stats.get('outside_incoming', 0)
 
-    async def _get_war_attack_stats(self, enemy_faction_id, war_start):
+    async def _get_war_attack_stats(self, enemy_faction_id, war_start, war_end=None):
         """
         Compute per-member war statistics from the faction attacks log.
         Paginates through ALL attacks since war start for accurate data.
@@ -564,6 +571,7 @@ class WarTracker:
         Args:
             enemy_faction_id: The enemy faction ID in the ranked war
             war_start: War start timestamp to filter attacks
+            war_end: War end timestamp, or None while the war is running
 
         Returns:
             Dict of {user_id: {'war_hits': N, 'outside_hits': N, 'total_incoming': N,
@@ -588,7 +596,7 @@ class WarTracker:
                 }
 
         try:
-            attacks = await self._fetch_all_attacks_since(war_start)
+            attacks = await self._fetch_all_attacks_since(war_start, war_end)
             if attacks is None:
                 return None  # incomplete log - say "unknown", not "quiet war"
             our_faction = str(TORN_FACTION_ID)
@@ -735,6 +743,10 @@ class WarTracker:
         factions = war_data.get('factions', {})
         war = war_data.get('war', {})
         war_start = war.get('start', 0)
+        # Bound the window at war end. Without it every later hit on the
+        # former opponent still counts as a war hit, so a finished war's
+        # numbers keep climbing (measured: 422 vs the official 421).
+        war_end = war.get('end', 0) or None  # None while the war is running
         is_active = war_info.get('is_active', True)
 
         # Find our faction and enemy faction from rankedwars data
@@ -791,7 +803,8 @@ class WarTracker:
         if not war_start:
             attack_stats = {}
         else:
-            attack_stats = await self._get_war_attack_stats(enemy_faction_id, war_start)
+            attack_stats = await self._get_war_attack_stats(
+                enemy_faction_id, war_start, war_end)
         # None means the log couldn't be read in full. Render the report from
         # what the war report alone provides and label the gap, rather than
         # printing zeros that read as "nobody was hit".
@@ -1030,6 +1043,10 @@ class WarTracker:
         factions = war_data.get('factions', {})
         war = war_data.get('war', {})
         war_start = war.get('start', 0)
+        # Bound the window at war end. Without it every later hit on the
+        # former opponent still counts as a war hit, so a finished war's
+        # numbers keep climbing (measured: 422 vs the official 421).
+        war_end = war.get('end', 0) or None  # None while the war is running
         is_active = war_info.get('is_active', True)
 
         # Find our faction and enemy faction
@@ -1079,7 +1096,8 @@ class WarTracker:
         if not war_start:
             attack_stats = {}
         else:
-            attack_stats = await self._get_war_attack_stats(enemy_faction_id, war_start)
+            attack_stats = await self._get_war_attack_stats(
+                enemy_faction_id, war_start, war_end)
         xan_log_ok = attack_stats is not None
         if not attack_stats:
             attack_stats = {}
@@ -1799,9 +1817,14 @@ class WarTracker:
                 attack_stats = None
                 war_start_ts = final_war_data.get('start', 0)
                 enemy_fid = final_war_data.get('enemy_faction_id')
+                # war_history keeps `start` but not `end`; the report carries an
+                # exact one. Falling back to now is close enough at war end, and
+                # far better than leaving the window open forever.
+                war_end_ts = (report.get('end') if report else None) or get_current_timestamp()
                 if war_start_ts and enemy_fid:
                     try:
-                        attack_stats = await self._get_war_attack_stats(enemy_fid, war_start_ts)
+                        attack_stats = await self._get_war_attack_stats(
+                            enemy_fid, war_start_ts, war_end_ts)
                     except Exception as e:
                         logger.error(f'War end: failed to compute attack stats: {e}')
                         attack_stats = None

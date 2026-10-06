@@ -1289,6 +1289,68 @@ def test_flytrack_eta_window_biases_early():
     assert mgr._eta_text(eta_known, None) == f'<t:{eta_known}:t> (<t:{eta_known}:R>)'
 
 
+def test_finished_war_stats_stop_at_the_war_end():
+    """
+    Measured on war 50338 after it ended: the attacks log reported 422 war hits
+    against the official report's 421. The window had no upper bound, so a
+    member hitting the former opponent days later still counted as a war hit.
+
+    Left alone the gap widens, and /war view:Xan reimburses more Xanax the
+    longer you wait to run it. An ONGOING war passes war_end=None and must
+    stay unbounded.
+    """
+    import asyncio
+    from features.wars import WarTracker
+    import features.wars as wars_mod
+
+    mgr = WarTracker(bot=None)
+    seen = []
+
+    async def record(from_ts=None, to_ts=None, sort=None):
+        seen.append((from_ts, to_ts))
+        return {}
+
+    orig = wars_mod.fetch_faction_attacks
+    wars_mod.fetch_faction_attacks = record
+    try:
+        asyncio.run(mgr._fetch_all_attacks_since(1791028800, 1791194409))
+        assert seen[0] == (1791028800, 1791194409),             f'a finished war must bound the query at its end, got {seen[0]}'
+
+        seen.clear()
+        asyncio.run(mgr._fetch_all_attacks_since(1791028800))
+        assert seen[0] == (1791028800, None),             f'an ongoing war must stay unbounded, got {seen[0]}'
+    finally:
+        wars_mod.fetch_faction_attacks = orig
+
+
+def test_attacks_shape_change_is_not_read_as_no_attacks():
+    """
+    The outage door closed, so this checks the shape door. The paginator stops
+    on an empty page, so if Torn turned `attacks` into a list — which it has
+    already done once, to rankedwarreport's factions and members — degrading
+    to {} would truncate the war log exactly as an outage used to.
+
+    Torn really does send {"attacks": {}} for "none" (probed live), so an empty
+    dict stays the legitimate empty answer.
+    """
+    import asyncio
+    import utils.torn_api as torn_api_mod
+
+    orig = torn_api_mod._make_api_request
+    try:
+        async def listed(*a, **k):
+            return {'attacks': [{'attacker_id': 1}, {'attacker_id': 2}]}
+        torn_api_mod._make_api_request = listed
+        assert asyncio.run(torn_api_mod.fetch_faction_attacks()) is None,             'a populated list is a shape change, not "no attacks"'
+
+        async def empty_dict(*a, **k):
+            return {'attacks': {}}
+        torn_api_mod._make_api_request = empty_dict
+        assert asyncio.run(torn_api_mod.fetch_faction_attacks()) == {},             'what Torn actually sends for none must stay the empty answer'
+    finally:
+        torn_api_mod._make_api_request = orig
+
+
 def test_fetch_faction_attacks_reports_outage_as_none():
     """
     The contract at the source. fetch_faction_attacks returned {} for both "the
@@ -1344,7 +1406,7 @@ def test_attack_log_outage_is_not_a_quiet_war():
     # --- the paginator refuses to return a truncated log ---
     pages = {'n': 0}
 
-    async def flaky(from_ts=None, sort=None):
+    async def flaky(from_ts=None, to_ts=None, sort=None):
         pages['n'] += 1
         if pages['n'] == 1:
             return {str(i): {'timestamp_started': 1000 + i} for i in range(100)}
@@ -1387,7 +1449,7 @@ def test_attack_log_paging_does_not_skip_the_boundary_second():
 
     seen_from = []
 
-    async def paged(from_ts=None, sort=None):
+    async def paged(from_ts=None, to_ts=None, sort=None):
         seen_from.append(from_ts)
         if from_ts <= 1000:
             return page1
@@ -1658,7 +1720,7 @@ def test_xan_counts_friendly_hosps():
         return {}
     mgr._fetch_rankedwarreport = no_report
 
-    async def fake_stats(enemy_faction_id, war_start):
+    async def fake_stats(enemy_faction_id, war_start, war_end=None):
         return {
             # 10 war hits, 2 chain-outside, 1 hosp -> 13
             '111': {'war_hits': 10, 'chain_outside_hits': 2, 'hosps_given': 1},
@@ -2165,6 +2227,8 @@ if __name__ == '__main__':
     test_incoming_split_does_not_dump_war_hits_into_outside()
     test_saved_war_history_records_real_hits_taken()
     test_fetch_faction_attacks_reports_outage_as_none()
+    test_finished_war_stats_stop_at_the_war_end()
+    test_attacks_shape_change_is_not_read_as_no_attacks()
     test_attack_log_outage_is_not_a_quiet_war()
     test_attack_log_paging_does_not_skip_the_boundary_second()
     test_war_end_survives_an_unreadable_attack_log()

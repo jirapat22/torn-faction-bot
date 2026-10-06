@@ -7,7 +7,7 @@ A Discord bot for a Torn.com faction (Ascended Punks), deployed on Railway. `dis
 ## Commands
 
 ```bash
-py -3 -m pytest -q tests/          # full suite (48 tests) — use this
+py -3 -m pytest -q tests/          # full suite (50 tests) — use this
 py -3 -m pytest -q tests/test_imports.py::test_flytrack_logic   # single test
 py -3 tests/test_imports.py        # runs test_imports.py ONLY, see note below
 py -3 bot.py                       # run locally (needs .env)
@@ -84,6 +84,7 @@ A related trap: an endpoint can return HTTP 200 and still be useless. Torn's v1 
 Two things it must not do, both of which it used to:
 
 - **Stop early on an outage.** `fetch_faction_attacks` returned `{}` on failure and the paginator stops on an empty page, so one 504 mid-pagination produced a complete-looking, much quieter war. Pages now retry, and an unreadable log returns `None` all the way up. Reports label the gap; the archive stores `None` (unknown), never 0.
+- **Leave the window open.** The query had a `from` but no `to`, so after a war ended every later hit on the former opponent still counted as a war hit — measured on war 50338, the log read 422 against the official 421. A finished war must pass `war_end`; an ongoing one passes `None`. Unbounded, `/war view:Xan` reimburses more Xanax the longer you leave it.
 - **Skip the boundary second.** `from` is *inclusive*, so stepping to `latest_timestamp + 1` dropped every attack sharing that second with the page's last record — routine during a chain. It now re-reads the boundary and relies on attack-id dedup.
 
 ### Torn API notes (`utils/torn_api.py`)

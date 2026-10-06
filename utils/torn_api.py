@@ -333,7 +333,19 @@ async def fetch_faction_attacks(from_ts=None, to_ts=None, sort=None):
         return None
 
     attacks = data.get('attacks')
-    return attacks if isinstance(attacks, dict) else {}
+    if isinstance(attacks, dict):
+        return attacks  # populated, or {} which Torn really does send for none
+    if isinstance(attacks, list) and not attacks:
+        return {}  # PHP-style empty collection, if Torn ever sends one
+    # Anything else is a shape change, and the paginator stops on an empty
+    # page - so degrading to {} here would truncate the war log silently, the
+    # same failure as an outage arriving through a different door. Torn has
+    # already turned dicts into lists once (rankedwarreport), so this is a
+    # migration away from happening, not a hypothetical.
+    logger.error('Torn attacks field is %s, not a dict — response shape changed; '
+                 'reporting unreadable rather than "no attacks"',
+                 type(attacks).__name__)
+    return None
 
 
 async def fetch_any_faction_data(faction_id, selections='basic', use_personal_key=True,
