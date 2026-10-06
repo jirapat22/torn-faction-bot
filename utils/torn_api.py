@@ -309,7 +309,12 @@ async def fetch_faction_attacks(from_ts=None, to_ts=None, sort=None):
         sort: Sort order - 'asc' or 'desc' (default API behavior is desc)
 
     Returns:
-        Dict of {attack_id: attack_data} or empty dict if error
+        Dict of {attack_id: attack_data}, or None if the API could not be
+        reached. The None/empty distinction matters more here than almost
+        anywhere else: the only caller pages through this, and it stops when a
+        page comes back empty. Returning {} on failure made one transient 504
+        mid-pagination look like "end of attacks", silently truncating a war's
+        history - which then got archived permanently.
     """
     params = {'selections': 'attacks'}
     if from_ts is not None:
@@ -324,10 +329,11 @@ async def fetch_faction_attacks(from_ts=None, to_ts=None, sort=None):
         params
     )
 
-    if not data:
-        return {}
+    if data is None:
+        return None
 
-    return data.get('attacks', {})
+    attacks = data.get('attacks')
+    return attacks if isinstance(attacks, dict) else {}
 
 
 async def fetch_any_faction_data(faction_id, selections='basic', use_personal_key=True,

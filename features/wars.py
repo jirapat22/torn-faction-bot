@@ -10,6 +10,7 @@ Features:
 - Tracks incoming and outgoing attacks per member
 """
 
+import asyncio
 import discord
 from datetime import datetime
 from utils.helpers import load_json, save_json, create_embed, format_timestamp, get_current_timestamp
@@ -30,6 +31,18 @@ from config import (
 import logging
 
 logger = logging.getLogger(__name__)
+
+# The attacks log is the only source for hits taken and outside hits, and at
+# war end those numbers are archived permanently. A transient 504 on one page
+# is worth retrying rather than silently shortening the war.
+ATTACK_PAGE_RETRIES = 3
+ATTACK_PAGE_RETRY_DELAY = 2
+
+# Shown instead of silently printing zeros when the attacks log is unreadable.
+WAR_LOG_INCOMPLETE_NOTE = (
+    '\u26a0\ufe0f **Torn\u2019s attacks log could not be read in full** \u2014 hits taken, '
+    'outside hits and friendly hosps below are incomplete. Try again shortly.'
+)
 
 class WarTracker:
     """Tracks faction wars and provides statistics"""
@@ -116,8 +129,14 @@ class WarTracker:
             name = 'Unknown'
             if faction_members and user_id in faction_members:
                 name = faction_members[user_id].get('name', f'ID:{user_id}')
-            war_inc, outside_inc = self._incoming_split(
-                stats, (attack_stats or {}).get(user_id) or {})
+            if attack_stats is None:
+                # The log was unreadable. Archiving 0 here would be permanent
+                # and indistinguishable from a member who was never touched,
+                # so record "unknown" and let the history view say so.
+                war_inc = outside_inc = None
+            else:
+                war_inc, outside_inc = self._incoming_split(
+                    stats, attack_stats.get(user_id) or {})
             members_data[user_id] = {
                 'name': name,
                 'attacks': stats.get('attacks', 0),
@@ -440,14 +459,36 @@ class WarTracker:
             war_start: Unix timestamp to start fetching from
 
         Returns:
-            Dict of {attack_id: attack_data} with all attacks since war_start
+            Dict of {attack_id: attack_data} with all attacks since war_start,
+            or None if the log could not be read in full. Callers must treat
+            None as "unknown", never as "no attacks" - a partial log produces
+            confidently wrong hit counts, and at war end those get archived
+            where no later fix can reach them.
         """
         all_attacks = {}
         current_from = int(war_start)
-        max_pages = 50  # Safety limit to prevent infinite loops
+        # ~100 attacks a page, so this allows 20k - far beyond any real war.
+        # Exhausting it means something is wrong, not that the war was busy.
+        max_pages = 200
 
         for page in range(max_pages):
-            attacks = await fetch_faction_attacks(from_ts=current_from, sort='asc')
+            attacks = None
+            for attempt in range(ATTACK_PAGE_RETRIES):
+                attacks = await fetch_faction_attacks(from_ts=current_from, sort='asc')
+                if attacks is not None:
+                    break
+                if attempt + 1 < ATTACK_PAGE_RETRIES:
+                    logger.warning(f'War attacks page {page + 1}: fetch failed, '
+                                   f'retry {attempt + 1}/{ATTACK_PAGE_RETRIES - 1}')
+                    await asyncio.sleep(ATTACK_PAGE_RETRY_DELAY)
+
+            if attacks is None:
+                # Out of retries. Returning what we have would look like a
+                # complete, much quieter war than actually happened.
+                logger.error(f'War: attacks log incomplete - page {page + 1} '
+                             f'unreachable after {ATTACK_PAGE_RETRIES} tries; '
+                             f'reporting unknown rather than {len(all_attacks)} partial')
+                return None
 
             if not attacks:
                 break
@@ -468,18 +509,24 @@ class WarTracker:
 
             logger.info(f'War attacks page {page + 1}: got {len(attacks)} attacks, {new_count} new (total: {len(all_attacks)})')
 
-            # If we got fewer than 90 attacks, we've likely reached the end
-            # (API returns ~100, using 90 as threshold to account for variation)
-            if len(attacks) < 90:
-                break
-
-            # If no new attacks were found, we're done
+            # Nothing new means the last page repeated itself - we have it all.
+            # This is the only stop condition, deliberately: a short page used
+            # to end the loop too, but "fewer than 90" is a guess about the
+            # API's page size, and guessing wrong truncates silently. One
+            # redundant call at the end is the cheaper mistake.
             if new_count == 0:
                 break
 
-            # Move to next page (start from latest timestamp to get next batch)
-            # Add 1 second to avoid re-fetching the same last attack
-            current_from = latest_timestamp + 1
+            # Page from the latest timestamp WITHOUT adding a second. `from` is
+            # inclusive, so re-reading the boundary is free (attack ids dedupe
+            # above) - whereas +1 skipped every attack sharing that second with
+            # the page's last record, which during a chain is several.
+            current_from = latest_timestamp
+
+        else:
+            logger.error(f'War: hit the {max_pages}-page cap with '
+                         f'{len(all_attacks)} attacks - log is incomplete')
+            return None
 
         logger.info(f'War: Fetched {len(all_attacks)} total attacks since war start')
         return all_attacks
@@ -521,7 +568,10 @@ class WarTracker:
         Returns:
             Dict of {user_id: {'war_hits': N, 'outside_hits': N, 'total_incoming': N,
                                'war_incoming': N, 'outside_incoming': N,
-                               'hosps_given': N, 'hosps_received': N}}.
+                               'hosps_given': N, 'hosps_received': N}},
+            or None if the attacks log could not be read in full. Callers must
+            branch on None rather than render the zeros it would otherwise
+            imply.
             A "_friendly_hosps" key is added at top level with the raw event log:
               [{'timestamp', 'attacker_id', 'attacker_name',
                 'defender_id', 'defender_name'}, ...]
@@ -539,6 +589,8 @@ class WarTracker:
 
         try:
             attacks = await self._fetch_all_attacks_since(war_start)
+            if attacks is None:
+                return None  # incomplete log - say "unknown", not "quiet war"
             our_faction = str(TORN_FACTION_ID)
             enemy_faction = str(enemy_faction_id)
 
@@ -630,7 +682,10 @@ class WarTracker:
                         stats[defender_id]['outside_incoming'] += 1
 
         except Exception as e:
+            # Half-built stats are indistinguishable from a quiet war, so this
+            # reports unknown too rather than returning what it managed.
             logger.error(f'War: Error computing attack stats: {e}')
+            return None
 
         # Attach raw friendly-hosp log under a non-uid key so callers can render it
         stats['_friendly_hosps'] = sorted(friendly_hosps, key=lambda h: h.get('timestamp', 0))
@@ -737,6 +792,12 @@ class WarTracker:
             attack_stats = {}
         else:
             attack_stats = await self._get_war_attack_stats(enemy_faction_id, war_start)
+        # None means the log couldn't be read in full. Render the report from
+        # what the war report alone provides and label the gap, rather than
+        # printing zeros that read as "nobody was hit".
+        attacks_log_ok = attack_stats is not None
+        if not attacks_log_ok:
+            attack_stats = {}
 
         if our_war_members:
             logger.info(f'War: Using rankedwarreport data ({len(our_war_members)} members)')
@@ -839,6 +900,9 @@ class WarTracker:
                 'value': str(total_friendly_hosps),
                 'inline': True,
             })
+        if not attacks_log_ok:
+            description = f'{description}\n\n{WAR_LOG_INCOMPLETE_NOTE}'
+
         embed = create_embed(
             title='War Participation Report',
             description=description + legend,
@@ -1016,6 +1080,9 @@ class WarTracker:
             attack_stats = {}
         else:
             attack_stats = await self._get_war_attack_stats(enemy_faction_id, war_start)
+        xan_log_ok = attack_stats is not None
+        if not attack_stats:
+            attack_stats = {}
 
         # Build member list
         member_list = []
@@ -1074,6 +1141,9 @@ class WarTracker:
             '\n\n**War** = Hits on war opponent | **Chn** = Outside hits during chain\n'
             '**Hsp** = Friendly hosps (teammate put safe) | **Tot** = all three combined'
         )
+        if not xan_log_ok:
+            description = f'{description}\n\n{WAR_LOG_INCOMPLETE_NOTE}'
+
         embed = create_embed(
             title='Xanax Reimbursement Report',
             description=description + legend,
@@ -1243,9 +1313,14 @@ class WarTracker:
         # Build management embeds (may need multiple to stay under Discord limits)
         embeds = []
 
+        description = (f'**War #{war_id}** vs {enemy_name}\n'
+                       f'**Final Score:** {our_score} - {enemy_score}')
+        if attack_stats is None:
+            description = f'{description}\n\n{WAR_LOG_INCOMPLETE_NOTE}'
+
         embed = create_embed(
             title=f'⚔️ War Management Report - {result}',
-            description=f'**War #{war_id}** vs {enemy_name}\n**Final Score:** {our_score} - {enemy_score}',
+            description=description,
             color=color
         )
 
@@ -1484,7 +1559,10 @@ class WarTracker:
                     'result': w['result'],
                     'timestamp': w['timestamp'],
                     'attacks': mdata.get('attacks', 0),
+                    # None = archived while the attacks log was unreadable.
+                    # Distinct from 0, which means genuinely never hit.
                     'defends': mdata.get('defends', 0),
+                    'defends_known': mdata.get('defends') is not None,
                     'score': mdata.get('score', 0),
                     'hosps_given': mdata.get('hosps_given', 0),
                     'hosps_received': mdata.get('hosps_received', 0),
@@ -1509,7 +1587,9 @@ class WarTracker:
                 hosp_tag = f' | 🏥 gave {w["hosps_given"]} / received {w["hosps_received"]}'
             lines.append(
                 f'{icon} **vs {w["enemy_name"]}** ({format_timestamp(w["timestamp"], "R")})\n'
-                f'   Attacks: {w["attacks"]} | Defends: {w["defends"]} | Score: {w["score"]}{hosp_tag}'
+                f'   Attacks: {w["attacks"]} | '
+                f'Defends: {w["defends"] if w["defends_known"] else "?"} | '
+                f'Score: {w["score"]}{hosp_tag}'
             )
 
         avg_attacks = sum(w['attacks'] for w in last_5) / len(last_5)
@@ -1712,7 +1792,11 @@ class WarTracker:
                 # Page the attacks log once. Both the management report (for
                 # per-member incoming, which the v2 war report no longer
                 # carries) and the friendly-hosp log below come from this pass.
-                attack_stats = {}
+                # None here means the log was unreadable, which is NOT the same
+                # as an empty one - this is the one place the difference is
+                # permanent, since whatever is archived now is what the faction
+                # keeps.
+                attack_stats = None
                 war_start_ts = final_war_data.get('start', 0)
                 enemy_fid = final_war_data.get('enemy_faction_id')
                 if war_start_ts and enemy_fid:
@@ -1720,6 +1804,11 @@ class WarTracker:
                         attack_stats = await self._get_war_attack_stats(enemy_fid, war_start_ts)
                     except Exception as e:
                         logger.error(f'War end: failed to compute attack stats: {e}')
+                        attack_stats = None
+                if attack_stats is None:
+                    logger.error(
+                        f'War end: attacks log unreadable for war {self.current_war_id} - '
+                        f'hits taken will be archived as unknown rather than zero')
 
                 # Post detailed management report (use rankedwarreport for per-member stats)
                 if management_channel:
@@ -1748,7 +1837,7 @@ class WarTracker:
                     logger.warning('Warning: War management channel not configured')
 
                 # Friendly hospitalisations, from the same single pass above
-                friendly_hosps = attack_stats.get('_friendly_hosps', [])
+                friendly_hosps = (attack_stats or {}).get('_friendly_hosps', [])
                 if friendly_hosps:
                     logger.info(f'War end: collected {len(friendly_hosps)} friendly hosp event(s)')
 

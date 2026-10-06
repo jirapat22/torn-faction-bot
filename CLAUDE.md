@@ -7,7 +7,7 @@ A Discord bot for a Torn.com faction (Ascended Punks), deployed on Railway. `dis
 ## Commands
 
 ```bash
-py -3 -m pytest -q tests/          # full suite (44 tests) — use this
+py -3 -m pytest -q tests/          # full suite (48 tests) — use this
 py -3 -m pytest -q tests/test_imports.py::test_flytrack_logic   # single test
 py -3 tests/test_imports.py        # runs test_imports.py ONLY, see note below
 py -3 bot.py                       # run locally (needs .env)
@@ -76,6 +76,15 @@ A third shape of the same trap: a field that simply **disappears** from an API. 
 Audited the whole API surface against live payload shapes after that one. The distinction that matters: a **missing payload** is caught by the usual `if not data: return None` guard, but a **missing field inside a successful payload** is not — no guard fires, and the default silently becomes the answer. `get_chain_report` fails closed and is fine; `defends` was the only field that had actually vanished. Worst instance was in persistence, not display: war history was archiving 0 hits taken, which no later fix could recover once the attacks log aged out.
 
 A related trap: an endpoint can return HTTP 200 and still be useless. Torn's v1 crimes endpoint keeps serving OC1 history frozen ~585 days ago for an OC2 faction, which would silently empty the "who is mid-crime" set. Staleness is checked explicitly before that fallback is trusted.
+
+### The war attacks log
+
+`_fetch_all_attacks_since` pages Torn's faction attacks log, and everything the war reports say about **hits taken, outside hits and friendly hosps** comes from it — the v2 war report supplies only attacks and score. At war end those numbers are **archived permanently**, so a partial read is not a cosmetic problem.
+
+Two things it must not do, both of which it used to:
+
+- **Stop early on an outage.** `fetch_faction_attacks` returned `{}` on failure and the paginator stops on an empty page, so one 504 mid-pagination produced a complete-looking, much quieter war. Pages now retry, and an unreadable log returns `None` all the way up. Reports label the gap; the archive stores `None` (unknown), never 0.
+- **Skip the boundary second.** `from` is *inclusive*, so stepping to `latest_timestamp + 1` dropped every attack sharing that second with the page's last record — routine during a chain. It now re-reads the boundary and relies on attack-id dedup.
 
 ### Torn API notes (`utils/torn_api.py`)
 

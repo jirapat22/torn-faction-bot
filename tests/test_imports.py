@@ -1289,6 +1289,176 @@ def test_flytrack_eta_window_biases_early():
     assert mgr._eta_text(eta_known, None) == f'<t:{eta_known}:t> (<t:{eta_known}:R>)'
 
 
+def test_fetch_faction_attacks_reports_outage_as_none():
+    """
+    The contract at the source. fetch_faction_attacks returned {} for both "the
+    API failed" and "there are no attacks", and its only caller stops paging on
+    an empty page - so an outage mid-pagination silently truncated the war log.
+
+    Caught by mutation-testing the layer above: faking the fetch in those tests
+    meant reverting this helper broke nothing, so it needs pinning here.
+    """
+    import asyncio
+    import utils.torn_api as torn_api_mod
+
+    orig = torn_api_mod._make_api_request
+    try:
+        async def failed(*a, **k):
+            return None
+        torn_api_mod._make_api_request = failed
+        assert asyncio.run(torn_api_mod.fetch_faction_attacks()) is None,             'an outage must be None, never an empty dict'
+
+        async def empty(*a, **k):
+            return {'attacks': {}}
+        torn_api_mod._make_api_request = empty
+        assert asyncio.run(torn_api_mod.fetch_faction_attacks()) == {},             'a genuine empty answer stays an empty dict'
+
+        async def wrong_shape(*a, **k):
+            return {'attacks': []}
+        torn_api_mod._make_api_request = wrong_shape
+        assert asyncio.run(torn_api_mod.fetch_faction_attacks()) == {},             'an unexpected shape degrades to empty, not a crash'
+    finally:
+        torn_api_mod._make_api_request = orig
+
+
+def test_attack_log_outage_is_not_a_quiet_war():
+    """
+    Re-audit find, and the most dangerous one yet because it corrupts the
+    permanent record.
+
+    fetch_faction_attacks returned {} on API failure, and the paginator stops
+    when a page comes back empty. So one transient 504 on page 3 of 15 ended
+    pagination early and the result looked like a complete, much quieter war.
+    At war end those numbers are archived, where no later fix can reach them.
+
+    An unreadable log must now surface as None all the way up, and the archive
+    must store "unknown" rather than a zero that is indistinguishable from a
+    member nobody touched.
+    """
+    import asyncio
+    from features.wars import WarTracker
+    import features.wars as wars_mod
+
+    mgr = WarTracker(bot=None)
+
+    # --- the paginator refuses to return a truncated log ---
+    pages = {'n': 0}
+
+    async def flaky(from_ts=None, sort=None):
+        pages['n'] += 1
+        if pages['n'] == 1:
+            return {str(i): {'timestamp_started': 1000 + i} for i in range(100)}
+        return None  # every retry of page 2 fails
+
+    orig_fetch = wars_mod.fetch_faction_attacks
+    orig_sleep = asyncio.sleep
+    wars_mod.fetch_faction_attacks = flaky
+
+    async def no_sleep(_s):
+        await orig_sleep(0)
+    asyncio.sleep = no_sleep
+    try:
+        assert asyncio.run(mgr._fetch_all_attacks_since(1000)) is None, \
+            'a partial log must report unknown, not pose as a complete one'
+        assert asyncio.run(mgr._get_war_attack_stats('53421', 1000)) is None, \
+            'the None must propagate, not degrade into empty stats'
+    finally:
+        wars_mod.fetch_faction_attacks = orig_fetch
+        asyncio.sleep = orig_sleep
+
+
+def test_attack_log_paging_does_not_skip_the_boundary_second():
+    """
+    `from` is inclusive, so stepping to latest_timestamp + 1 skipped every
+    attack sharing that second with the page's last record - routine during a
+    chain, where several land per second. Re-reading the boundary is free
+    because attacks dedupe by id.
+    """
+    import asyncio
+    from features.wars import WarTracker
+    import features.wars as wars_mod
+
+    mgr = WarTracker(bot=None)
+
+    # 100 attacks ending at t=1050, plus two MORE also at t=1050 that only a
+    # second page can reach.
+    page1 = {str(i): {'timestamp_started': 1000 + min(i, 50)} for i in range(100)}
+    tail = {'900': {'timestamp_started': 1050}, '901': {'timestamp_started': 1050}}
+
+    seen_from = []
+
+    async def paged(from_ts=None, sort=None):
+        seen_from.append(from_ts)
+        if from_ts <= 1000:
+            return page1
+        return {**{k: v for k, v in page1.items() if v['timestamp_started'] >= from_ts}, **tail}
+
+    orig = wars_mod.fetch_faction_attacks
+    wars_mod.fetch_faction_attacks = paged
+    try:
+        all_attacks = asyncio.run(mgr._fetch_all_attacks_since(1000))
+        assert all_attacks is not None
+        assert 1050 in seen_from, f'must re-read the boundary second, saw {seen_from}'
+        assert '900' in all_attacks and '901' in all_attacks, \
+            'attacks sharing the boundary second were skipped'
+        assert len(all_attacks) == 102, len(all_attacks)
+    finally:
+        wars_mod.fetch_faction_attacks = orig
+
+
+def test_war_end_survives_an_unreadable_attack_log():
+    """
+    Introduced while adding the None contract above: the war-end handler still
+    called attack_stats.get('_friendly_hosps'), which raises AttributeError on
+    None and would take down the whole war-end post - reports, history and all.
+
+    Also pins that the archive records unknown rather than zero.
+    """
+    import asyncio
+    from features.wars import WarTracker
+    import features.wars as wars_mod
+    import utils.torn_api as torn_api_mod
+    from config import TORN_FACTION_ID
+
+    mgr = WarTracker(bot=None)
+    mgr.war_member_stats = {'wars': []}
+    saved = {}
+    orig_save = wars_mod.save_json
+    wars_mod.save_json = lambda path, data: saved.update(data=data)
+
+    async def fake_members():
+        return {'111': {'name': 'Tank'}}
+    orig_members = torn_api_mod.fetch_faction_members
+    torn_api_mod.fetch_faction_members = fake_members
+
+    report_factions = {
+        str(TORN_FACTION_ID): {'members': {'111': {'attacks': 79, 'score': 384.0}}},
+    }
+    try:
+        # attack_stats=None is exactly what an unreadable log now yields
+        asyncio.run(mgr._save_war_member_data(
+            50338, report_factions, 1952, 5290, 'Them',
+            friendly_hosps=[], attack_stats=None))
+
+        rec = saved['data']['wars'][0]['members']['111']
+        assert rec['defends'] is None, \
+            'an unreadable log must archive unknown, not a permanent false zero'
+        assert rec['attacks'] == 79, 'report-sourced data is still trustworthy'
+
+        # ...and the history view shows that as "?" rather than 0
+        mgr.war_member_stats = {'wars': [{
+            'enemy_name': 'Them', 'result': 'defeat', 'timestamp': 1_790_000_000,
+            'members': {'111': {'name': 'Tank', 'attacks': 79, 'defends': None,
+                                'score': 384.0, 'hosps_given': 0, 'hosps_received': 0}},
+        }]}
+        embed = asyncio.run(mgr.format_warstats_member_embed('111', 'Tank'))
+        body = (embed.description or '') + ''.join(f.value for f in embed.fields)
+        assert 'Defends: ?' in body, body
+    finally:
+        wars_mod.save_json = orig_save
+        torn_api_mod.fetch_faction_members = orig_members
+
+
 def test_saved_war_history_records_real_hits_taken():
     """
     The audit's worst find, because it is the only one that is PERMANENT.
@@ -1994,6 +2164,10 @@ if __name__ == '__main__':
     test_xan_counts_friendly_hosps()
     test_incoming_split_does_not_dump_war_hits_into_outside()
     test_saved_war_history_records_real_hits_taken()
+    test_fetch_faction_attacks_reports_outage_as_none()
+    test_attack_log_outage_is_not_a_quiet_war()
+    test_attack_log_paging_does_not_skip_the_boundary_second()
+    test_war_end_survives_an_unreadable_attack_log()
     test_war_report_counts_hits_taken_from_attack_log()
     test_activity_profile_chunk_detection()
     test_activity_profile_manager_queries()
