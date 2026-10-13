@@ -366,6 +366,32 @@ class WarTracker:
 
         return latest_war
 
+    async def get_upcoming_war(self):
+        """
+        The soonest ranked war that is enlisted but has NOT started yet.
+
+        get_latest_war() deliberately only matches wars already underway, so
+        nothing in the bot could see an upcoming one until now. Reuses the same
+        cached rankedwars fetch, so asking costs no extra API call.
+
+        Returns {'war_id', 'start', 'data'} or None.
+        """
+        rankedwars = await self._fetch_rankedwars()
+        if not rankedwars:
+            return None
+
+        now = get_current_timestamp()
+        soonest = None
+        for war_id, war_data in rankedwars.items():
+            war = war_data.get('war', {})
+            start = war.get('start', 0)
+            end = war.get('end', 0)
+            # Not started, and not a finished war whose start we are re-reading
+            if start > now and not end:
+                if soonest is None or start < soonest['start']:
+                    soonest = {'war_id': str(war_id), 'start': start, 'data': war_data}
+        return soonest
+
     async def format_war_embed(self, war_info):
         """
         Create a Discord embed for current war status

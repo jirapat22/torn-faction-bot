@@ -16,7 +16,8 @@ import traceback
 from datetime import datetime, timezone
 
 # Import our modules
-from config import BOT_TOKEN, COMMAND_PREFIX, GUILD_ID, TORN_API_KEY, TORN_FACTION_ID
+from config import (BOT_TOKEN, COMMAND_PREFIX, GUILD_ID, TORN_API_KEY, TORN_FACTION_ID,
+                    VERIFIED_ROLE_NAME)
 from features.inactivity import InactivityTracker
 from features.chains import ChainTracker
 from features.wars import WarTracker
@@ -402,6 +403,11 @@ async def war_update_check():
     try:
         if war_tracker:
             await war_tracker.check_war_update()
+        # Piggybacks on the same cached rankedwars fetch war_tracker just made,
+        # so asking every minute costs no extra API call. It posts at most once
+        # per war, roughly two days out.
+        if availability_manager and war_tracker:
+            await availability_manager.check_war_poll(war_tracker, VERIFIED_ROLE_NAME)
     except Exception as e:
         logger.error(f'Error in war update check: {e}')
 

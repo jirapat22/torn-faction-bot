@@ -20,6 +20,7 @@ from typing import Optional, List, Dict
 from utils.helpers import load_json, save_json, create_embed, is_management
 from features.activity_profile import format_window
 from config import (
+    AVAILABILITY_CHANNEL_ID,
     EMBED_COLOR_INFO,
     EMBED_COLOR_SUCCESS,
     EMBED_COLOR_WARNING,
@@ -31,6 +32,14 @@ import logging
 
 logger = logging.getLogger(__name__)
 # Block labels (A-X for up to 24 blocks)
+# ===== Automatic pre-war availability poll =====
+# The rules make posting availability a strike-able obligation, so the poll has
+# to appear on its own - relying on someone remembering to run /avail is how the
+# obligation quietly becomes unenforceable.
+WAR_POLL_LEAD_SECONDS = 48 * 3600   # post once the war is this close
+WAR_POLL_SPAN_HOURS = 24            # cover the first day of the war
+WAR_POLL_BLOCK_HOURS = 4            # -> 6 blocks, one message, readable on mobile
+
 BLOCK_LABELS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L',
                 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X']
 
@@ -397,6 +406,113 @@ class AvailabilityManager:
             lines.append(f"{time_range}: {bar:<10} {count}")
 
         return '\n'.join(lines)
+
+    async def check_war_poll(self, war_tracker, verified_role_name: str = 'Verified'):
+        """
+        Post a war availability poll once, about two days before a ranked war.
+
+        Called every minute from the war loop. Does nothing until a war is
+        within WAR_POLL_LEAD_SECONDS, and never posts twice for the same war -
+        the guard is the war_id stored on the poll itself rather than a separate
+        "already announced" file, so it cannot drift out of sync with reality.
+        """
+        if not war_tracker or not AVAILABILITY_CHANNEL_ID:
+            return
+
+        upcoming = await war_tracker.get_upcoming_war()
+        if not upcoming:
+            return
+
+        now = int(datetime.now(timezone.utc).timestamp())
+        start = int(upcoming['start'])
+        if start - now > WAR_POLL_LEAD_SECONDS:
+            return  # still too far out
+        if start <= now:
+            return  # already started; a poll now would be pointless
+
+        war_id = str(upcoming['war_id'])
+        for poll in self.polls.values():
+            if str(poll.get('war_id')) == war_id:
+                return  # already posted for this war
+
+        channel = self.bot.get_channel(AVAILABILITY_CHANNEL_ID)
+        if not channel:
+            logger.warning(f'Availability: war poll channel {AVAILABILITY_CHANNEL_ID} not found')
+            return
+
+        try:
+            await self._post_war_poll(channel, war_id, start, verified_role_name)
+        except Exception as e:
+            logger.error(f'Availability: failed to post war poll for {war_id}: {e}')
+
+    async def _post_war_poll(self, channel, war_id: str, war_start: int,
+                             verified_role_name: str):
+        """Build and post the poll covering the first day of the war."""
+        start_dt = datetime.fromtimestamp(war_start, timezone.utc)
+        end_dt = start_dt + timedelta(hours=WAR_POLL_SPAN_HOURS)
+
+        start_date = start_dt.strftime('%d-%m-%Y')
+        start_time = start_dt.strftime('%H:%M')
+        end_time = end_dt.strftime('%H:%M')
+        # create_poll() treats an end time of 00:00 as "end of that day" and
+        # adds the 24h itself. Handing it the real next-day date as well would
+        # double the window, so step the date back and let it do the adding.
+        end_date = (end_dt - timedelta(days=1) if end_time == '00:00'
+                    else end_dt).strftime('%d-%m-%Y')
+
+        poll_id, blocks = self.create_poll(
+            start_date=start_date, end_date=end_date,
+            channel_id=channel.id, message_id=0,
+            start_time=start_time, end_time=end_time,
+            block_length=WAR_POLL_BLOCK_HOURS,
+        )
+        if not blocks:
+            self.polls.pop(poll_id, None)
+            self.data.pop(poll_id, None)
+            logger.error(f'Availability: war poll for {war_id} produced no blocks')
+            return
+
+        # Close the poll as the war starts - that is when the coverage picture
+        # stops being a plan and starts being history.
+        self.polls[poll_id]['poll_end_unix'] = war_start
+        self.polls[poll_id]['closed'] = False
+        self.polls[poll_id]['war_id'] = war_id
+
+        block_list = []
+        current_date = None
+        for b in blocks:
+            if b['date'] != current_date:
+                if current_date is not None:
+                    block_list.append('')
+                block_list.append(f"**{b['date']}:**")
+                current_date = b['date']
+            block_list.append(
+                f"  **{b['label']}**: <t:{b['start_unix']}:t> \u2013 <t:{b['end_unix']}:t> "
+                f"({b['start_time']}\u2013{b['end_time']} TCT)"
+            )
+
+        embed = create_embed(
+            title=f'\u2694\ufe0f War Availability \u2013 war starts {start_date}',
+            description=(
+                f'**War #{war_id} starts <t:{war_start}:R>** (<t:{war_start}:F>)\n\n'
+                f'**Select every block you expect to be online.** Click to toggle.\n'
+                f'Times show in **your** local time, with TCT in brackets.\n\n'
+                f'Posting here is what exempts you \u2014 being offline during a war '
+                f'without it is a strike. Say so even if the answer is "barely on".\n\n'
+                f'\u23f3 **Poll closes when the war starts:** <t:{war_start}:R>\n\n'
+                f'**Time Blocks:**\n' + '\n'.join(block_list)
+            ),
+            color=EMBED_COLOR_INFO,
+        )
+        embed.set_footer(text=f'Block size: {WAR_POLL_BLOCK_HOURS}h | '
+                              f'Only {verified_role_name} members can vote')
+
+        view = AvailabilityView(self, poll_id, blocks, verified_role_name)
+        message = await channel.send(embed=embed, view=view)
+        self.polls[poll_id]['message_id'] = message.id
+        await self.save_polls()
+        logger.info(f'Availability: auto-posted war poll {poll_id} for war {war_id} '
+                    f'({len(blocks)} blocks, starts in {(war_start - int(datetime.now(timezone.utc).timestamp())) // 3600}h)')
 
     async def check_poll_endings(self):
         """Check if any polls have ended and auto-post results"""

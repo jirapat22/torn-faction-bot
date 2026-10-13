@@ -2204,6 +2204,120 @@ def test_fly_status_shows_destination_hotspots():
         restore()
 
 
+def test_war_poll_posts_once_two_days_out():
+    """
+    The rules make posting availability strike-able, so the poll must appear on
+    its own - an obligation that depends on someone remembering to run /avail
+    quietly stops being enforceable.
+
+    Pins the three things that make it safe to run every minute: too-far-out
+    does nothing, inside the window posts exactly one poll, and a second tick
+    for the same war posts nothing more.
+    """
+    import asyncio
+    from datetime import datetime, timezone
+    import features.availability as av
+    from features.availability import AvailabilityManager, WAR_POLL_LEAD_SECONDS
+
+    now = int(datetime.now(timezone.utc).timestamp())
+
+    class FakeMsg:
+        id = 777
+
+    class FakeChannel:
+        id = 123
+        def __init__(self):
+            self.sent = []
+        async def send(self, **kw):
+            self.sent.append(kw)
+            return FakeMsg()
+
+    class FakeBot:
+        def __init__(self, ch):
+            self._ch = ch
+        def get_channel(self, _):
+            return self._ch
+
+    class FakeWarTracker:
+        def __init__(self, start):
+            self.start = start
+        async def get_upcoming_war(self):
+            return {'war_id': '50999', 'start': self.start, 'data': {}}
+
+    ch = FakeChannel()
+    mgr = AvailabilityManager(FakeBot(ch))
+    mgr.polls, mgr.data = {}, {}
+    orig_save, orig_chan = av.save_json, av.AVAILABILITY_CHANNEL_ID
+    av.save_json = lambda *a, **k: None
+    av.AVAILABILITY_CHANNEL_ID = 123
+    try:
+        # Too far out -> silent
+        asyncio.run(mgr.check_war_poll(FakeWarTracker(now + WAR_POLL_LEAD_SECONDS + 3600)))
+        assert ch.sent == [], 'must not post days early'
+
+        # Inside the window -> exactly one poll
+        wt = FakeWarTracker(now + 36 * 3600)
+        asyncio.run(mgr.check_war_poll(wt))
+        assert len(ch.sent) == 1, f'expected one poll, got {len(ch.sent)}'
+        assert len(mgr.polls) == 1
+        poll = list(mgr.polls.values())[0]
+        assert poll['war_id'] == '50999'
+        assert poll['poll_end_unix'] == wt.start, 'poll closes as the war starts'
+
+        # Runs every minute - a second tick must not post again
+        asyncio.run(mgr.check_war_poll(wt))
+        assert len(ch.sent) == 1, 'posted twice for the same war'
+    finally:
+        av.save_json, av.AVAILABILITY_CHANNEL_ID = orig_save, orig_chan
+
+
+def test_war_poll_window_is_24h_even_for_a_midnight_war():
+    """
+    create_poll() treats an end time of 00:00 as "end of that day" and adds the
+    24h itself. A war starting at 00:00 TCT therefore produces end_time 00:00,
+    and handing it the real next-day date as well would silently DOUBLE the
+    window to 48h - twice the blocks, covering a day of war nobody asked about.
+    """
+    import asyncio
+    from datetime import datetime, timezone
+    import features.availability as av
+    from features.availability import (AvailabilityManager, WAR_POLL_SPAN_HOURS,
+                                       WAR_POLL_BLOCK_HOURS)
+
+    class FakeMsg:
+        id = 1
+
+    class FakeChannel:
+        id = 123
+        async def send(self, **kw):
+            return FakeMsg()
+
+    class FakeBot:
+        def get_channel(self, _):
+            return FakeChannel()
+
+    expected_blocks = WAR_POLL_SPAN_HOURS // WAR_POLL_BLOCK_HOURS
+    orig_save = av.save_json
+    av.save_json = lambda *a, **k: None
+    try:
+        # 00:00 TCT exactly - the case that used to double
+        midnight = int(datetime(2026, 11, 2, 0, 0, tzinfo=timezone.utc).timestamp())
+        # ...and a normal mid-afternoon start, as a control
+        afternoon = int(datetime(2026, 11, 2, 16, 0, tzinfo=timezone.utc).timestamp())
+
+        for label, start in (('midnight', midnight), ('afternoon', afternoon)):
+            mgr = AvailabilityManager(FakeBot())
+            mgr.polls, mgr.data = {}, {}
+            asyncio.run(mgr._post_war_poll(FakeChannel(), '1', start, 'Verified'))
+            blocks = list(mgr.polls.values())[0]['blocks']
+            span = (blocks[-1]['end_unix'] - blocks[0]['start_unix']) / 3600
+            assert blocks[0]['start_unix'] == start, f'{label}: poll must open at war start'
+            assert span == WAR_POLL_SPAN_HOURS, f'{label}: window is {span}h, want {WAR_POLL_SPAN_HOURS}h'
+            assert len(blocks) == expected_blocks, f'{label}: {len(blocks)} blocks'
+    finally:
+        av.save_json = orig_save
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -2232,6 +2346,8 @@ if __name__ == '__main__':
     test_attack_log_outage_is_not_a_quiet_war()
     test_attack_log_paging_does_not_skip_the_boundary_second()
     test_war_end_survives_an_unreadable_attack_log()
+    test_war_poll_posts_once_two_days_out()
+    test_war_poll_window_is_24h_even_for_a_midnight_war()
     test_war_report_counts_hits_taken_from_attack_log()
     test_activity_profile_chunk_detection()
     test_activity_profile_manager_queries()
