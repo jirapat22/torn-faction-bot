@@ -408,6 +408,11 @@ async def war_update_check():
         # per war, roughly two days out.
         if availability_manager and war_tracker:
             await availability_manager.check_war_poll(war_tracker, VERIFIED_ROLE_NAME)
+        # War end already auto-stops fly tracking; this is the missing other
+        # half. Runs here rather than in the fly loop, because that one only
+        # ticks while tracking is already on.
+        if fly_tracker and war_tracker:
+            await fly_tracker.auto_start_for_new_war()
     except Exception as e:
         logger.error(f'Error in war update check: {e}')
 

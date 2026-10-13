@@ -219,6 +219,46 @@ class AvailabilityManager:
             self.data[poll_id][block_key].append(user_id_str)
             return True
 
+    ROSTER_FIELD = "\U0001f9cd Who's in"
+
+    def build_roster(self, poll_id: str, guild, max_chars: int = 1000) -> str:
+        """Per-block list of who has picked that block, for the poll message.
+
+        Counts alone tell you a block is thin but not who to chase, which is the
+        whole point of running the poll. Truncates per block rather than
+        dropping blocks, so a popular early block can never hide a later one
+        with nobody in it - the empty ones are the entire signal.
+        """
+        poll = self.polls.get(poll_id)
+        if not poll:
+            return ''
+        data = self.data.get(poll_id, {})
+
+        def name_for(uid):
+            member = guild.get_member(int(uid)) if guild else None
+            return member.display_name if member else f'<@{uid}>'
+
+        lines = []
+        for block in poll.get('blocks', []):
+            uids = data.get(str(block['id']), [])
+            if not uids:
+                lines.append(f"**{block['label']}** (0): nobody yet")
+                continue
+            names = [name_for(u) for u in uids]
+            shown, used = [], 0
+            for n in names:
+                if used + len(n) + 2 > 90:
+                    break
+                shown.append(n)
+                used += len(n) + 2
+            text = ', '.join(shown)
+            if len(shown) < len(names):
+                text += f' +{len(names) - len(shown)} more'
+            lines.append(f"**{block['label']}** ({len(names)}): {text}")
+
+        out = '\n'.join(lines)
+        return out[:max_chars] if len(out) > max_chars else out
+
     def get_block_count(self, poll_id: str, block_id: int) -> int:
         """Get number of users available for a block"""
         if poll_id not in self.data:
@@ -705,8 +745,28 @@ class AvailabilityButton(discord.ui.Button):
                     # Keep all buttons neutral gray - style is shared across all users
                     item.style = discord.ButtonStyle.secondary
 
+            # Rebuild the embed so the roster reflects this click. Editing the
+            # live embed rather than posting a summary keeps one message as the
+            # single source of truth, which is what people scroll back to.
+            embed = None
+            if interaction.message and interaction.message.embeds:
+                embed = interaction.message.embeds[0]
+                roster = self.manager.build_roster(self.poll_id, interaction.guild)
+                if roster:
+                    idx = next((i for i, f in enumerate(embed.fields)
+                                if f.name == AvailabilityManager.ROSTER_FIELD), None)
+                    if idx is None:
+                        embed.add_field(name=AvailabilityManager.ROSTER_FIELD,
+                                        value=roster, inline=False)
+                    else:
+                        embed.set_field_at(idx, name=AvailabilityManager.ROSTER_FIELD,
+                                           value=roster, inline=False)
+
             # Update the message
-            await interaction.response.edit_message(view=self.view)
+            if embed is not None:
+                await interaction.response.edit_message(embed=embed, view=self.view)
+            else:
+                await interaction.response.edit_message(view=self.view)
 
             # Send ephemeral feedback with both local and TCT time
             time_display = f"<t:{self.block['start_unix']}:t> ({self.block['start_time']}–{self.block['end_time']} TCT)"

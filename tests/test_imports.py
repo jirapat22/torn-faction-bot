@@ -2318,6 +2318,152 @@ def test_war_poll_window_is_24h_even_for_a_midnight_war():
         av.save_json = orig_save
 
 
+def test_fly_auto_starts_but_never_overrides_a_manual_toggle_off():
+    """
+    War END auto-stopped fly tracking, but START did nothing beyond setting a
+    flag and a log line - so every war depended on somebody running
+    /war view:Fly, and forgetting meant no flight alerts and no follow warnings
+    for the whole war, silently.
+
+    The hard part is not switching it on, it is not fighting the operator.
+    disable() clears war_id, so war_id cannot be the "already handled" marker:
+    a manual toggle-off would look like a fresh war a minute later and switch
+    straight back on. A separate marker that disable() leaves alone fixes that.
+    """
+    import asyncio
+    import features.flytrack as fly_mod
+    from features.flytrack import FlyTracker
+
+    class FakeWarTracker:
+        was_war_active = True
+        current_war_id = '50338'
+
+    mgr = FlyTracker(bot=None, war_tracker=FakeWarTracker())
+    enables = []
+
+    async def fake_enable():
+        enables.append(1)
+        mgr.enabled = True
+        mgr.war_id = '50338'
+        return True, 'embed'
+
+    async def fake_post(content=None, embed=None):
+        pass
+
+    mgr.enable = fake_enable
+    mgr._post = fake_post
+    orig_save = fly_mod.save_json
+    fly_mod.save_json = lambda *a, **k: None
+    try:
+        # War starts -> tracking switches itself on
+        asyncio.run(mgr.auto_start_for_new_war())
+        assert enables == [1], 'fly tracking must start with the war'
+        assert mgr.auto_started_war_id == '50338'
+
+        # Same war, next tick -> nothing
+        asyncio.run(mgr.auto_start_for_new_war())
+        assert len(enables) == 1, 'must only fire once per war'
+
+        # Operator turns it off mid-war. disable() wipes war_id, which is
+        # exactly the state that used to look like a brand new war.
+        mgr.enabled = False
+        mgr.war_id = None
+        asyncio.run(mgr.auto_start_for_new_war())
+        assert len(enables) == 1, 'a deliberate toggle-off must be respected'
+
+        # A genuinely different war does start it again
+        mgr.war_tracker.current_war_id = '50999'
+        asyncio.run(mgr.auto_start_for_new_war())
+        assert len(enables) == 2, 'a new war must start tracking again'
+    finally:
+        fly_mod.save_json = orig_save
+
+
+def test_fly_auto_start_retries_when_enable_fails():
+    """
+    At the moment a war flips live, the enemy roster can briefly lag behind it,
+    so enable() can fail for a tick. Stamping the marker anyway would mean the
+    war runs untracked and nothing ever tries again.
+    """
+    import asyncio
+    import features.flytrack as fly_mod
+    from features.flytrack import FlyTracker
+
+    class FakeWarTracker:
+        was_war_active = True
+        current_war_id = '50338'
+
+    mgr = FlyTracker(bot=None, war_tracker=FakeWarTracker())
+    attempts = {'n': 0}
+
+    async def flaky_enable():
+        attempts['n'] += 1
+        if attempts['n'] == 1:
+            return False, 'no enemy faction yet'
+        mgr.enabled = True
+        mgr.war_id = '50338'
+        return True, 'embed'
+
+    async def fake_post(content=None, embed=None):
+        pass
+
+    mgr.enable = flaky_enable
+    mgr._post = fake_post
+    orig_save = fly_mod.save_json
+    fly_mod.save_json = lambda *a, **k: None
+    try:
+        asyncio.run(mgr.auto_start_for_new_war())
+        assert mgr.auto_started_war_id is None, 'a failed start must not be marked done'
+        asyncio.run(mgr.auto_start_for_new_war())
+        assert attempts['n'] == 2 and mgr.auto_started_war_id == '50338'
+    finally:
+        fly_mod.save_json = orig_save
+
+
+def test_poll_roster_names_who_picked_each_block():
+    """
+    Counts tell you a block is thin but not who to chase, which is the point of
+    running the poll at all. Empty blocks matter most, so truncation happens
+    inside a block rather than by dropping blocks - a popular early block must
+    never hide a later one with nobody in it.
+    """
+    from features.availability import AvailabilityManager
+
+    class FakeMember:
+        def __init__(self, name):
+            self.display_name = name
+
+    class FakeGuild:
+        def __init__(self, members):
+            self._m = members
+        def get_member(self, uid):
+            return self._m.get(int(uid))
+
+    mgr = AvailabilityManager(bot=None)
+    mgr.polls = {'p1': {'blocks': [
+        {'id': 0, 'label': 'A'}, {'id': 1, 'label': 'B'}, {'id': 2, 'label': 'C'}]}}
+    mgr.data = {'p1': {'0': [1, 2], '1': [], '2': [3]}}
+    guild = FakeGuild({1: FakeMember('Ikaros22'), 2: FakeMember('SirAua'),
+                       3: FakeMember('dakkkz')})
+
+    out = mgr.build_roster('p1', guild)
+    assert 'Ikaros22' in out and 'SirAua' in out, out
+    assert '**A** (2)' in out
+    assert '**B** (0): nobody yet' in out, 'an empty block is the signal, never hidden'
+    assert '**C** (1): dakkkz' in out
+
+    # Unknown member falls back to a mention rather than vanishing
+    out2 = mgr.build_roster('p1', FakeGuild({}))
+    assert '<@1>' in out2
+
+    # A crowded block truncates itself, and later blocks still appear
+    mgr.data['p1']['0'] = list(range(100, 140))
+    big = mgr.build_roster('p1', FakeGuild({i: FakeMember(f'LongMemberName{i}') for i in range(100, 140)}))
+    assert 'more' in big, 'a crowded block must summarise, not run away'
+    assert '**C**' in big, 'later blocks must survive truncation'
+    assert len(big) <= 1000
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -2348,6 +2494,9 @@ if __name__ == '__main__':
     test_war_end_survives_an_unreadable_attack_log()
     test_war_poll_posts_once_two_days_out()
     test_war_poll_window_is_24h_even_for_a_midnight_war()
+    test_fly_auto_starts_but_never_overrides_a_manual_toggle_off()
+    test_fly_auto_start_retries_when_enable_fails()
+    test_poll_roster_names_who_picked_each_block()
     test_war_report_counts_hits_taken_from_attack_log()
     test_activity_profile_chunk_detection()
     test_activity_profile_manager_queries()

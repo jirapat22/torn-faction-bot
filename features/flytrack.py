@@ -3,7 +3,7 @@ Fly Tracking Module
 Track enemy faction flights during ranked war and estimate landing times.
 
 The Torn API's `travel` selection (user/{id}?selections=travel) only works
-for the key owner's own ID · querying anyone else returns API error 7
+for the key owner's own ID - querying anyone else returns API error 7
 ("Incorrect ID-entity relation": the selection is private and the ID
 doesn't match the key owner), confirmed live against this faction's war.
 So there is no way to read an enemy's exact remaining flight time.
@@ -20,7 +20,7 @@ Toggled via /war view:Fly (management only). Alerts post to the war-tracker
 channel. Auto-stops when the ranked war ends.
 
 Also warns our own members when an enemy takes off toward the country they
-are currently sitting in ("someone is following you") · see _follow_alerts.
+are currently sitting in ("someone is following you") - see _follow_alerts.
 """
 
 import discord
@@ -89,13 +89,13 @@ TIER_LABELS = {
     'business': 'business class',
 }
 
-# The tiers above are LABELS ONLY · the ETA maths uses a player's measured
+# The tiers above are LABELS ONLY - the ETA maths uses a player's measured
 # speed ratio (actual flight minutes / standard minutes), never the bucket.
 #
 # Why: snapping a measurement to the nearest bucket threw away the accurate
 # number we had just observed. Measured against 82 real flights, every single
 # prediction landed LATE (avg 8 min, worst 24) because every bucket is a touch
-# slower than reality · e.g. MegaBates was measured at 143 min to South Africa,
+# slower than reality - e.g. MegaBates was measured at 143 min to South Africa,
 # then predicted with the WLT bucket's 148.5 min, so he landed ~5.5 min early.
 #
 # Empirical ratios from those 82 flights: median 0.669, p25 0.657, p75 0.692.
@@ -118,7 +118,7 @@ ASSUMED_SPREAD = 0.10          # loose · we are guessing their travel perks
 # worried about during a busy war:
 #
 # 1. A per-member-per-country cooldown. Once someone has been told "enemies are
-#    heading to Switzerland", repeating it every few minutes adds nothing · they
+#    heading to Switzerland", repeating it every few minutes adds nothing - they
 #    already know to watch that country. Enemies departing in the SAME poll tick
 #    are still grouped into one message, so a 6-man wave is one ping, not six.
 # 2. A stat threshold. An enemy with a fraction of the member's battle stats
@@ -164,7 +164,7 @@ HOSPITAL_ADJECTIVES = {
 }
 
 # Consecutive "war_tracker says the war isn't active" reads required before
-# auto-stop · guards against reading war_tracker.was_war_active during its
+# auto-stop - guards against reading war_tracker.was_war_active during its
 # post-restart warm-up window (see check_flights).
 WAR_END_STRIKES = 3
 
@@ -184,7 +184,7 @@ def parse_phase(status: Dict, torn_id: str = '', name: str = '') -> Tuple[str, O
     and the free-text description isn't guaranteed to match the API's
     state enum spelling.
 
-    Returns (phase, destination) · destination is None when at home or unknown.
+    Returns (phase, destination) - destination is None when at home or unknown.
     torn_id/name are optional, used only to label diagnostic logging when a
     traveling/abroad member's destination can't be parsed out of the text.
     """
@@ -253,9 +253,13 @@ class FlyTracker:
         self.enemy_faction_name = ''
         self.players = {}  # {torn_id: {name, phase, dest, eta, leg_start, leg_observed}}
         self.tiers = {}    # {torn_id: {tier, name, observed_minutes, dest, ts}} · persists across wars
-        # {f'{our_member_torn_id}:{country}': last_alert_ts} · persisted so a
+        # {f'{our_member_torn_id}:{country}': last_alert_ts} - persisted so a
         # restart mid-war doesn't re-ping everyone we already warned.
         self.follow_cooldowns = {}
+        # Last war id we auto-started for. Deliberately NOT cleared by disable(),
+        # which wipes war_id: if it were, turning tracking off by hand mid-war
+        # would just see it switch itself back on a minute later.
+        self.auto_started_war_id = None
         self._war_end_strikes = 0
 
     async def load_data(self):
@@ -267,6 +271,7 @@ class FlyTracker:
         self.players = data.get('players', {})
         self.tiers = data.get('tiers', {})
         self.follow_cooldowns = data.get('follow_cooldowns', {})
+        self.auto_started_war_id = data.get('auto_started_war_id')
         if self.enabled:
             logger.info(f'Fly tracking resumed for faction {self.enemy_faction_id} ({self.enemy_faction_name})')
 
@@ -279,6 +284,7 @@ class FlyTracker:
             'players': self.players,
             'tiers': self.tiers,
             'follow_cooldowns': self.follow_cooldowns,
+            'auto_started_war_id': self.auto_started_war_id,
         })
 
     # ===== Toggle =====
@@ -399,6 +405,42 @@ class FlyTracker:
         embed.set_footer(text='/war view:Fly again to toggle off · /war view:FlyStatus for a live peek')
         return True, embed
 
+    async def auto_start_for_new_war(self):
+        """
+        Switch tracking on by itself when a ranked war begins.
+
+        War END already auto-stops, but START did nothing beyond setting a flag
+        and writing a log line, so every war depended on somebody remembering
+        `/war view:Fly`. If they forgot there were no flight alerts and no
+        follow warnings for the whole war, silently.
+
+        Fires once per war. The marker survives disable(), so switching it off
+        by hand during a war is respected rather than undone on the next tick.
+        The manual command stays as the fallback if this misbehaves.
+        """
+        wt = self.war_tracker
+        if not wt or not wt.was_war_active or not wt.current_war_id:
+            return
+        war_id = str(wt.current_war_id)
+        if str(self.auto_started_war_id) == war_id:
+            return  # already handled this war, including a deliberate toggle-off
+        if self.enabled and str(self.war_id) == war_id:
+            self.auto_started_war_id = war_id  # already on for this war
+            await self.save_data()
+            return
+
+        ok, embed = await self.enable()
+        if not ok:
+            # Leave the marker unset so the next tick retries - at war start the
+            # roster can briefly lag behind the war itself.
+            logger.warning(f'Fly: auto-start for war {war_id} did not take, will retry')
+            return
+
+        self.auto_started_war_id = war_id
+        await self.save_data()
+        logger.info(f'Fly: auto-started tracking for war {war_id}')
+        await self._post(embed=embed)
+
     async def disable(self, reason: str = 'Toggled off') -> discord.Embed:
         """Turn fly tracking off. Learned tiers are kept for future wars."""
         name = self.enemy_faction_name or 'enemy faction'
@@ -446,7 +488,7 @@ class FlyTracker:
 
             if phase in (PHASE_OUT, PHASE_RETURNING):
                 # Reuse the already leg_start-anchored eta from check_flights()
-                # whenever it's for this exact same leg · recomputing from "now"
+                # whenever it's for this exact same leg - recomputing from "now"
                 # on every peek would push the ETA later each time it's checked,
                 # since it'd treat "now" as a fresh departure instant. Compare
                 # the exact phase (not a coarse OUT/RETURNING-collapsed category)
@@ -528,7 +570,7 @@ class FlyTracker:
         # Auto-stop when the war ends OR a different war has taken over.
         # Piggyback on war_tracker's own rigorous, raw-refetch-confirmed end
         # detection (WarTracker.check_war_update, called every minute
-        # independently) instead of re-deriving a weaker signal here · a
+        # independently) instead of re-deriving a weaker signal here - a
         # lone get_current_war() == None can just be a transient API
         # hiccup, and trusting a short run of those on their own is what
         # silently killed tracking mid-war before.
@@ -583,7 +625,7 @@ class FlyTracker:
 
             prev = self.players.get(tid)
             if prev is None:
-                # New member joined mid-war · baseline silently
+                # New member joined mid-war - baseline silently
                 self.players[tid] = {
                     'name': name, 'phase': text_phase, 'dest': text_dest,
                     'eta': None, 'leg_start': None, 'leg_observed': False,
@@ -594,7 +636,7 @@ class FlyTracker:
             prev_phase = prev.get('phase')
 
             # Compare the exact fine-grained phase, not a coarse OUT/RETURNING-
-            # collapsed category · otherwise a fast turnaround (land abroad and
+            # collapsed category - otherwise a fast turnaround (land abroad and
             # immediately re-depart within one poll tick) never registers as a
             # change, silently swallowing the return alert and leaving stale
             # outbound data in self.players.
@@ -631,7 +673,7 @@ class FlyTracker:
                 }
 
             elif text_phase == PHASE_ABROAD:
-                # Landed abroad · learn tier if we watched the whole outbound leg
+                # Landed abroad - learn tier if we watched the whole outbound leg
                 if prev_phase == PHASE_OUT and prev.get('leg_observed') and prev.get('leg_start'):
                     self._learn_tier(tid, name, prev.get('dest'), now_ts - prev['leg_start'])
                 self.players[tid] = {
@@ -908,7 +950,7 @@ class FlyTracker:
     # ===== ETA / tier logic =====
 
     def _tier_for(self, torn_id: str) -> Tuple[str, bool]:
-        """Return (tier, learned) for a player · learned=False means assumption.
+        """Return (tier, learned) for a player - learned=False means assumption.
         Label only; the ETA maths uses _ratio_for."""
         entry = self.tiers.get(str(torn_id))
         if entry and entry.get('tier') in TIER_MULTIPLIERS:
@@ -917,7 +959,7 @@ class FlyTracker:
 
     def _ratio_for(self, torn_id: str) -> Tuple[float, bool]:
         """
-        Return (speed_ratio, measured) · the player's actual flight minutes as a
+        Return (speed_ratio, measured) - the player's actual flight minutes as a
         fraction of the standard time, taken from flights we have watched them
         complete. measured=False means nobody has timed them yet, so we fall
         back to the empirical median across the faction.
@@ -954,7 +996,7 @@ class FlyTracker:
     def _eta_window(self, torn_id: str, dest: Optional[str],
                     eta: Optional[int]) -> Optional[int]:
         """
-        Earliest plausible landing for an ETA · the "be ready by" edge of the
+        Earliest plausible landing for an ETA - the "be ready by" edge of the
         window. Covers the poll lag (we see a departure up to 60s after it
         happened, so the clock starts late) plus how confident we are in this
         player's speed. Returns None when there is no ETA to bound.
@@ -1032,7 +1074,7 @@ class FlyTracker:
 
     def _format_outbound_alert(self, dest: Optional[str], name: str, eta: Optional[int],
                                early: Optional[int] = None) -> str:
-        # 🔴/🟢 instead of plane emoji · ✈️/🛬 look nearly identical at a
+        # 🔴/🟢 instead of plane emoji - ✈️/🛬 look nearly identical at a
         # glance, which was the actual reason out/in was hard to tell apart.
         dest_label = dest or 'an unknown destination'
         if eta:
@@ -1074,7 +1116,7 @@ class FlyTracker:
             return
         try:
             if content:
-                # Discord message limit is 2000 chars · chunk on line boundaries
+                # Discord message limit is 2000 chars - chunk on line boundaries
                 lines = content.split('\n')
                 buf = ''
                 for line in lines:
