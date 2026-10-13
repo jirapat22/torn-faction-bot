@@ -207,7 +207,7 @@ def test_flytrack_group_formatting():
     assert '←' in line and 'ETA unknown' in line
 
     line = mgr._format_abroad_line('Ferothen', 'China')
-    assert line == '**Ferothen** — China'
+    assert line == '**Ferothen** · China'
 
 
 def test_flytrack_status_reuses_persisted_eta():
@@ -591,7 +591,7 @@ def test_flytrack_autostop_trusts_war_tracker_not_raw_none():
 
     for _ in range(WAR_END_STRIKES):
         asyncio.run(mgr4.check_flights())
-    assert disabled4 == ['A different war is now active — re-toggle Fly tracking for it']
+    assert disabled4 == ['A different war is now active. Re-toggle Fly tracking for it']
 
 
 def test_activity_profile_chunk_detection():

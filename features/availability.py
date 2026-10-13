@@ -497,7 +497,7 @@ class AvailabilityManager:
                 f'**War #{war_id} starts <t:{war_start}:R>** (<t:{war_start}:F>)\n\n'
                 f'**Select every block you expect to be online.** Click to toggle.\n'
                 f'Times show in **your** local time, with TCT in brackets.\n\n'
-                f'Posting here is what exempts you \u2014 being offline during a war '
+                f'Posting here is what exempts you. Being offline during a war '
                 f'without it is a strike. Say so even if the answer is "barely on".\n\n'
                 f'\u23f3 **Poll closes when the war starts:** <t:{war_start}:R>\n\n'
                 f'**Time Blocks:**\n' + '\n'.join(block_list)
@@ -741,10 +741,10 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
     )
     @app_commands.describe(
         action='What to do',
-        date='Date for the poll (DD-MM-YYYY) — required for Setup/Summary/Mine/Delete',
+        date='Date for the poll (DD-MM-YYYY) · required for Setup/Summary/Mine/Delete',
         start_time='[Setup] Start time in TCT/UTC (HH:MM, e.g., 00:00)',
         end_time='[Setup] End time in TCT/UTC (HH:MM, e.g., 24:00)',
-        end_date='[Setup] End date if multi-day (DD-MM-YYYY) — leave empty for same day',
+        end_date='[Setup] End date if multi-day (DD-MM-YYYY) · leave empty for same day',
         block_length='[Setup] Hours per time block (1-6, default: 2)',
         poll_duration='[Setup] Hours until poll closes (default: 24)',
         member='[Activity] Check one member instead of the whole roster'
@@ -1146,9 +1146,9 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
                 title='📊 Faction Coverage',
                 description=(
                     f'Based on {member_count} member(s) with enough tracked history.\n\n'
-                    f'**Best overlap window:** {format_window(best_start, best_end)} UTC — '
+                    f'**Best overlap window:** {format_window(best_start, best_end)} UTC · '
                     f'~{best_count}/{member_count} usually active\n'
-                    f'**Quietest window:** {format_window(quiet_start, quiet_end)} UTC — '
+                    f'**Quietest window:** {format_window(quiet_start, quiet_end)} UTC · '
                     f'~{quiet_count}/{member_count} usually active'
                 ),
                 color=EMBED_COLOR_INFO
@@ -1202,7 +1202,7 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
                 name = activity_profile_manager.profiles[torn_id].get('name', member.display_name)
 
                 if not chunks:
-                    windows_text = 'No clear pattern yet — activity looks scattered across the day.'
+                    windows_text = 'No clear pattern yet. Activity looks scattered across the day.'
                 else:
                     windows_text = '\n'.join(
                         f'• {format_window(s, e)} UTC (~{round(p * 100)}% of days)' for s, e, p in chunks
@@ -1214,7 +1214,7 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
                     consistency_text = f'\n\nActive {active}/{tracked} of the last {tracked} tracked day(s).'
 
                 embed = create_embed(
-                    title=f'🕒 Activity — {name}',
+                    title=f'🕒 Activity · {name}',
                     description=f'**Typical active windows (UTC):**\n{windows_text}{consistency_text}',
                     color=EMBED_COLOR_INFO
                 )
@@ -1225,12 +1225,12 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
             if not ready and not warming_up:
                 await interaction.response.send_message(
                     embed=create_embed(title='No Data Yet',
-                                       description='Activity tracking just started — check back in a couple of days.',
+                                       description='Activity tracking just started. Check back in a couple of days.',
                                        color=EMBED_COLOR_INFO),
                     ephemeral=True)
                 return
 
-            lines = [f'**{name}** — usually active {format_window(s, e)} UTC'
+            lines = [f'**{name}** · usually active {format_window(s, e)} UTC'
                      for _tid, name, (s, e, _p) in ready]
             description = '\n'.join(lines) if lines else 'No members have enough data yet.'
             if warming_up:

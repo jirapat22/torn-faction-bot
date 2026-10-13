@@ -119,7 +119,7 @@ class EventReminderManager:
                     description=(
                         f"**{display_name}** starts <t:{int(start.timestamp())}:R> "
                         f"(<t:{int(start.timestamp())}:F>).\n"
-                        f"_Exact start may shift a few hours — Torn staggers some events per-player._"
+                        f"_Exact start may shift a few hours. Torn staggers some events per-player._"
                     ),
                     color=EMBED_COLOR_INFO
                 )
@@ -162,7 +162,7 @@ class EventReminderManager:
                     title='📰 Faction Newsletter',
                     description=(
                         f"**{sender}** sent: **{title}**\n"
-                        f"Sent <t:{m['timestamp']}:R> — check your Torn mail for full details.\n\n"
+                        f"Sent <t:{m['timestamp']}:R>. Check your Torn mail for full details.\n\n"
                         f"If this schedules something, hit **Create Event** below "
                         f"(or use `/createevent`) so Discord reminds everyone."
                     ),

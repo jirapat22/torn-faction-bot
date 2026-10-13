@@ -188,7 +188,7 @@ class CommonEventModal(discord.ui.Modal):
                 title='Invalid Format',
                 description='Please use one of:\n'
                            '• Date: DD-MM-YYYY (25-01-2026) or YYYY-MM-DD (2026-01-25)\n'
-                           '• Time: HH:MM (14:30) — TCT/UTC\n\n'
+                           '• Time: HH:MM (14:30) · TCT/UTC\n\n'
                            f'Error: {str(e)}',
                 color=EMBED_COLOR_CRITICAL
             )
@@ -314,7 +314,7 @@ class CustomEventModal(discord.ui.Modal):
                 title='Invalid Format',
                 description='Please use one of:\n'
                            '• Date: DD-MM-YYYY (25-01-2026) or YYYY-MM-DD (2026-01-25)\n'
-                           '• Time: HH:MM (14:30) — TCT/UTC\n\n'
+                           '• Time: HH:MM (14:30) · TCT/UTC\n\n'
                            f'Error: {str(e)}',
                 color=EMBED_COLOR_CRITICAL
             )

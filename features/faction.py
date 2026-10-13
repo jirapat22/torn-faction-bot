@@ -342,21 +342,21 @@ def _build_threat_embed(enemy_members, own_members, ff_data, has_ff,
         )
 
     # ── Assemble ──
-    data_note = '*(via FFScouter)*' if has_ff else '*(sorted by level — add FFSCOUTER_API_KEY for real stats)*'
+    data_note = '*(via FFScouter)*' if has_ff else '*(sorted by level, add FFSCOUTER_API_KEY for real stats)*'
     desc = (
-        f'**⚠️ Enemy Roster — {enemy_label}** {data_note}\n'
+        f'**⚠️ Enemy Roster · {enemy_label}** {data_note}\n'
         f'```\n{legend}\n```\n'
         f'```\n{threat_table}\n```\n'
     )
     if soft_table:
-        desc += f'**🎯 Soft Targets** *(below your faction avg — you have the stat edge)*\n```\n{soft_table}\n```\n'
+        desc += f'**🎯 Soft Targets** *(below your faction avg, you have the stat edge)*\n```\n{soft_table}\n```\n'
 
     desc += f'**✅ Our Top Fighters:**\n```\n{own_table}\n```\n'
 
     if avoid_count:
-        desc += f'\n> **{avoid_count} member(s) ◀ AVOID** — outstat your top 3. Use your strongest members to hospital them, then leave them alone.'
+        desc += f'\n> **{avoid_count} member(s) ◀ AVOID**. Outstat your top 3. Use your strongest members to hospital them, then leave them alone.'
     if caution_count:
-        desc += f'\n> **{caution_count} member(s) ◀ CAUTION** — above your faction average. Approach selectively.'
+        desc += f'\n> **{caution_count} member(s) ◀ CAUTION**. Above your faction average. Approach selectively.'
 
     if avoid_count >= 5:
         color = EMBED_COLOR_CRITICAL
@@ -366,7 +366,7 @@ def _build_threat_embed(enemy_members, own_members, ff_data, has_ff,
         color = EMBED_COLOR_INFO
 
     return create_embed(
-        title=f'Threat Assessment — {enemy_label}',
+        title=f'Threat Assessment · {enemy_label}',
         description=desc,
         color=color
     )
@@ -597,33 +597,33 @@ async def setup_faction_commands(bot):
                 ratio = own_power / enemy_power if enemy_power else 1.0
 
                 if ratio >= 1.3:
-                    insights.append(f'✅ **Strong stat advantage:** Your top fighters avg {_format_bs(own_power)} vs their {_format_bs(enemy_power)} — expect to win most 1v1s.')
+                    insights.append(f'✅ **Strong stat advantage:** Your top fighters avg {_format_bs(own_power)} vs their {_format_bs(enemy_power)}. Expect to win most 1v1s.')
                 elif ratio <= 0.77:
-                    insights.append(f'⚠️ **Stat disadvantage:** Their top fighters avg {_format_bs(enemy_power)} vs yours {_format_bs(own_power)} — avoid extended 1v1 duels. Hit fast, hospital quickly.')
+                    insights.append(f'⚠️ **Stat disadvantage:** Their top fighters avg {_format_bs(enemy_power)} vs yours {_format_bs(own_power)}. Avoid extended 1v1 duels. Hit fast, hospital quickly.')
                 else:
-                    insights.append(f'⚖️ **Evenly matched:** Top fighter stats are close ({_format_bs(own_power)} vs {_format_bs(enemy_power)}) — activity and timing will decide the war.')
+                    insights.append(f'⚖️ **Evenly matched:** Top fighter stats are close ({_format_bs(own_power)} vs {_format_bs(enemy_power)}). Activity and timing will decide the war.')
 
                 # Soft targets
                 enemy_dev = enemy_bs['tiers'].get('Developing   ', 0) + enemy_bs['tiers'].get('Moderate(100m+)', 0)
                 if enemy_dev > 0:
-                    insights.append(f'🎯 **Soft targets:** {enemy_dev} of their members are Developing/Moderate — prioritise these for easy score hits.')
+                    insights.append(f'🎯 **Soft targets:** {enemy_dev} of their members are Developing/Moderate. Prioritise these for easy score hits.')
 
                 own_dev = own_bs['tiers'].get('Developing   ', 0) + own_bs['tiers'].get('Moderate(100m+)', 0)
                 if own_dev > 0:
-                    insights.append(f'🛡️ **Protect your weaker members:** {own_dev} of your members are lower stat — they are easy targets. Keep them hospitalised or travelling during war.')
+                    insights.append(f'🛡️ **Protect your weaker members:** {own_dev} of your members are lower stat. They are easy targets. Keep them hospitalised or travelling during war.')
 
                 if own_bs['no_data'] > 3:
-                    insights.append(f'ℹ️ **{own_bs["no_data"]} of your members** have no FFScouter data — their stats are unknown. Encourage them to use FFScouter.')
+                    insights.append(f'ℹ️ **{own_bs["no_data"]} of your members** have no FFScouter data. Their stats are unknown. Encourage them to use FFScouter.')
                 if enemy_bs['no_data'] > 3:
-                    insights.append(f'ℹ️ **{enemy_bs["no_data"]} of their members** have no FFScouter data — hidden unknowns. Treat them cautiously.')
+                    insights.append(f'ℹ️ **{enemy_bs["no_data"]} of their members** have no FFScouter data. Hidden unknowns. Treat them cautiously.')
             else:
                 # Level-based fallback insights
                 if own_avg > enemy_avg + 2:
-                    insights.append(f'✅ **Level edge:** Avg {own_avg:.1f} vs {enemy_avg:.1f} — expect an overall stat advantage.')
+                    insights.append(f'✅ **Level edge:** Avg {own_avg:.1f} vs {enemy_avg:.1f}. Expect an overall stat advantage.')
                 elif enemy_avg > own_avg + 2:
-                    insights.append(f'⚠️ **Level gap:** Their avg {enemy_avg:.1f} vs yours {own_avg:.1f} — they likely have stronger stats.')
+                    insights.append(f'⚠️ **Level gap:** Their avg {enemy_avg:.1f} vs yours {own_avg:.1f}. They likely have stronger stats.')
                 else:
-                    insights.append(f'⚖️ **Level-matched** ({own_avg:.1f} vs {enemy_avg:.1f}) — war outcome will depend on training focus and activity.')
+                    insights.append(f'⚖️ **Level-matched** ({own_avg:.1f} vs {enemy_avg:.1f}). War outcome will depend on training focus and activity.')
 
                 enemy_low = enemy_b['1-25'] + enemy_b['26-50']
                 own_low   = own_b['1-25'] + own_b['26-50']
@@ -636,18 +636,18 @@ async def setup_faction_commands(bot):
                     insights.append('📌 **Add FFScouter:** Set `FFSCOUTER_API_KEY` in your `.env` for real estimated stat data instead of level estimates.')
 
             if own_cnt > enemy_cnt + 5:
-                insights.append(f'✅ **Numbers advantage:** {own_cnt} vs {enemy_cnt} members — more hits per hour possible.')
+                insights.append(f'✅ **Numbers advantage:** {own_cnt} vs {enemy_cnt} members. More hits per hour possible.')
             elif enemy_cnt > own_cnt + 5:
-                insights.append(f'⚠️ **Outnumbered:** {enemy_cnt} vs {own_cnt} — stay disciplined, hospital their actives.')
+                insights.append(f'⚠️ **Outnumbered:** {enemy_cnt} vs {own_cnt}. Stay disciplined, hospital their actives.')
 
             if own_chain_eff > enemy_chain_eff * 1.3:
                 insights.append(f'✅ **More active chainers:** Your chain efficiency ({own_chain_eff:.1f}/mbr) beats theirs ({enemy_chain_eff:.1f}).')
             elif enemy_chain_eff > own_chain_eff * 1.3:
-                insights.append(f'⚠️ **They chain harder:** Their efficiency ({enemy_chain_eff:.1f}/mbr) vs yours ({own_chain_eff:.1f}) — expect sustained pressure.')
+                insights.append(f'⚠️ **They chain harder:** Their efficiency ({enemy_chain_eff:.1f}/mbr) vs yours ({own_chain_eff:.1f}). Expect sustained pressure.')
 
             insights_text = '\n'.join(insights)
 
-            ff_note = '*(Stats via FFScouter — estimates only)*' if has_ff else '*(Add `FFSCOUTER_API_KEY` for real stat estimates)*'
+            ff_note = '*(Stats via FFScouter, estimates only)*' if has_ff else '*(Add `FFSCOUTER_API_KEY` for real stat estimates)*'
             desc = (
                 f'**Level Distribution:**\n```\n{bucket_table}\n```\n'
                 f'**Battle Stats:** {ff_note}\n```\n{stats_table}\n```\n'

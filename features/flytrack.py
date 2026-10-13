@@ -3,7 +3,7 @@ Fly Tracking Module
 Track enemy faction flights during ranked war and estimate landing times.
 
 The Torn API's `travel` selection (user/{id}?selections=travel) only works
-for the key owner's own ID — querying anyone else returns API error 7
+for the key owner's own ID · querying anyone else returns API error 7
 ("Incorrect ID-entity relation": the selection is private and the ID
 doesn't match the key owner), confirmed live against this faction's war.
 So there is no way to read an enemy's exact remaining flight time.
@@ -20,7 +20,7 @@ Toggled via /war view:Fly (management only). Alerts post to the war-tracker
 channel. Auto-stops when the ranked war ends.
 
 Also warns our own members when an enemy takes off toward the country they
-are currently sitting in ("someone is following you") — see _follow_alerts.
+are currently sitting in ("someone is following you") · see _follow_alerts.
 """
 
 import discord
@@ -89,13 +89,13 @@ TIER_LABELS = {
     'business': 'business class',
 }
 
-# The tiers above are LABELS ONLY — the ETA maths uses a player's measured
+# The tiers above are LABELS ONLY · the ETA maths uses a player's measured
 # speed ratio (actual flight minutes / standard minutes), never the bucket.
 #
 # Why: snapping a measurement to the nearest bucket threw away the accurate
 # number we had just observed. Measured against 82 real flights, every single
 # prediction landed LATE (avg 8 min, worst 24) because every bucket is a touch
-# slower than reality — e.g. MegaBates was measured at 143 min to South Africa,
+# slower than reality · e.g. MegaBates was measured at 143 min to South Africa,
 # then predicted with the WLT bucket's 148.5 min, so he landed ~5.5 min early.
 #
 # Empirical ratios from those 82 flights: median 0.669, p25 0.657, p75 0.692.
@@ -109,8 +109,8 @@ MAX_RATIO_SAMPLES = 5          # keep a few and take the median, to damp noise
 # landing sooner than advertised gets your people hit, while landing later
 # only costs them a short wait.
 POLL_LAG_SECONDS = 60          # we spot a departure up to one poll late
-MEASURED_SPREAD = 0.03         # tight — we have watched this player fly
-ASSUMED_SPREAD = 0.10          # loose — we are guessing their travel perks
+MEASURED_SPREAD = 0.03         # tight · we have watched this player fly
+ASSUMED_SPREAD = 0.10          # loose · we are guessing their travel perks
 
 # ===== Follow warnings =====
 # When an enemy departs for a country one of our members is sitting in, that
@@ -118,7 +118,7 @@ ASSUMED_SPREAD = 0.10          # loose — we are guessing their travel perks
 # worried about during a busy war:
 #
 # 1. A per-member-per-country cooldown. Once someone has been told "enemies are
-#    heading to Switzerland", repeating it every few minutes adds nothing — they
+#    heading to Switzerland", repeating it every few minutes adds nothing · they
 #    already know to watch that country. Enemies departing in the SAME poll tick
 #    are still grouped into one message, so a 6-man wave is one ping, not six.
 # 2. A stat threshold. An enemy with a fraction of the member's battle stats
@@ -164,7 +164,7 @@ HOSPITAL_ADJECTIVES = {
 }
 
 # Consecutive "war_tracker says the war isn't active" reads required before
-# auto-stop — guards against reading war_tracker.was_war_active during its
+# auto-stop · guards against reading war_tracker.was_war_active during its
 # post-restart warm-up window (see check_flights).
 WAR_END_STRIKES = 3
 
@@ -184,7 +184,7 @@ def parse_phase(status: Dict, torn_id: str = '', name: str = '') -> Tuple[str, O
     and the free-text description isn't guaranteed to match the API's
     state enum spelling.
 
-    Returns (phase, destination) — destination is None when at home or unknown.
+    Returns (phase, destination) · destination is None when at home or unknown.
     torn_id/name are optional, used only to label diagnostic logging when a
     traveling/abroad member's destination can't be parsed out of the text.
     """
@@ -216,14 +216,14 @@ def parse_phase(status: Dict, torn_id: str = '', name: str = '') -> Tuple[str, O
                 if dest and dest.lower() == 'torn':
                     return PHASE_RETURNING, None
                 return PHASE_OUT, dest
-        logger.warning(f"Fly: couldn't parse destination for {name} [{torn_id}] — "
+        logger.warning(f"Fly: couldn't parse destination for {name} [{torn_id}] · "
                        f"state={state!r} description={desc!r} details={details!r}")
         return PHASE_OUT, None
 
     if state == 'Abroad':
         if desc_lower.startswith('in '):
             return PHASE_ABROAD, normalize_dest(desc_lower[3:])
-        logger.warning(f"Fly: couldn't parse destination for {name} [{torn_id}] — "
+        logger.warning(f"Fly: couldn't parse destination for {name} [{torn_id}] · "
                        f"state={state!r} description={desc!r} details={details!r}")
         return PHASE_ABROAD, None
 
@@ -232,7 +232,7 @@ def parse_phase(status: Dict, torn_id: str = '', name: str = '') -> Tuple[str, O
         for adj, country in HOSPITAL_ADJECTIVES.items():
             if adj in desc_lower:
                 return PHASE_ABROAD, country
-        logger.warning(f"Fly: couldn't parse hospital country for {name} [{torn_id}] — "
+        logger.warning(f"Fly: couldn't parse hospital country for {name} [{torn_id}] · "
                        f"state={state!r} description={desc!r} details={details!r}")
         return PHASE_ABROAD, None
 
@@ -245,15 +245,15 @@ class FlyTracker:
     def __init__(self, bot, war_tracker=None):
         self.bot = bot
         self.war_tracker = war_tracker  # Set by bot.py
-        self.verification_system = None  # Set by bot.py — maps Torn id -> Discord id
+        self.verification_system = None  # Set by bot.py · maps Torn id -> Discord id
         self.data_file = 'data/flytrack.json'
         self.enabled = False
         self.war_id = None
         self.enemy_faction_id = None
         self.enemy_faction_name = ''
         self.players = {}  # {torn_id: {name, phase, dest, eta, leg_start, leg_observed}}
-        self.tiers = {}    # {torn_id: {tier, name, observed_minutes, dest, ts}} — persists across wars
-        # {f'{our_member_torn_id}:{country}': last_alert_ts} — persisted so a
+        self.tiers = {}    # {torn_id: {tier, name, observed_minutes, dest, ts}} · persists across wars
+        # {f'{our_member_torn_id}:{country}': last_alert_ts} · persisted so a
         # restart mid-war doesn't re-ping everyone we already warned.
         self.follow_cooldowns = {}
         self._war_end_strikes = 0
@@ -296,7 +296,7 @@ class FlyTracker:
         if not war_info:
             return False, create_embed(
                 title='No Active War',
-                description='Fly tracking needs an active ranked war — none found.',
+                description='No active ranked war found.',
                 color=EMBED_COLOR_WARNING
             )
 
@@ -376,7 +376,7 @@ class FlyTracker:
         )
         if returning_lines:
             embed.add_field(
-                name=f'🛬 Returning — attack window ({len(returning_lines)})',
+                name=f'🛬 Returning · attack window ({len(returning_lines)})',
                 value='\n'.join(line for _, line in returning_lines[:10])
                       + ('\n…' if len(returning_lines) > 10 else ''),
                 inline=False
@@ -390,12 +390,12 @@ class FlyTracker:
             )
         if abroad_lines:
             embed.add_field(
-                name=f'🌍 Abroad — landed ({len(abroad_lines)})',
+                name=f'🌍 Abroad · landed ({len(abroad_lines)})',
                 value='\n'.join(abroad_lines[:10]) + ('\n…' if len(abroad_lines) > 10 else ''),
                 inline=False
             )
         if not returning_lines and not outbound_lines and not abroad_lines:
-            embed.add_field(name='Status', value='Nobody abroad — everyone is in Torn.', inline=False)
+            embed.add_field(name='Status', value='Nobody abroad. Everyone is in Torn.', inline=False)
         embed.set_footer(text='/war view:Fly again to toggle off · /war view:FlyStatus for a live peek')
         return True, embed
 
@@ -430,7 +430,7 @@ class FlyTracker:
         if not members:
             return create_embed(
                 title='Fly Status',
-                description='Could not fetch the enemy roster right now — try again shortly.',
+                description='Could not fetch the enemy roster right now. Try again shortly.',
                 color=EMBED_COLOR_WARNING
             )
 
@@ -446,7 +446,7 @@ class FlyTracker:
 
             if phase in (PHASE_OUT, PHASE_RETURNING):
                 # Reuse the already leg_start-anchored eta from check_flights()
-                # whenever it's for this exact same leg — recomputing from "now"
+                # whenever it's for this exact same leg · recomputing from "now"
                 # on every peek would push the ETA later each time it's checked,
                 # since it'd treat "now" as a fresh departure instant. Compare
                 # the exact phase (not a coarse OUT/RETURNING-collapsed category)
@@ -476,7 +476,7 @@ class FlyTracker:
 
         embed = create_embed(
             title=f'📡 Fly Status: {self.enemy_faction_name}',
-            description='Live snapshot — tracking keeps running in the background regardless.',
+            description='Live snapshot. Tracking keeps running in the background regardless.',
             color=EMBED_COLOR_INFO
         )
         # Where the enemy is massing, busiest country first. Sits above the
@@ -490,12 +490,12 @@ class FlyTracker:
                     bits.append(f'{sitting} there')
                 if inbound:
                     bits.append(f'{inbound} inbound')
-                hotspots.append(f'**{dest}** {sitting + inbound} — {" · ".join(bits)}')
+                hotspots.append(f'**{dest}** {sitting + inbound} · {" · ".join(bits)}')
             embed.add_field(name='🗺️ Hotspots',
                             value='\n'.join(hotspots), inline=False)
         if returning_lines:
             embed.add_field(
-                name=f'🛬 Returning — attack window ({len(returning_lines)})',
+                name=f'🛬 Returning · attack window ({len(returning_lines)})',
                 value='\n'.join(line for _, line in returning_lines[:10])
                       + ('\n…' if len(returning_lines) > 10 else ''),
                 inline=False
@@ -509,12 +509,12 @@ class FlyTracker:
             )
         if abroad_lines:
             embed.add_field(
-                name=f'🌍 Abroad — landed ({len(abroad_lines)})',
+                name=f'🌍 Abroad · landed ({len(abroad_lines)})',
                 value='\n'.join(abroad_lines[:10]) + ('\n…' if len(abroad_lines) > 10 else ''),
                 inline=False
             )
         if not returning_lines and not outbound_lines and not abroad_lines:
-            embed.add_field(name='Status', value='Nobody abroad — everyone is in Torn.', inline=False)
+            embed.add_field(name='Status', value='Nobody abroad. Everyone is in Torn.', inline=False)
         return embed
 
     # ===== Polling =====
@@ -528,7 +528,7 @@ class FlyTracker:
         # Auto-stop when the war ends OR a different war has taken over.
         # Piggyback on war_tracker's own rigorous, raw-refetch-confirmed end
         # detection (WarTracker.check_war_update, called every minute
-        # independently) instead of re-deriving a weaker signal here — a
+        # independently) instead of re-deriving a weaker signal here · a
         # lone get_current_war() == None can just be a transient API
         # hiccup, and trusting a short run of those on their own is what
         # silently killed tracking mid-war before.
@@ -559,7 +559,7 @@ class FlyTracker:
                 if not self.war_tracker.was_war_active:
                     reason = 'War ended'
                 else:
-                    reason = 'A different war is now active — re-toggle Fly tracking for it'
+                    reason = 'A different war is now active. Re-toggle Fly tracking for it'
                 embed = await self.disable(reason=reason)
                 await self._post(embed=embed)
                 return
@@ -568,7 +568,7 @@ class FlyTracker:
 
         members = await self._fetch_enemy_members()
         if not members:
-            return  # API hiccup — keep previous state, try next tick
+            return  # API hiccup · keep previous state, try next tick
 
         now_ts = datetime.now(timezone.utc).timestamp()
         alerts = []
@@ -583,7 +583,7 @@ class FlyTracker:
 
             prev = self.players.get(tid)
             if prev is None:
-                # New member joined mid-war — baseline silently
+                # New member joined mid-war · baseline silently
                 self.players[tid] = {
                     'name': name, 'phase': text_phase, 'dest': text_dest,
                     'eta': None, 'leg_start': None, 'leg_observed': False,
@@ -594,7 +594,7 @@ class FlyTracker:
             prev_phase = prev.get('phase')
 
             # Compare the exact fine-grained phase, not a coarse OUT/RETURNING-
-            # collapsed category — otherwise a fast turnaround (land abroad and
+            # collapsed category · otherwise a fast turnaround (land abroad and
             # immediately re-depart within one poll tick) never registers as a
             # change, silently swallowing the return alert and leaving stale
             # outbound data in self.players.
@@ -631,7 +631,7 @@ class FlyTracker:
                 }
 
             elif text_phase == PHASE_ABROAD:
-                # Landed abroad — learn tier if we watched the whole outbound leg
+                # Landed abroad · learn tier if we watched the whole outbound leg
                 if prev_phase == PHASE_OUT and prev.get('leg_observed') and prev.get('leg_start'):
                     self._learn_tier(tid, name, prev.get('dest'), now_ts - prev['leg_start'])
                 self.players[tid] = {
@@ -639,7 +639,7 @@ class FlyTracker:
                     'eta': None, 'leg_start': None, 'leg_observed': False,
                 }
 
-            else:  # home — landed back in Torn
+            else:  # home · landed back in Torn
                 if prev_phase == PHASE_RETURNING and prev.get('leg_observed') and prev.get('leg_start'):
                     self._learn_tier(tid, name, prev.get('dest'), now_ts - prev['leg_start'])
                 self.players[tid] = {
@@ -805,7 +805,7 @@ class FlyTracker:
         who = mention or f"**{mem['name']}** (not registered)"
         dest = items[0][0]['dest']
         count = '**1 enemy**' if len(items) == 1 else f'**{len(items)} enemies**'
-        lines = [f"\u26a0\ufe0f {who} \u2014 {count} heading to **{dest}**, where you are:"]
+        lines = [f"\u26a0\ufe0f {who} \u00b7 {count} heading to **{dest}**, where you are:"]
 
         # BAND_TRIVIAL shares the "weaker" heading - the split the faction asked
         # for is strong vs weak, not a third tier nobody would act on.
@@ -902,13 +902,13 @@ class FlyTracker:
         if phase == PHASE_RETURNING and not dest:
             dest = (prev or {}).get('dest')
         eta = self._eta_ts(torn_id, dest, now_ts)
-        note = f' (estimate — {self._tier_note(torn_id)})' if eta else ''
+        note = f' (estimate · {self._tier_note(torn_id)})' if eta else ''
         return {'phase': phase, 'dest': dest, 'eta': eta, 'note': note}
 
     # ===== ETA / tier logic =====
 
     def _tier_for(self, torn_id: str) -> Tuple[str, bool]:
-        """Return (tier, learned) for a player — learned=False means assumption.
+        """Return (tier, learned) for a player · learned=False means assumption.
         Label only; the ETA maths uses _ratio_for."""
         entry = self.tiers.get(str(torn_id))
         if entry and entry.get('tier') in TIER_MULTIPLIERS:
@@ -917,7 +917,7 @@ class FlyTracker:
 
     def _ratio_for(self, torn_id: str) -> Tuple[float, bool]:
         """
-        Return (speed_ratio, measured) — the player's actual flight minutes as a
+        Return (speed_ratio, measured) · the player's actual flight minutes as a
         fraction of the standard time, taken from flights we have watched them
         complete. measured=False means nobody has timed them yet, so we fall
         back to the empirical median across the faction.
@@ -954,7 +954,7 @@ class FlyTracker:
     def _eta_window(self, torn_id: str, dest: Optional[str],
                     eta: Optional[int]) -> Optional[int]:
         """
-        Earliest plausible landing for an ETA — the "be ready by" edge of the
+        Earliest plausible landing for an ETA · the "be ready by" edge of the
         window. Covers the poll lag (we see a departure up to 60s after it
         happened, so the clock starts late) plus how confident we are in this
         player's speed. Returns None when there is no ETA to bound.
@@ -975,7 +975,7 @@ class FlyTracker:
         ratio, measured = self._ratio_for(torn_id)
         label = TIER_LABELS[tier]
         if measured:
-            return f'{label} — measured at {ratio:.0%} of standard'
+            return f'{label} · measured at {ratio:.0%} of standard'
         return f'assuming {label}'
 
     def _learn_tier(self, torn_id: str, name: str, dest: Optional[str], elapsed_seconds: float):
@@ -992,7 +992,7 @@ class FlyTracker:
         # we no longer round it to a tier, because that rounding was itself the
         # source of the "landed early" complaints.
         if not (MIN_PLAUSIBLE_RATIO <= ratio <= MAX_PLAUSIBLE_RATIO):
-            logger.info(f'Fly: speed sample rejected for {name} [{torn_id}] — '
+            logger.info(f'Fly: speed sample rejected for {name} [{torn_id}] · '
                         f'{elapsed_seconds/60:.1f}min to {dest} is {ratio:.2f}x standard')
             return
 
@@ -1032,21 +1032,21 @@ class FlyTracker:
 
     def _format_outbound_alert(self, dest: Optional[str], name: str, eta: Optional[int],
                                early: Optional[int] = None) -> str:
-        # 🔴/🟢 instead of plane emoji — ✈️/🛬 look nearly identical at a
+        # 🔴/🟢 instead of plane emoji · ✈️/🛬 look nearly identical at a
         # glance, which was the actual reason out/in was hard to tell apart.
         dest_label = dest or 'an unknown destination'
         if eta:
-            return f'🔴 **{name}** → **{dest_label}** — lands {self._eta_text(eta, early)}'
-        return f'🔴 **{name}** → **{dest_label}** — flight time unknown'
+            return f'🔴 **{name}** → **{dest_label}** · lands {self._eta_text(eta, early)}'
+        return f'🔴 **{name}** → **{dest_label}** · flight time unknown'
 
     def _format_return_alert(self, torn_id: str, name: str, dest: Optional[str],
                              eta: Optional[int], early: Optional[int] = None) -> str:
         dest_label = dest or 'abroad'
         attack = f'https://www.torn.com/loader.php?sid=attack&user2ID={torn_id}'
         if eta:
-            return (f'🟢 **{name}** ← **{dest_label}** — lands {self._eta_text(eta, early)} '
+            return (f'🟢 **{name}** ← **{dest_label}** · lands {self._eta_text(eta, early)} '
                     f'· [Attack]({attack})')
-        return f'🟢 **{name}** ← **{dest_label}** — landing time unknown · [Attack]({attack})'
+        return f'🟢 **{name}** ← **{dest_label}** · landing time unknown · [Attack]({attack})'
 
     def _format_group_line(self, name: str, phase: str, dest: Optional[str], eta: Optional[int],
                            early: Optional[int] = None) -> str:
@@ -1056,17 +1056,17 @@ class FlyTracker:
         icon = '🔴 →' if phase == PHASE_OUT else '🟢 ←'
         dest_label = dest or 'unknown'
         if eta:
-            return f'{icon} **{name}** **{dest_label}** — {self._eta_text(eta, early)}'
-        return f'{icon} **{name}** **{dest_label}** — ETA unknown'
+            return f'{icon} **{name}** **{dest_label}** · {self._eta_text(eta, early)}'
+        return f'{icon} **{name}** **{dest_label}** · ETA unknown'
 
     def _format_abroad_line(self, name: str, dest: Optional[str]) -> str:
         """One row for the Abroad (landed, not currently flying) list."""
-        return f'**{name}** — {dest or "unknown"}'
+        return f'**{name}** · {dest or "unknown"}'
 
     async def _post(self, content: str = None, embed: discord.Embed = None):
         """Post to the war-tracker channel."""
         if not WAR_TRACKER_CHANNEL_ID:
-            logger.warning('Fly: WAR_TRACKER_CHANNEL_ID not set — dropping alert')
+            logger.warning('Fly: WAR_TRACKER_CHANNEL_ID not set · dropping alert')
             return
         channel = self.bot.get_channel(WAR_TRACKER_CHANNEL_ID)
         if not channel:
@@ -1074,7 +1074,7 @@ class FlyTracker:
             return
         try:
             if content:
-                # Discord message limit is 2000 chars — chunk on line boundaries
+                # Discord message limit is 2000 chars · chunk on line boundaries
                 lines = content.split('\n')
                 buf = ''
                 for line in lines:

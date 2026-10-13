@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 # Backoff schedule for the daily check's Torn fetch. Covers ~6 minutes of
 # transient API trouble (blip, brief maintenance) before giving up until
-# tomorrow — see check_and_alert_inactive for why this loop alone retries.
+# tomorrow · see check_and_alert_inactive for why this loop alone retries.
 DAILY_FETCH_RETRY_DELAYS = [60, 120, 180]
 
 
@@ -50,7 +50,7 @@ class InactivityTracker:
         self.user_mapping = {}  # {discord_id: torn_id}
         self.mapping_file = 'data/discord_to_torn.json'
         self.oc_data_file = 'data/oc_participation.json'
-        self.last_oc_completion = {}  # {torn_id_str: float timestamp} — accumulated across runs
+        self.last_oc_completion = {}  # {torn_id_str: float timestamp} · accumulated across runs
         self.left_faction_file = 'data/left_faction.json'
         self.left_faction = {}  # {torn_id_str: {first_gone, torn_name, discord_id, access_revoked}}
         # Set by bot.py once the verification system exists; used to find the
@@ -69,7 +69,7 @@ class InactivityTracker:
         """
         raw = load_json(self.oc_data_file, default={})
         if raw.get('version') != 2:
-            # Old format or first run — clear stale data and start fresh
+            # Old format or first run · clear stale data and start fresh
             self.last_oc_completion = {}
             logger.info('OC data reset: clearing old data, will accumulate fresh v2 OC history')
             return
@@ -177,7 +177,7 @@ class InactivityTracker:
         avoid false positives on first run or for members outside API history window).
 
         Returns:
-            (oc_warning, oc_critical, data_updated) — lists and a bool flag.
+            (oc_warning, oc_critical, data_updated) · lists and a bool flag.
         """
         # crimes is None when the Torn crimes endpoint was unreachable. Treating
         # that as "no crimes exist" would leave active_in_oc empty, stripping
@@ -225,7 +225,7 @@ class InactivityTracker:
 
             last_oc_ts = self.last_oc_completion.get(tid)
             if last_oc_ts is None:
-                # No accumulated OC history — skip to avoid false positives
+                # No accumulated OC history · skip to avoid false positives
                 # (data builds up over time with each daily run)
                 continue
 
@@ -254,8 +254,8 @@ class InactivityTracker:
         past the grace period, so they fall back to whatever @everyone can see
         (the welcome channel) instead of keeping full access indefinitely.
 
-        Only ever called with a successfully-fetched roster — check_and_alert_inactive
-        bails out before this if the member fetch failed — so a Torn outage can
+        Only ever called with a successfully-fetched roster · check_and_alert_inactive
+        bails out before this if the member fetch failed · so a Torn outage can
         never be mistaken for "everyone left the faction". The grace period is the
         second guard: it takes several consecutive daily runs to reach.
 
@@ -279,7 +279,7 @@ class InactivityTracker:
                 lambda r: r.name.lower() == VERIFIED_ROLE_NAME.lower(), guild.roles
             )
         if role is None:
-            logger.warning('Left-faction revoke: no verified role found — skipping')
+            logger.warning('Left-faction revoke: no verified role found · skipping')
             return []
 
         revoked = []
@@ -291,7 +291,7 @@ class InactivityTracker:
 
             member = guild.get_member(int(data['discord_id']))
             if not member:
-                # Gone from Discord entirely — nothing to revoke
+                # Gone from Discord entirely · nothing to revoke
                 entry['access_revoked'] = True
                 continue
 
@@ -311,7 +311,7 @@ class InactivityTracker:
                             f'({data["days_gone"]:.0f}d gone)')
             except discord.Forbidden:
                 logger.error(f'Left-faction: no permission to remove {role.name} from '
-                             f'{data["torn_name"]} — is the bot role above it?')
+                             f'{data["torn_name"]} · is the bot role above it?')
             except Exception as e:
                 logger.error(f'Left-faction: failed revoking role from {data["torn_name"]}: {e}')
 
@@ -350,7 +350,7 @@ class InactivityTracker:
             tid = str(torn_id)
 
             if tid in current_torn_ids:
-                # Back in faction — stop tracking
+                # Back in faction · stop tracking
                 if tid in self.left_faction:
                     del self.left_faction[tid]
                     data_updated = True
@@ -363,7 +363,7 @@ class InactivityTracker:
                         torn_name = self.left_faction[tid].get('torn_name', tid)
                         del self.left_faction[tid]
                         data_updated = True
-                        logger.info(f'Left-faction: Removed {torn_name} — no longer in Discord server')
+                        logger.info(f'Left-faction: Removed {torn_name} · no longer in Discord server')
                         continue
 
                 if tid not in self.left_faction:
@@ -378,7 +378,7 @@ class InactivityTracker:
                 entry = self.left_faction[tid]
                 days_gone = (now - entry['first_gone']) / 86400
 
-                # Auto-remove after 30 days — they're clearly not coming back
+                # Auto-remove after 30 days · they're clearly not coming back
                 if days_gone >= LEFT_FACTION_MAX_DAYS:
                     del self.left_faction[tid]
                     data_updated = True
@@ -445,7 +445,7 @@ class InactivityTracker:
                 )
                 # Keep whichever payload already succeeded. A retry fired for a
                 # failed crimes fetch must never throw away good member data by
-                # overwriting it with a fresh failure — that would turn a
+                # overwriting it with a fresh failure · that would turn a
                 # partial success into a skipped report.
                 if retry_members:
                     torn_members = retry_members
@@ -468,11 +468,11 @@ class InactivityTracker:
             await channel.send(embed=error_embed)
             return
 
-        # Deliberately NOT coerced to [] — _get_oc_status needs to see None to
+        # Deliberately NOT coerced to [] · _get_oc_status needs to see None to
         # tell "crimes endpoint down" apart from "no crimes right now".
         if crimes is None:
             logger.error('Inactivity check: proceeding without OC data (crimes endpoint '
-                         'unreachable after retries) — OC section will be skipped')
+                         'unreachable after retries) · OC section will be skipped')
 
         # Track inactive members
         warning_members = []  # 3+ days inactive
@@ -537,7 +537,7 @@ class InactivityTracker:
         # Left-faction check (verified Discord members no longer in Torn faction)
         guild_member_ids = {str(m.id) for m in guild.members} if guild else None
         left_alerts, left_updated = self._get_left_faction_status(torn_members, guild_member_ids)
-        # Revoke access for anyone past the grace period, then persist — the
+        # Revoke access for anyone past the grace period, then persist · the
         # revoke marks entries, so save after it rather than before.
         revoked = await self._revoke_left_faction_access(guild, left_alerts)
         if left_updated or revoked:
@@ -554,7 +554,7 @@ class InactivityTracker:
 
     async def test_run(self):
         """
-        Run inactivity + OC checks silently — no channel posts.
+        Run inactivity + OC checks silently · no channel posts.
         Returns a summary dict for ephemeral display via /test command.
         """
         import asyncio
@@ -790,7 +790,7 @@ class InactivityTracker:
                 mention = discord_member.mention if discord_member else f'(ID:{discord_id})'
                 revoked = self.left_faction.get(str(data['torn_id']), {}).get('access_revoked')
                 suffix = ' · 🔒 access removed' if revoked else ''
-                lines.append(f'**{torn_name}** {mention} — {days_gone:.0f}d since leaving faction{suffix}')
+                lines.append(f'**{torn_name}** {mention} · {days_gone:.0f}d since leaving faction{suffix}')
 
             header = (f'**{len(left_faction)} verified Discord member(s)** have not returned to the '
                       f'faction in {LEFT_FACTION_ALERT_DAYS}+ days. Their verified role is removed, '

@@ -40,7 +40,7 @@ ATTACK_PAGE_RETRY_DELAY = 2
 
 # Shown instead of silently printing zeros when the attacks log is unreadable.
 WAR_LOG_INCOMPLETE_NOTE = (
-    '\u26a0\ufe0f **Torn\u2019s attacks log could not be read in full** \u2014 hits taken, '
+    '\u26a0\ufe0f **Torn\'s attacks log could not be read in full.** Hits taken, '
     'outside hits and friendly hosps below are incomplete. Try again shortly.'
 )
 
@@ -950,7 +950,7 @@ class WarTracker:
         )
         if top_hospitalizers:
             top_text = '\n'.join(
-                f'{i+1}. **{h["name"]}** — {h["count"]}x'
+                f'{i+1}. **{h["name"]}** · {h["count"]}x'
                 for i, h in enumerate(top_hospitalizers)
             )
             embed.add_field(
@@ -1391,7 +1391,7 @@ class WarTracker:
         member_details = []
         for i, m in enumerate(sorted_stats):
             member_details.append(
-                f'{i+1}. **{m["name"]}** — Attacks: {m["outgoing"]} | Hit: {m["incoming"]}x | Score: {m["score"]}'
+                f'{i+1}. **{m["name"]}** · Attacks: {m["outgoing"]} | Hit: {m["incoming"]}x | Score: {m["score"]}'
             )
 
         detail_lines = member_details if member_details else ['No member data available']
@@ -1452,7 +1452,7 @@ class WarTracker:
             hosp_n = len(w.get('friendly_hosps', []))
             hosp_tag = f' · 🏥 {hosp_n}' if hosp_n else ''
             war_lines.append(
-                f'{icon} vs **{w["enemy_name"]}** — {w["our_score"]}-{w["enemy_score"]} '
+                f'{icon} vs **{w["enemy_name"]}** · {w["our_score"]}-{w["enemy_score"]} '
                 f'({format_timestamp(w["timestamp"], "R")}){hosp_tag}'
             )
 
@@ -1479,7 +1479,7 @@ class WarTracker:
         sorted_by_score = sorted(member_totals.values(), key=lambda x: x['avg_score'], reverse=True)
 
         top_text = '\n'.join([
-            f'{i+1}. **{m["name"]}** — Avg: {m["avg_score"]:.1f} score, '
+            f'{i+1}. **{m["name"]}** · Avg: {m["avg_score"]:.1f} score, '
             f'{m["total_attacks"]} attacks ({m["wars_played"]} wars)'
             for i, m in enumerate(sorted_by_score[:5])
         ]) or 'No data'
@@ -1488,7 +1488,7 @@ class WarTracker:
         eligible = [m for m in sorted_by_score if m['wars_played'] >= 2]
         bottom_5 = eligible[-5:] if eligible else []
         bottom_text = '\n'.join([
-            f'• **{m["name"]}** — Avg: {m["avg_score"]:.1f} score, '
+            f'• **{m["name"]}** · Avg: {m["avg_score"]:.1f} score, '
             f'{m["total_attacks"]} attacks ({m["wars_played"]} wars)'
             for m in reversed(bottom_5)
         ]) or 'Not enough data (need 2+ wars)'
@@ -1499,7 +1499,7 @@ class WarTracker:
             key=lambda x: x['hosps_given'], reverse=True,
         )[:5]
         hosps_text = '\n'.join([
-            f'{i+1}. **{m["name"]}** — {m["hosps_given"]} hosps given ({m["wars_played"]} wars)'
+            f'{i+1}. **{m["name"]}** · {m["hosps_given"]} hosps given ({m["wars_played"]} wars)'
             for i, m in enumerate(sorted_by_hosps)
         ]) or 'No friendly hospitalisations recorded'
 
@@ -1538,7 +1538,7 @@ class WarTracker:
         for w in reversed(wars[-10:]):
             icon = '✅' if w['result'] == 'victory' else '❌'
             war_lines.append(
-                f'{icon} vs **{w["enemy_name"]}** — {w["our_score"]}-{w["enemy_score"]}'
+                f'{icon} vs **{w["enemy_name"]}** · {w["our_score"]}-{w["enemy_score"]}'
                 f' ({format_timestamp(w["timestamp"], "R")})'
             )
 
@@ -1561,13 +1561,13 @@ class WarTracker:
         sorted_members = sorted(member_totals.values(), key=lambda x: x['total_score'], reverse=True)
 
         top_text = '\n'.join([
-            f'{i+1}. **{m["name"]}** — {m["total_score"]} score, '
+            f'{i+1}. **{m["name"]}** · {m["total_score"]} score, '
             f'{m["total_attacks"]} attacks ({m["wars_played"]}/{total} wars)'
             for i, m in enumerate(sorted_members[:10])
         ]) or 'No data'
 
         description = (
-            f'**Record:** {wins}W — {losses}L ({win_rate:.0f}% win rate)\n'
+            f'**Record:** {wins}W · {losses}L ({win_rate:.0f}% win rate)\n'
             f'**Wars tracked:** {total}\n\n'
             + '\n'.join(war_lines)
         )
@@ -1654,7 +1654,7 @@ class WarTracker:
             })
 
         embed = create_embed(
-            title=f'War Stats — {display_name}',
+            title=f'War Stats · {display_name}',
             description=f'Showing last {len(last_5)} of {len(member_wars)} recorded wars',
             color=EMBED_COLOR_INFO,
             fields=fields,

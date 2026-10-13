@@ -457,12 +457,12 @@ class ChainTracker:
             for c in sorted(chain_summaries, key=lambda x: x.get('end', 0)):
                 marker = '' if c.get('has_members', True) else ' *(no member data)*'
                 chain_lines.append(
-                    f'Chain #{c["chain_id"]} — {c["respect"]:.0f} respect '
+                    f'Chain #{c["chain_id"]} · {c["respect"]:.0f} respect '
                     f'({format_timestamp(c["end"], "R")}){marker}'
                 )
             header = f'**{chain_count} Chains (last 24h)**'
             if chains_with_data < chain_count:
-                header += f'\nMember breakdown from {chains_with_data} chain(s) — older chains only show totals'
+                header += f'\nMember breakdown from {chains_with_data} chain(s) · older chains only show totals'
             desc = header + '\n' + '\n'.join(chain_lines)
 
         # Build embeds
@@ -651,7 +651,7 @@ class ChainTracker:
                 self.last_chain_count = 0
                 logger.info(f'New chain detected (start={chain_start}) with {current_count} hits')
             elif current_count < self.last_chain_count:
-                # No start timestamps to compare — fall back to count heuristic.
+                # No start timestamps to compare · fall back to count heuristic.
                 # A count lower than last known is likely a new chain.
                 self.last_chain_count = 0
                 logger.info(f'New chain detected (count reset) with {current_count} hits')
@@ -669,7 +669,7 @@ class ChainTracker:
         # Check in descending order so a chain that jumps past several
         # milestones between two 1-minute polls (plausible when multiple
         # members hit at once) announces the highest one actually reached,
-        # not the lowest — ascending order would report "10 hits!" for a
+        # not the lowest · ascending order would report "10 hits!" for a
         # true jump to 120, and the skipped 25/50/100 would never get
         # announced since last_chain_count moves past them regardless.
         milestones = [10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000]

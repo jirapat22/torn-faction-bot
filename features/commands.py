@@ -614,27 +614,27 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
                 if ic:
                     lines.append('**Inactive (Critical):**')
                     for m in ic:
-                        lines.append(f'• {m["torn_name"]} — {m["days"]}d')
+                        lines.append(f'• {m["torn_name"]} · {m["days"]}d')
                 if iw:
                     if lines: lines.append('')
                     lines.append('**Inactive (Warning):**')
                     for m in iw:
-                        lines.append(f'• {m["torn_name"]} — {m["days"]}d')
+                        lines.append(f'• {m["torn_name"]} · {m["days"]}d')
                 if oc_c:
                     if lines: lines.append('')
                     lines.append('**No OC (Critical):**')
                     for m in oc_c:
-                        lines.append(f'• {m["torn_name"]} — {m["days"]:.0f}d')
+                        lines.append(f'• {m["torn_name"]} · {m["days"]:.0f}d')
                 if oc_w:
                     if lines: lines.append('')
                     lines.append('**No OC (Warning):**')
                     for m in oc_w:
-                        lines.append(f'• {m["torn_name"]} — {m["days"]:.0f}d')
+                        lines.append(f'• {m["torn_name"]} · {m["days"]:.0f}d')
                 if lf:
                     if lines: lines.append('')
                     lines.append('**Left Faction (7+ days):**')
                     for m in lf:
-                        lines.append(f'• {m["torn_name"]} — {m["days_gone"]:.0f}d gone')
+                        lines.append(f'• {m["torn_name"]} · {m["days_gone"]:.0f}d gone')
 
                 if not lines:
                     lines.append(f'✅ All {total} members active. No inactivity, OC, or left-faction issues.')
@@ -659,7 +659,7 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
                     if upcoming:
                         lines.append('\n**Upcoming events:**')
                         for name, hrs in sorted(upcoming, key=lambda x: x[1])[:5]:
-                            lines.append(f'• {name} — in {hrs:.1f}h')
+                            lines.append(f'• {name} · in {hrs:.1f}h')
                     note = '\n'.join(lines)
                     color = EMBED_COLOR_SUCCESS
                 else:

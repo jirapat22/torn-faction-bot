@@ -1152,7 +1152,7 @@ async def setup_stakeout_commands(bot, manager: StakeoutManager, enemy_group):
                 hours_str = f'{remaining:.1f}h remaining'
             else:
                 hours_str = f'{max(1, int(remaining * 60))}m remaining'
-            lines.append(f"**{s['name']}** [{s['torn_id']}] — {s['record_count']} records | {hours_str}")
+            lines.append(f"**{s['name']}** [{s['torn_id']}] · {s['record_count']} records | {hours_str}")
 
         description = 'Currently watching:\n\n' + '\n'.join(lines)
         # Chunk if exceeding embed description limit
@@ -1242,11 +1242,11 @@ async def setup_stakeout_commands(bot, manager: StakeoutManager, enemy_group):
             avoid_text = (
                 f"🔴 **{s:02d}:00 – {e:02d}:00 TCT** "
                 f"(your time: <t:{next_start}:t> next at <t:{next_start}:R>)\n"
-                f"Don't chain or long-attack — target is most likely watching.\n"
+                f"Don't chain or long-attack. Target is most likely watching.\n"
                 f"Confidence: {conf*100:.0f}%"
             )
         else:
-            avoid_text = 'Not enough data yet — keep stakeout running.'
+            avoid_text = 'Not enough data yet. Keep stakeout running.'
         embed.add_field(
             name='🚫 Avoid Window (they\'re watching)',
             value=avoid_text,
@@ -1260,11 +1260,11 @@ async def setup_stakeout_commands(bot, manager: StakeoutManager, enemy_group):
             sleep_text = (
                 f"🟢 **{s:02d}:00 – {e:02d}:00 TCT** "
                 f"(your time: <t:{next_start}:t> next at <t:{next_start}:R>)\n"
-                f"Safe to coordinate chains / long attacks — target is offline.\n"
+                f"Safe to coordinate chains / long attacks. Target is offline.\n"
                 f"Confidence: {conf*100:.0f}%"
             )
         else:
-            sleep_text = 'Not enough data yet — keep stakeout running.'
+            sleep_text = 'Not enough data yet. Keep stakeout running.'
         embed.add_field(
             name='💤 Sleep Window (chain safely)',
             value=sleep_text,
