@@ -97,6 +97,16 @@ AVAILABILITY_CHANNEL_ID = int(os.getenv("AVAILABILITY_CHANNEL_ID", "0"))
 TURTLE_HIT_THRESHOLD = int(os.getenv("TURTLE_HIT_THRESHOLD", "4"))
 TURTLE_WINDOW_MINUTES = int(os.getenv("TURTLE_WINDOW_MINUTES", "60"))
 
+# Continuous hours offline during a war before it is worth management's
+# attention. 24 is measured, not picked: across war 50338 the members who
+# actually fought still went quiet for up to 22.3 hours (median 11.3), so
+# anything lower flags people who were contributing.
+WAR_OFFLINE_STRIKE_HOURS = int(os.getenv("WAR_OFFLINE_STRIKE_HOURS", "24"))
+
+# Where rule-break candidates go. Falls back to the inactivity channel when
+# unset, so nothing is silently dropped if this is never configured.
+STRIKES_CHANNEL_ID = int(os.getenv("STRIKES_CHANNEL_ID", "0"))
+
 # ===== API RATE LIMITING =====
 # Torn API rate limit settings
 TORN_API_CACHE_SECONDS = int(os.getenv("TORN_API_CACHE_SECONDS", "30"))

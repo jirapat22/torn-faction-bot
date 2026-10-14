@@ -233,6 +233,10 @@ async def on_ready():
         await setup_availability_commands(bot, availability_manager, VERIFIED_ROLE_NAME,
                                            activity_profile_manager=activity_profile_manager)
         await restore_availability_views(bot, availability_manager, VERIFIED_ROLE_NAME)
+        # Assigned here, not up with the other war_tracker wiring: that runs
+        # before AvailabilityManager exists, so it would have bound None and
+        # every absent member would have looked like they never answered.
+        war_tracker.availability_manager = availability_manager
 
         # Initialize event reminder manager (35-hour advance reminders)
         event_reminder_manager = EventReminderManager(bot)

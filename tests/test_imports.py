@@ -2702,6 +2702,85 @@ def test_chain_break_warning_gates_on_size_and_cooldown():
         ch_mod.get_current_timestamp = orig_now
 
 
+def test_strike_candidates_separate_certain_from_askable():
+    """
+    The report has to keep three different levels of certainty apart, or
+    management can't act on any of it.
+
+    Mugging a faction mate has no exception in the rules (sparring and friendly
+    hosps are allowed by agreement, mugging each other never is), so it is
+    stated as a strike. Mugging the opponent breaks the war rule but the rules
+    forgive a mug that was returned and apologised for, so it has to be asked
+    about. Being absent only counts if no notice was posted, and ANSWERING THE
+    POLL is a notice - that exemption is the whole point of the poll existing.
+    """
+    import asyncio
+    from features.wars import WarTracker, WAR_OFFLINE_STRIKE_HOURS
+    import features.wars as wars_mod
+    import utils.torn_api as torn_api_mod
+    from config import TORN_FACTION_ID
+
+    sent = []
+
+    class FakeChannel:
+        async def send(self, **kw):
+            sent.append(kw.get('embed'))
+
+    class FakeBot:
+        def get_channel(self, _):
+            return FakeChannel()
+
+    class FakeAvail:
+        polls = {'p1': {'war_id': '777'}}
+        data = {'p1': {'0': [555]}}        # discord id 555 answered
+
+    class FakeVS:
+        verified_users = {'555': {'torn_id': 100},   # answered the poll
+                          '666': {'torn_id': 200}}   # did not
+
+    mgr = WarTracker(bot=FakeBot())
+    mgr.availability_manager = FakeAvail()
+    mgr.verification_system = FakeVS()
+    over = (WAR_OFFLINE_STRIKE_HOURS + 6) * 3600
+    mgr.war_offline = {'100': over, '200': over, '300': 3600}
+
+    async def fake_members():
+        return {'100': {'name': 'Posted'}, '200': {'name': 'Silent'},
+                '300': {'name': 'Around'}, '400': {'name': 'Mugger'}}
+    orig = torn_api_mod.fetch_faction_members
+    torn_api_mod.fetch_faction_members = fake_members
+
+    attack_stats = {
+        '400': {'mugs_faction': 2, 'mugs_given': 5},
+        '_friendly_hosps': [],
+    }
+    report_factions = {str(TORN_FACTION_ID): {'members': {
+        '100': {'attacks': 0}, '200': {'attacks': 3}, '300': {'attacks': 0},
+        '400': {'attacks': 9}}}}
+
+    try:
+        asyncio.run(mgr.post_strike_candidates('777', attack_stats, report_factions))
+        assert len(sent) == 1
+        fields = {f.name: f.value for f in sent[0].fields}
+
+        faction = next(v for k, v in fields.items() if 'faction mate' in k)
+        assert 'Mugger' in faction and 'x2' in faction
+
+        opp = next(v for k, v in fields.items() if 'opponent' in k)
+        assert 'x5' in opp and 'money went back' in opp, 'must say to ask first'
+
+        off = next(v for k, v in fields.items() if 'Offline' in k)
+        assert 'Silent' in off, 'absent with no poll answer is a candidate'
+        assert 'Posted' not in off, 'answering the poll is the notice'
+        assert 'Around' not in off, 'under the threshold'
+
+        nohits = next(v for k, v in fields.items() if 'No hits' in k)
+        assert 'Around' in nohits, 'zero attacks and no poll answer is a candidate'
+        assert 'Posted' not in nohits, 'they answered, so not a candidate'
+    finally:
+        torn_api_mod.fetch_faction_members = orig
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -2739,6 +2818,7 @@ if __name__ == '__main__':
     test_only_recruiting_oc_slots_count_as_joinable()
     test_war_report_separates_opponent_mugs_from_outside_mugs()
     test_chain_break_warning_gates_on_size_and_cooldown()
+    test_strike_candidates_separate_certain_from_askable()
     test_war_report_counts_hits_taken_from_attack_log()
     test_activity_profile_chunk_detection()
     test_activity_profile_manager_queries()

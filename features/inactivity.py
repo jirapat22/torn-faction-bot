@@ -18,6 +18,7 @@ from utils.torn_api import fetch_faction_members, fetch_faction_crimes
 from config import (
     VERIFIED_ROLE_NAME,
     INACTIVITY_ALERTS_CHANNEL_ID,
+    STRIKES_CHANNEL_ID,
     INACTIVITY_WARNING_DAYS,
     INACTIVITY_CRITICAL_DAYS,
     OC_WARNING_DAYS,
@@ -769,10 +770,14 @@ class InactivityTracker:
             if current:
                 chunks.append(current)
 
+            # OC misses are strike material, so they go to the strikes channel
+            # when one is set. Falls back to this channel otherwise, so turning
+            # the feature on is opt-in and nothing is ever silently dropped.
+            oc_channel = self.bot.get_channel(STRIKES_CHANNEL_ID) or channel
             for i, chunk in enumerate(chunks):
                 title = '🔴 OC Participation Critical' if i == 0 else '🔴 OC Critical (continued)'
                 embed = create_embed(title=title, description=chunk.strip(), color=EMBED_COLOR_CRITICAL)
-                await channel.send(embed=embed)
+                await oc_channel.send(embed=embed)
             logger.info(f'Sent OC critical alert for {len(oc_critical)} members')
 
         if oc_warning:
@@ -802,10 +807,11 @@ class InactivityTracker:
             if current:
                 chunks.append(current)
 
+            oc_channel = self.bot.get_channel(STRIKES_CHANNEL_ID) or channel
             for i, chunk in enumerate(chunks):
                 title = '⚠️ OC Participation Warning' if i == 0 else '⚠️ OC Warning (continued)'
                 embed = create_embed(title=title, description=chunk.strip(), color=EMBED_COLOR_WARNING)
-                await channel.send(embed=embed)
+                await oc_channel.send(embed=embed)
             logger.info(f'Sent OC warning alert for {len(oc_warning)} members')
 
         # ── Left-faction alerts ──────────────────────────────────────────────

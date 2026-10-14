@@ -17,6 +17,8 @@ from utils.helpers import load_json, save_json, create_embed, format_timestamp, 
 from utils.torn_api import fetch_faction_data, fetch_faction_data_v2, fetch_faction_attacks
 from config import (
     WAR_CHANNEL_ID,
+    STRIKES_CHANNEL_ID,
+    WAR_OFFLINE_STRIKE_HOURS,
     TURTLE_HIT_THRESHOLD as _TURTLE_HIT_THRESHOLD,
     TURTLE_WINDOW_MINUTES as _TURTLE_WINDOW_MINUTES,
     WAR_MANAGEMENT_CHANNEL_ID,
@@ -83,6 +85,11 @@ class WarTracker:
         self.pending_wars_file = 'data/pending_wars.json'
         self.turtle_alerts_file = 'data/turtle_alerts.json'
         self.turtle_cooldowns = {}  # {torn_id: last_alert_ts}
+        # {torn_id: longest seconds seen offline during the CURRENT war}.
+        # last_action only moves forward when a member acts, so (now - it)
+        # sampled each tick IS their current offline streak; the max over the
+        # war is the longest one, without storing any history.
+        self.war_offline = {}
         self.verification_system = None  # set by bot.py, for Discord mentions
         self.announced_pending_wars = set()  # war_ids already announced during their notice window
         self.war_member_stats_file = 'data/war_member_stats.json'
@@ -113,9 +120,13 @@ class WarTracker:
         """Load per-member turtle alert cooldowns."""
         data = load_json(self.turtle_alerts_file, default={})
         self.turtle_cooldowns = data.get('cooldowns', {})
+        self.war_offline = data.get('war_offline', {})
 
     async def save_turtle_alerts(self):
-        save_json(self.turtle_alerts_file, {'cooldowns': self.turtle_cooldowns})
+        save_json(self.turtle_alerts_file, {
+            'cooldowns': self.turtle_cooldowns,
+            'war_offline': self.war_offline,
+        })
 
     async def save_pending_wars(self):
         """Save the set of already-announced pending war IDs"""
@@ -1811,13 +1822,28 @@ class WarTracker:
             incoming[did] = incoming.get(did, 0) + 1
 
         candidates = {t: n for t, n in incoming.items() if n >= TURTLE_HIT_THRESHOLD}
-        if not candidates:
-            return
 
         data = await fetch_faction_data('basic')
         members = (data or {}).get('members')
         if not members:
             return  # cannot tell who is turtled, so do not guess
+
+        # Offline tracking runs every tick, candidates or not - a member can be
+        # absent the whole war without ever being hit, and that is its own rule.
+        offline_changed = False
+        for tid, m in members.items():
+            la = (m.get('last_action') or {}).get('timestamp')
+            if not la:
+                continue
+            gap = now - int(la)
+            if gap > self.war_offline.get(str(tid), 0):
+                self.war_offline[str(tid)] = gap
+                offline_changed = True
+        if offline_changed:
+            await self.save_turtle_alerts()
+
+        if not candidates:
+            return
 
         lines = []
         changed = False
@@ -1867,6 +1893,121 @@ class WarTracker:
         )
         await channel.send(embed=embed)
         logger.info(f'Turtle alert posted for {len(lines)} member(s)')
+
+    async def post_strike_candidates(self, war_id, attack_stats, report_factions):
+        """
+        Post what the attacks log can actually settle about the war, to the
+        strikes channel, as candidates rather than verdicts.
+
+        The split matters. Mugging a faction mate has no exception in the rules
+        (sparring and friendly hosps are allowed by agreement, mugging each
+        other never is), so it is stated as a strike. Mugging the opponent
+        breaks the war rule but the rules forgive one that was returned and
+        apologised for, so it has to be asked about first. Being absent is only
+        a strike if no notice was posted, and the bot knows the poll but not
+        what was said in chat.
+        """
+        channel = self.bot.get_channel(STRIKES_CHANNEL_ID or WAR_MANAGEMENT_CHANNEL_ID) \
+            if self.bot else None
+        if not channel:
+            logger.warning('Strike candidates: no channel configured')
+            return
+
+        from utils.torn_api import fetch_faction_members
+        roster = await fetch_faction_members() or {}
+        stats = attack_stats or {}
+
+        def name_of(tid):
+            return (roster.get(str(tid)) or {}).get('name', f'ID:{tid}')
+
+        # Who the war report says made no attacks at all
+        our_members = {}
+        for fid, fdata in (report_factions or {}).items():
+            if str(fid) == str(TORN_FACTION_ID):
+                our_members = fdata.get('members', {}) or {}
+                break
+
+        faction_mugs, opponent_mugs = [], []
+        for tid, st in stats.items():
+            if tid == '_friendly_hosps' or not isinstance(st, dict):
+                continue
+            if st.get('mugs_faction'):
+                faction_mugs.append((name_of(tid), st['mugs_faction']))
+            if st.get('mugs_given'):
+                opponent_mugs.append((name_of(tid), st['mugs_given']))
+
+        # Absent too long, and the poll says they never answered
+        posted = self._availability_responders(war_id)
+        threshold = WAR_OFFLINE_STRIKE_HOURS * 3600
+        absent = []
+        for tid, secs in (self.war_offline or {}).items():
+            if secs < threshold:
+                continue
+            if str(tid) in posted:
+                continue  # answered the poll, so the rule is satisfied
+            absent.append((name_of(tid), secs / 3600))
+
+        no_hits = [name_of(tid) for tid, m in our_members.items()
+                   if not m.get('attacks') and str(tid) not in posted]
+
+        if not (faction_mugs or opponent_mugs or absent or no_hits):
+            return
+
+        embed = create_embed(
+            title=f'\u2696\ufe0f Strike candidates \u00b7 war #{war_id}',
+            description='Nothing here is a strike yet. The log proves what '
+                        'happened, not whether there was a notice, a refund or '
+                        'an apology.',
+            color=EMBED_COLOR_WARNING,
+        )
+        if faction_mugs:
+            embed.add_field(
+                name='\U0001f534 Mugged a faction mate (strike)',
+                value='\n'.join(f'- **{n}** x{c}' for n, c in
+                                sorted(faction_mugs, key=lambda x: -x[1])[:15])
+                      + '\n-# The rules allow sparring and friendly hosps by '
+                        'agreement. Mugging each other has no exception.',
+                inline=False)
+        if opponent_mugs:
+            embed.add_field(
+                name='\U0001f7e0 Mugged the opponent (ask first)',
+                value='\n'.join(f'- **{n}** x{c}' for n, c in
+                                sorted(opponent_mugs, key=lambda x: -x[1])[:15])
+                      + '\n-# Get proof the money went back. If it did and they '
+                        'owned up, the rules forgive it.',
+                inline=False)
+        if absent:
+            embed.add_field(
+                name=f'\U0001f7e1 Offline {WAR_OFFLINE_STRIKE_HOURS}h+ with no poll answer',
+                value='\n'.join(f'- **{n}** {h:.0f}h' for n, h in
+                                sorted(absent, key=lambda x: -x[1])[:15])
+                      + '\n-# Check for a notice in chat before acting.',
+                inline=False)
+        if no_hits:
+            embed.add_field(
+                name='\u26aa No hits at all, no poll answer',
+                value=', '.join(sorted(no_hits)[:40]),
+                inline=False)
+
+        await channel.send(embed=embed)
+        logger.info(f'Posted strike candidates for war {war_id}')
+
+    def _availability_responders(self, war_id):
+        """Torn ids of everyone who answered this war's availability poll."""
+        am = getattr(self, 'availability_manager', None)
+        vs = getattr(self, 'verification_system', None)
+        if not am or not vs:
+            return set()
+        discord_ids = set()
+        for poll_id, poll in (getattr(am, 'polls', None) or {}).items():
+            if str(poll.get('war_id')) != str(war_id):
+                continue
+            for uids in (am.data.get(poll_id) or {}).values():
+                discord_ids.update(str(u) for u in uids)
+        if not discord_ids:
+            return set()
+        return {str((vs.verified_users.get(d) or {}).get('torn_id'))
+                for d in discord_ids if d in (vs.verified_users or {})}
 
     async def check_pending_war(self):
         """
@@ -2082,6 +2223,12 @@ class WarTracker:
                 else:
                     logger.warning('Warning: War management channel not configured')
 
+                try:
+                    await self.post_strike_candidates(
+                        self.current_war_id, attack_stats, report_factions)
+                except Exception as e:
+                    logger.error(f'Strike candidates failed: {e}')
+
                 # Friendly hospitalisations, from the same single pass above
                 friendly_hosps = (attack_stats or {}).get('_friendly_hosps', [])
                 if friendly_hosps:
@@ -2115,6 +2262,8 @@ class WarTracker:
         if not self.was_war_active:
             self.was_war_active = True
             self.current_war_id = war_id
+            # Last war's absences say nothing about this one.
+            self.war_offline = {}
             logger.info(f'War detected: {war_id}')
 
         # Save war data to history (faction-level scores for final report)
