@@ -751,11 +751,14 @@ class InactivityTracker:
                 else:
                     last_str = 'Never'
                 lines.append(
-                    f'**{data["torn_name"]}** [Lvl {data["torn_level"]}]\n'
+                    f'**{data["torn_name"]}** [Lvl {data["torn_level"]}] '
+                    f'[profile](<https://www.torn.com/profiles.php?XID={data["torn_id"]}>)\n'
                     f'  {data["days"]:.0f} days without OC · Last OC: {last_str}'
                 )
 
-            header = f'**{len(oc_critical)} member(s)** have not participated in an OC for {OC_CRITICAL_DAYS}+ days:\n\n'
+            header = (f'**{len(oc_critical)} member(s)** have not joined an OC for '
+                      f'{OC_CRITICAL_DAYS}+ days. They were warned at '
+                      f'{OC_WARNING_DAYS} days, so this is strike territory:\n\n')
             chunks = []
             current = header
             for line in lines:
@@ -781,11 +784,14 @@ class InactivityTracker:
                 else:
                     last_str = 'Never'
                 lines.append(
-                    f'**{data["torn_name"]}** [Lvl {data["torn_level"]}]\n'
+                    f'**{data["torn_name"]}** [Lvl {data["torn_level"]}] '
+                    f'[profile](<https://www.torn.com/profiles.php?XID={data["torn_id"]}>)\n'
                     f'  {data["days"]:.0f} days without OC · Last OC: {last_str}'
                 )
 
-            header = f'**{len(oc_warning)} member(s)** have not participated in an OC for {OC_WARNING_DAYS}+ days:\n\n'
+            header = (f'**{len(oc_warning)} member(s)** have not joined an OC for '
+                      f'{OC_WARNING_DAYS}+ days. Nudge them now - at '
+                      f'{OC_CRITICAL_DAYS} days it becomes a strike:\n\n')
             chunks = []
             current = header
             for line in lines:

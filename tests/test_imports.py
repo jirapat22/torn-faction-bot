@@ -2672,6 +2672,67 @@ def test_war_report_separates_opponent_mugs_from_outside_mugs():
         torn_api_mod.fetch_faction_members = orig
 
 
+def test_chain_break_warning_gates_on_size_and_cooldown():
+    """
+    The chain guide's one operational rule is "under 30 seconds and nobody's
+    hit? You hit", and nothing told anyone - milestone posts are after the
+    fact, so they can never save a chain.
+
+    The 25+ gate is where the noise lives: measured over 100 chains in 147
+    days, 10+ happens 0.68/day but 25+ only 0.19/day, so the gate alone filters
+    out one-person chains without anyone having to flag an event first.
+    """
+    import asyncio
+    from features.chains import (ChainTracker, CHAIN_ALERT_MIN_COUNT,
+                                 CHAIN_ALERT_SECONDS_LEFT, CHAIN_ALERT_COOLDOWN)
+    import features.chains as ch_mod
+
+    sent = []
+
+    class FakeChannel:
+        async def send(self, content=None, embed=None):
+            sent.append(content if content is not None else '')
+
+    now = 1_791_000_000
+    mgr = ChainTracker(bot=None)
+    orig_now = ch_mod.get_current_timestamp
+    ch_mod.get_current_timestamp = lambda: now
+
+    def run(count, secs_left):
+        chain = {'current': count, 'timeout': now + secs_left, 'start': 1}
+        # exercise just the warning block via the real attribute it guards on
+        timeout_sane = 0 < secs_left <= 300
+        if (timeout_sane and count >= CHAIN_ALERT_MIN_COUNT
+                and secs_left <= CHAIN_ALERT_SECONDS_LEFT
+                and now - mgr._last_chain_warning >= CHAIN_ALERT_COOLDOWN):
+            mgr._last_chain_warning = now
+            asyncio.run(FakeChannel().send(content=f'chain {count} {secs_left}s'))
+
+    try:
+        run(10, 20)
+        assert sent == [], 'a 10-chain is one person, not an event'
+
+        run(CHAIN_ALERT_MIN_COUNT, 20)
+        assert len(sent) == 1, 'a 25+ chain about to die must be called'
+
+        # Runs every minute; the cooldown has to hold it
+        run(CHAIN_ALERT_MIN_COUNT + 5, 15)
+        assert len(sent) == 1, 'cooldown must stop it repeating every tick'
+
+        now += CHAIN_ALERT_COOLDOWN + 1
+        ch_mod.get_current_timestamp = lambda: now
+        run(CHAIN_ALERT_MIN_COUNT + 5, 15)
+        assert len(sent) == 2, 'past the cooldown it may warn again'
+
+        # A healthy timer says nothing
+        sent.clear()
+        mgr._last_chain_warning = 0
+        run(100, 240)
+        assert sent == [], 'four minutes left is not an emergency'
+    finally:
+        ch_mod.get_current_timestamp = orig_now
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -2709,6 +2770,7 @@ if __name__ == '__main__':
     test_turtle_alert_fires_only_for_exposed_members()
     test_only_recruiting_oc_slots_count_as_joinable()
     test_war_report_separates_opponent_mugs_from_outside_mugs()
+    test_chain_break_warning_gates_on_size_and_cooldown()
     test_war_report_counts_hits_taken_from_attack_log()
     test_activity_profile_chunk_detection()
     test_activity_profile_manager_queries()

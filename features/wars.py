@@ -657,7 +657,7 @@ class WarTracker:
                     'war_hits': 0, 'outside_hits': 0, 'chain_outside_hits': 0,
                     'total_incoming': 0, 'war_incoming': 0, 'outside_incoming': 0,
                     'hosps_given': 0, 'hosps_received': 0,
-                    'mugs_given': 0, 'mugs_outside': 0,
+                    'mugs_given': 0, 'mugs_outside': 0, 'mugs_faction': 0,
                 }
 
         try:
@@ -702,6 +702,16 @@ class WarTracker:
 
                 # Friendly hospitalization — teammate hosps teammate to keep them
                 # safe from enemy attacks. Tracked separately from war/outside hits.
+                if (attacker_faction == our_faction
+                        and defender_faction == our_faction
+                        and attacker_id != defender_id
+                        and result == 'Mugged'):
+                    # "No mugging each other" has no exception, unlike sparring
+                    # and friendly hosps which are both allowed by agreement.
+                    _ensure(attacker_id)
+                    stats[attacker_id]['mugs_faction'] += 1
+                    continue
+
                 if (attacker_faction == our_faction
                         and defender_faction == our_faction
                         and attacker_id != defender_id
@@ -1386,6 +1396,7 @@ class WarTracker:
                 'outside_incoming': outside_incoming,
                 'mugs': log_stats.get('mugs_given', 0),
                 'mugs_outside': log_stats.get('mugs_outside', 0),
+                'mugs_faction': log_stats.get('mugs_faction', 0),
                 'score': score
             })
 
@@ -1476,18 +1487,25 @@ class WarTracker:
         # rules forgive one that was returned and owned up to, and it cannot see
         # whether someone posted a notice. Management decides; this just means
         # nobody has to read 1,800 attack rows to find the candidates.
-        muggers = [m for m in member_stats if m.get('mugs') or m.get('mugs_outside')]
+        muggers = [m for m in member_stats
+                   if m.get('mugs') or m.get('mugs_outside') or m.get('mugs_faction')]
         if muggers:
             mug_lines = []
-            for m in sorted(muggers, key=lambda x: -(x['mugs'] * 10 + x['mugs_outside']))[:15]:
+            for m in sorted(muggers, key=lambda x: -(x['mugs_faction'] * 100
+                                                     + x['mugs'] * 10
+                                                     + x['mugs_outside']))[:15]:
                 bits = []
+                if m['mugs_faction']:
+                    bits.append(f'**{m["mugs_faction"]}x on a FACTION MATE**')
                 if m['mugs']:
                     bits.append(f'**{m["mugs"]}x on the opponent**')
                 if m['mugs_outside']:
                     bits.append(f'{m["mugs_outside"]}x outside')
                 mug_lines.append(f'- **{m["name"]}** mugged ' + ', '.join(bits))
-            mug_lines.append('-# Opponent mugs break the war rule (Leave, not mug). '
-                             'Outside mugs cost 25% of the chain respect.')
+            mug_lines.append(
+                '-# Talk to them before issuing anything. The rules forgive a mug '
+                'that was returned and apologised for, so ask first and get proof '
+                'the money went back. Only then is it a strike, after the war.')
             if len(embed.fields) >= 24:
                 embeds.append(embed)
                 embed = create_embed(title='⚔️ Report (continued)', color=color)

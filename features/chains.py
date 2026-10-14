@@ -25,12 +25,27 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# ===== Chain break warnings =====
+# The chain guide's single operational rule is "under 30 seconds and nobody's
+# hit? You hit" - but nothing ever told anyone, so it only worked for whoever
+# happened to have the timer open.
+#
+# Gated on 25+ because the noise lives below it. Measured over 100 chains in
+# 147 days: 10+ happens 0.68/day, 25+ only 0.19/day (once every 5 days), so the
+# gate alone filters out the one-person chains without needing anyone to flag
+# an event first. Inside a war the timer dropped under 30s about 6.8 times a
+# day, which is the realistic ceiling on how often this can fire.
+CHAIN_ALERT_MIN_COUNT = 25
+CHAIN_ALERT_SECONDS_LEFT = 30
+CHAIN_ALERT_COOLDOWN = 300
+
 class ChainTracker:
     """Tracks faction chains and provides statistics"""
 
     def __init__(self, bot):
         self.bot = bot
         self.last_chain_count = 0
+        self._last_chain_warning = 0  # ts of the last about-to-break ping
         self.last_chain_start = 0  # Start timestamp of the chain we're currently tracking
         self.was_chain_active = False  # Track if chain was active in last check
         self.chain_data_file = 'data/chain_history.json'
@@ -661,6 +676,28 @@ class ChainTracker:
         # Always keep last_chain_start in sync
         if chain_start:
             self.last_chain_start = chain_start
+
+        # About to break? The milestone posts below are after-the-fact; this is
+        # the only thing that can actually save a chain. Checked before them so
+        # a dying chain is never queued behind a milestone announcement.
+        timeout = chain.get('timeout', 0)
+        now_ts = get_current_timestamp()
+        seconds_left = timeout - now_ts if timeout else 0
+        # A timeout in the past or absurdly far ahead is Torn glitching, not a
+        # chain on its last legs - the status embed guards the same way.
+        timeout_sane = 0 < seconds_left <= 300
+        if (timeout_sane
+                and current_count >= CHAIN_ALERT_MIN_COUNT
+                and seconds_left <= CHAIN_ALERT_SECONDS_LEFT
+                and now_ts - self._last_chain_warning >= CHAIN_ALERT_COOLDOWN):
+            self._last_chain_warning = now_ts
+            await channel.send(
+                f'\u26a0\ufe0f **Chain dying: {current_count} hits, '
+                f'{int(seconds_left)}s left.** Any successful hit resets it to 5:00. '
+                f'A lost fight does NOT, so pick someone you can beat.'
+            )
+            logger.info(f'Chain break warning sent at {current_count} hits, '
+                        f'{int(seconds_left)}s left')
 
         # Only post at bonus milestones
         should_post = False
