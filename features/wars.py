@@ -35,6 +35,30 @@ logger = logging.getLogger(__name__)
 # The attacks log is the only source for hits taken and outside hits, and at
 # war end those numbers are archived permanently. A transient 504 on one page
 # is worth retrying rather than silently shortening the war.
+# ===== Turtle alerts =====
+# The war guide calls this the faction's biggest problem: "last war we bled
+# most of our points through members getting farmed while they were offline".
+#
+# The threshold is measured, not guessed. Across war 50338's 1005 incoming
+# hits, 925 of them were "Attacked" (Leave), which leaves the target OUT of
+# hospital and therefore still farmable - that is what farming looks like here.
+# Simulated against that real log:
+#   2 hits in 30min -> 128 alerts/day (fires for 33 of 35 members: useless)
+#   3 hits in 30min ->   4.7/day, 8 members
+#   4 hits in 60min ->  12.0/day, 16 members   <- chosen
+#   5 hits in 60min ->   1.0/day, 2 members (too narrow to help)
+# 4-in-60 subsumes a 3-in-30 burst a little later, and catches twice as many
+# people as 3-in-30 for noise that is still well under one an hour.
+TURTLE_WINDOW_SECONDS = 3600
+TURTLE_HIT_THRESHOLD = 4
+TURTLE_COOLDOWN_SECONDS = 3600
+
+# States where a member cannot be attacked at all. Everything else counts as
+# exposed - including Abroad, which is the WORST case rather than a safe one:
+# landed abroad gives the attacker an extra x1.25, which the guide singles out.
+# Only Traveling (still in the air) is actually safe.
+TURTLED_STATES = {'Hospital', 'Jail', 'Federal', 'Traveling'}
+
 ATTACK_PAGE_RETRIES = 3
 ATTACK_PAGE_RETRY_DELAY = 2
 
@@ -55,6 +79,9 @@ class WarTracker:
         self.war_history = {}
         self.enemy_watchlist = None  # Set by bot.py for auto-clear
         self.pending_wars_file = 'data/pending_wars.json'
+        self.turtle_alerts_file = 'data/turtle_alerts.json'
+        self.turtle_cooldowns = {}  # {torn_id: last_alert_ts}
+        self.verification_system = None  # set by bot.py, for Discord mentions
         self.announced_pending_wars = set()  # war_ids already announced during their notice window
         self.war_member_stats_file = 'data/war_member_stats.json'
         self.war_member_stats = {'wars': []}
@@ -79,6 +106,14 @@ class WarTracker:
         data = load_json(self.pending_wars_file, default={'announced': []})
         self.announced_pending_wars = set(str(w) for w in data.get('announced', []))
         logger.info(f'Loaded {len(self.announced_pending_wars)} announced pending-war ID(s)')
+
+    async def load_turtle_alerts(self):
+        """Load per-member turtle alert cooldowns."""
+        data = load_json(self.turtle_alerts_file, default={})
+        self.turtle_cooldowns = data.get('cooldowns', {})
+
+    async def save_turtle_alerts(self):
+        save_json(self.turtle_alerts_file, {'cooldowns': self.turtle_cooldowns})
 
     async def save_pending_wars(self):
         """Save the set of already-announced pending war IDs"""
@@ -602,7 +637,8 @@ class WarTracker:
         Returns:
             Dict of {user_id: {'war_hits': N, 'outside_hits': N, 'total_incoming': N,
                                'war_incoming': N, 'outside_incoming': N,
-                               'hosps_given': N, 'hosps_received': N}},
+                               'hosps_given': N, 'hosps_received': N,
+                               'mugs_given': N}},
             or None if the attacks log could not be read in full. Callers must
             branch on None rather than render the zeros it would otherwise
             imply.
@@ -618,7 +654,7 @@ class WarTracker:
                 stats[uid] = {
                     'war_hits': 0, 'outside_hits': 0, 'chain_outside_hits': 0,
                     'total_incoming': 0, 'war_incoming': 0, 'outside_incoming': 0,
-                    'hosps_given': 0, 'hosps_received': 0,
+                    'hosps_given': 0, 'hosps_received': 0, 'mugs_given': 0,
                 }
 
         try:
@@ -688,6 +724,12 @@ class WarTracker:
                     _ensure(attacker_id)
                     if defender_faction == enemy_faction:
                         stats[attacker_id]['war_hits'] += 1
+                        # "Leave, don't mug" is a war rule, and hiding a mug
+                        # that management finds is a strike. The log settles
+                        # whether it happened; only a human can judge whether
+                        # it was returned and owned up to.
+                        if result == 'Mugged':
+                            stats[attacker_id]['mugs_given'] += 1
                     else:
                         stats[attacker_id]['outside_hits'] += 1
                         # Count chain outside hit if this attack fell within a chain >= 10
@@ -1333,6 +1375,7 @@ class WarTracker:
                 'outgoing': outgoing,
                 'incoming': incoming,
                 'outside_incoming': outside_incoming,
+                'mugs': log_stats.get('mugs_given', 0),
                 'score': score
             })
 
@@ -1418,6 +1461,22 @@ class WarTracker:
                     embed = create_embed(title='⚔️ Report (continued)', color=color)
                 embed.add_field(name='⚠️ Most Targeted', value=most_hit_text, inline=False)
 
+        # Rule checks the attacks log can actually settle. Deliberately framed
+        # as "to check", not as strikes: the log proves a mug happened, but the
+        # rules forgive one that was returned and owned up to, and it cannot see
+        # whether someone posted a notice. Management decides; this just means
+        # nobody has to read 1,800 attack rows to find the candidates.
+        muggers = [m for m in member_stats if m.get('mugs')]
+        if muggers:
+            mug_lines = [f'- **{m["name"]}** mugged {m["mugs"]}x '
+                         f'(rule is Leave, not mug)' for m in
+                         sorted(muggers, key=lambda x: -x['mugs'])[:15]]
+            if len(embed.fields) >= 24:
+                embeds.append(embed)
+                embed = create_embed(title='⚔️ Report (continued)', color=color)
+            embed.add_field(name='🔍 To check', value='\n'.join(mug_lines),
+                            inline=False)
+
         # Add members who didn't participate
         non_participants = [m for m in member_stats if m['outgoing'] == 0]
         if non_participants:
@@ -1427,7 +1486,9 @@ class WarTracker:
                 if len(embed.fields) >= 24:
                     embeds.append(embed)
                     embed = create_embed(title='⚔️ Report (continued)', color=color)
-                label = '❌ No Participation' if len(np_chunks) == 1 else f'❌ No Participation ({idx + 1})'
+                label = ('❌ No Participation (strike unless they posted a notice)'
+                         if len(np_chunks) == 1
+                         else f'❌ No Participation ({idx + 1})')
                 embed.add_field(name=label, value=chunk, inline=False)
 
         embeds.append(embed)
@@ -1670,6 +1731,107 @@ class WarTracker:
                 embed.add_field(name=label, value=chunk, inline=False)
 
         return embed
+
+    def _mention_for(self, torn_id):
+        """Discord mention for a Torn id, or None if they never registered."""
+        vs = self.verification_system
+        if not vs:
+            return None
+        for discord_id, rec in (getattr(vs, 'verified_users', None) or {}).items():
+            if str((rec or {}).get('torn_id')) == str(torn_id):
+                return f'<@{discord_id}>'
+        return None
+
+    async def check_turtle_alerts(self):
+        """
+        Warn members who are being farmed while still attackable.
+
+        Only runs during a war. Reads ONE page of the attacks log covering the
+        last hour rather than paging the whole war: at war 50338's rate that is
+        about 22 incoming hits an hour, far inside a single page, so this costs
+        one API call a tick instead of twenty.
+        """
+        if not self.was_war_active:
+            return
+        now = get_current_timestamp()
+
+        attacks = await fetch_faction_attacks(
+            from_ts=now - TURTLE_WINDOW_SECONDS, sort='asc')
+        if attacks is None:
+            return  # outage; silence beats guessing who is being farmed
+
+        our = str(TORN_FACTION_ID)
+        counted = ('Attacked', 'Mugged', 'Hospitalized', 'Special')
+        incoming = {}
+        for a in attacks.values():
+            if not isinstance(a, dict):
+                continue
+            if str(a.get('defender_faction')) != our:
+                continue
+            if str(a.get('attacker_faction')) == our:
+                continue  # a friendly hosp is the opposite of a problem
+            if a.get('result') not in counted:
+                continue
+            did = str(a.get('defender_id'))
+            incoming[did] = incoming.get(did, 0) + 1
+
+        candidates = {t: n for t, n in incoming.items() if n >= TURTLE_HIT_THRESHOLD}
+        if not candidates:
+            return
+
+        data = await fetch_faction_data('basic')
+        members = (data or {}).get('members')
+        if not members:
+            return  # cannot tell who is turtled, so do not guess
+
+        lines = []
+        changed = False
+        for tid, hits in sorted(candidates.items(), key=lambda kv: -kv[1]):
+            member = members.get(tid)  # v1 basic keys member ids as strings
+            if not member:
+                continue
+            state = (member.get('status') or {}).get('state', '')
+            if state in TURTLED_STATES:
+                continue  # already safe, nothing to nag about
+            last = self.turtle_cooldowns.get(tid, 0)
+            if now - last < TURTLE_COOLDOWN_SECONDS:
+                continue
+
+            name = member.get('name', tid)
+            who = self._mention_for(tid) or f'**{name}**'
+            where = 'abroad' if state == 'Abroad' else 'in Torn'
+            extra = ' (abroad is worse: they get an extra x1.25)' if state == 'Abroad' else ''
+            lines.append(
+                f'{who} has taken **{hits} hits** in the last hour and is still '
+                f'exposed {where}{extra}. Hospital or get in the air.'
+            )
+            self.turtle_cooldowns[tid] = now
+            changed = True
+
+        if changed:
+            # Drop rows older than a day so this cannot grow without bound
+            cutoff = now - 86400
+            for k in [k for k, v in self.turtle_cooldowns.items() if v < cutoff]:
+                del self.turtle_cooldowns[k]
+            await self.save_turtle_alerts()
+
+        if not lines:
+            return
+
+        channel = self.bot.get_channel(WAR_CHANNEL_ID) if self.bot else None
+        if not channel:
+            logger.warning('Turtle alert: war channel not found')
+            return
+        embed = create_embed(
+            title='\U0001f6e1\ufe0f Stop the bleed',
+            description='\n\n'.join(lines) + (
+                '\n\n-# Every hit they land scores for them. Ipecac syrup or a '
+                'wrong blood bag covers about an hour, a friendly bounty covers '
+                'a night, and you cannot be hit at all while flying.'),
+            color=EMBED_COLOR_WARNING,
+        )
+        await channel.send(embed=embed)
+        logger.info(f'Turtle alert posted for {len(lines)} member(s)')
 
     async def check_pending_war(self):
         """

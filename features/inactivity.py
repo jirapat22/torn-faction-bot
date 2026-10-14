@@ -191,6 +191,26 @@ class InactivityTracker:
         now = time.time()
         data_updated = False
 
+        # The faction rule is "not in an OC while eligible AND slots are open".
+        # With every slot taken there is nothing to join, and the OC guide tells
+        # members to ask management to create one - so flagging them for it
+        # blames them for management's queue. Count what is actually joinable
+        # before holding anyone to the rule.
+        #
+        # -1 means the source could not say (the v1 fallback has no slot model),
+        # which is NOT the same as zero: an unknown must not silence the check.
+        open_slots = 0
+        slots_known = False
+        for crime in (crimes if isinstance(crimes, list) else []):
+            if not isinstance(crime, dict):
+                continue
+            n = crime.get('open_slots', -1)
+            if n is None or n < 0:
+                continue
+            slots_known = True
+            open_slots += n
+        no_slots_to_join = slots_known and open_slots == 0
+
         # Build active_in_oc and update accumulated last_oc_completion
         # crimes is a normalized list from fetch_faction_crimes()
         active_in_oc = set()
@@ -212,6 +232,11 @@ class InactivityTracker:
 
         oc_warning = []
         oc_critical = []
+
+        if no_slots_to_join:
+            logger.info('OC participation check SKIPPED: every slot is filled, '
+                        'so nobody could have joined one')
+            return [], [], data_updated
 
         for torn_id, member in torn_members.items():
             tid = str(torn_id)

@@ -2464,6 +2464,132 @@ def test_poll_roster_names_who_picked_each_block():
     assert len(big) <= 1000
 
 
+def test_oc_check_skipped_when_no_slots_were_open():
+    """
+    The rule is "not in an OC while eligible AND slots are open". The check had
+    no concept of open slots, so it flagged members when there was nothing to
+    join - and the OC guide itself tells them to ask management to create one,
+    i.e. it is management's queue, not their fault.
+
+    An UNKNOWN slot count (-1, which the v1 fallback returns because OC1 has no
+    slot model) must not be read as zero, or the check would switch itself off.
+    """
+    import time
+    from features.inactivity import InactivityTracker
+
+    mgr = InactivityTracker(bot=None)
+    mgr.last_oc_completion = {'111': time.time() - 30 * 86400}
+    members = {'111': {'name': 'Idle', 'days_in_faction': 90, 'level': 20}}
+
+    # Slots open -> the member really could have joined, so flag them
+    crimes = [{'completed': False, 'completion_ts': 0, 'participants': ['222'],
+               'open_slots': 3, 'difficulty': 2}]
+    warn, crit, _ = mgr._get_oc_status(members, crimes)
+    assert warn or crit, 'with a joinable slot this is a real miss'
+
+    # Every slot filled -> nothing to join, so nobody is at fault
+    crimes = [{'completed': False, 'completion_ts': 0, 'participants': ['222'],
+               'open_slots': 0, 'difficulty': 2}]
+    warn, crit, _ = mgr._get_oc_status(members, crimes)
+    assert not warn and not crit, 'no open slot means no fault'
+
+    # Unknown (-1) is not zero: the check must still run
+    crimes = [{'completed': False, 'completion_ts': 0, 'participants': ['222'],
+               'open_slots': -1, 'difficulty': 0}]
+    warn, crit, _ = mgr._get_oc_status(members, crimes)
+    assert warn or crit, 'unknown slot counts must not silence the check'
+
+
+def test_turtle_alert_fires_only_for_exposed_members():
+    """
+    The war guide's stated biggest problem: members farmed while offline. The
+    threshold is measured against war 50338 (4 hits in 60 min = 12 alerts/day,
+    16 members; 2-in-30 would have been 128/day and useless).
+
+    Being ABROAD is not safety - landed abroad gives the attacker an extra
+    x1.25, which the guide calls out as the worst case. Only hospital, jail or
+    still being in the air counts as turtled.
+    """
+    import asyncio
+    from features.wars import WarTracker, TURTLE_HIT_THRESHOLD
+    import features.wars as wars_mod
+    from config import TORN_FACTION_ID
+
+    sent = []
+
+    class FakeChannel:
+        async def send(self, **kw):
+            sent.append(kw.get('embed'))
+
+    class FakeBot:
+        def get_channel(self, _):
+            return FakeChannel()
+
+    mgr = WarTracker(bot=FakeBot())
+    mgr.was_war_active = True
+    mgr.turtle_cooldowns = {}
+
+    our = str(TORN_FACTION_ID)
+    now = 1_791_000_000
+
+    def hits(defender, n):
+        return {f'{defender}-{i}': {
+            'attacker_faction': '53421', 'defender_faction': our,
+            'defender_id': defender, 'result': 'Attacked',
+            'timestamp_started': now - i * 60} for i in range(n)}
+
+    attacks = {}
+    attacks.update(hits('111', TURTLE_HIT_THRESHOLD))      # exposed in Torn
+    attacks.update(hits('222', TURTLE_HIT_THRESHOLD))      # already hospitalised
+    attacks.update(hits('333', TURTLE_HIT_THRESHOLD))      # landed abroad
+    attacks.update(hits('444', TURTLE_HIT_THRESHOLD - 1))  # under the bar
+
+    roster = {
+        'members': {
+            '111': {'name': 'Exposed', 'status': {'state': 'Okay'}},
+            '222': {'name': 'Safe', 'status': {'state': 'Hospital'}},
+            '333': {'name': 'Abroad', 'status': {'state': 'Abroad'}},
+            '444': {'name': 'Barely', 'status': {'state': 'Okay'}},
+        }
+    }
+
+    async def fake_attacks(from_ts=None, to_ts=None, sort=None):
+        return attacks
+
+    async def fake_basic(selections='basic'):
+        return roster
+
+    orig = (wars_mod.fetch_faction_attacks, wars_mod.fetch_faction_data, wars_mod.save_json)
+    wars_mod.fetch_faction_attacks = fake_attacks
+    wars_mod.fetch_faction_data = fake_basic
+    wars_mod.save_json = lambda *a, **k: None
+    try:
+        asyncio.run(mgr.check_turtle_alerts())
+        assert len(sent) == 1, f'expected one alert embed, got {len(sent)}'
+        body = sent[0].description
+        assert 'Exposed' in body, 'an exposed member being farmed must be warned'
+        assert 'Abroad' in body, 'landed abroad is the worst case, not safety'
+        assert 'Safe' not in body, 'already in hospital, nothing to nag about'
+        assert 'Barely' not in body, 'below the measured threshold'
+
+        # Runs every minute, so the cooldown must hold it
+        sent.clear()
+        asyncio.run(mgr.check_turtle_alerts())
+        assert sent == [], 'cooldown must stop this repeating every tick'
+
+        # An unreadable log must say nothing rather than guess
+        sent.clear()
+        mgr.turtle_cooldowns = {}
+        async def dead(from_ts=None, to_ts=None, sort=None):
+            return None
+        wars_mod.fetch_faction_attacks = dead
+        asyncio.run(mgr.check_turtle_alerts())
+        assert sent == [], 'an outage is not evidence that nobody is being farmed'
+    finally:
+        (wars_mod.fetch_faction_attacks, wars_mod.fetch_faction_data,
+         wars_mod.save_json) = orig
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -2497,6 +2623,8 @@ if __name__ == '__main__':
     test_fly_auto_starts_but_never_overrides_a_manual_toggle_off()
     test_fly_auto_start_retries_when_enable_fails()
     test_poll_roster_names_who_picked_each_block()
+    test_oc_check_skipped_when_no_slots_were_open()
+    test_turtle_alert_fires_only_for_exposed_members()
     test_war_report_counts_hits_taken_from_attack_log()
     test_activity_profile_chunk_detection()
     test_activity_profile_manager_queries()

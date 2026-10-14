@@ -444,6 +444,12 @@ async def fetch_faction_crimes():
         - 'completed': bool
         - 'completion_ts': float (Unix timestamp, 0 if active)
         - 'participants': list of torn_id strings
+        - 'open_slots': int, unfilled slots on this crime (v2 only, else 0)
+        - 'difficulty': int OC level, 0 when unknown (v2 only)
+
+        The slot fields exist so callers can tell "did not join an OC" apart
+        from "there was nothing to join". The faction rules only make the first
+        one a strike.
 
         Or None if the API could not be reached at all. That is deliberately
         distinct from [] ("the API answered; there are no crimes"): callers
@@ -481,10 +487,20 @@ async def fetch_faction_crimes():
                 for s in (slots if isinstance(slots, list) else [])
                 if isinstance(s, dict) and isinstance(s.get('user'), dict) and s['user'].get('id')
             ]
+            # Unfilled slots on a crime still open. A crime that has already
+            # executed cannot be joined, so it contributes nothing.
+            open_slots = 0
+            if not completed:
+                open_slots = sum(
+                    1 for s in (slots if isinstance(slots, list) else [])
+                    if isinstance(s, dict) and not s.get('user')
+                )
             normalized.append({
                 'completed': completed,
                 'completion_ts': completion_ts,
                 'participants': participants,
+                'open_slots': open_slots,
+                'difficulty': crime.get('difficulty') or 0,
             })
         if normalized:
             return normalized
@@ -508,6 +524,10 @@ async def fetch_faction_crimes():
                 'completed': bool(time_completed),
                 'completion_ts': float(time_completed) if time_completed else 0.0,
                 'participants': participants,
+                # v1 (OC1) has no slot model, so open slots are unknowable here.
+                # -1 means unknown, which callers must not read as "none open".
+                'open_slots': -1,
+                'difficulty': 0,
             })
 
     if v1_normalized:

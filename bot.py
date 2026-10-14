@@ -224,6 +224,9 @@ async def on_ready():
 
         # Link enemy watchlist to war tracker for auto-clear
         war_tracker.enemy_watchlist = enemy_watchlist
+        # Needed to @-mention a member who is being farmed during a war
+        war_tracker.verification_system = verification_system
+        await war_tracker.load_turtle_alerts()
 
         # Initialize availability polling system
         from config import VERIFIED_ROLE_NAME
@@ -413,6 +416,10 @@ async def war_update_check():
         # ticks while tracking is already on.
         if fly_tracker and war_tracker:
             await fly_tracker.auto_start_for_new_war()
+        # Farming check. Reads one page of the attacks log, so it is cheap
+        # enough to run on the same minute tick as everything else here.
+        if war_tracker:
+            await war_tracker.check_turtle_alerts()
     except Exception as e:
         logger.error(f'Error in war update check: {e}')
 
