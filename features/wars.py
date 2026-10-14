@@ -17,6 +17,8 @@ from utils.helpers import load_json, save_json, create_embed, format_timestamp, 
 from utils.torn_api import fetch_faction_data, fetch_faction_data_v2, fetch_faction_attacks
 from config import (
     WAR_CHANNEL_ID,
+    TURTLE_HIT_THRESHOLD as _TURTLE_HIT_THRESHOLD,
+    TURTLE_WINDOW_MINUTES as _TURTLE_WINDOW_MINUTES,
     WAR_MANAGEMENT_CHANNEL_ID,
     EMBED_COLOR_INFO,
     EMBED_COLOR_SUCCESS,
@@ -49,8 +51,8 @@ logger = logging.getLogger(__name__)
 #   5 hits in 60min ->   1.0/day, 2 members (too narrow to help)
 # 4-in-60 subsumes a 3-in-30 burst a little later, and catches twice as many
 # people as 3-in-30 for noise that is still well under one an hour.
-TURTLE_WINDOW_SECONDS = 3600
-TURTLE_HIT_THRESHOLD = 4
+TURTLE_WINDOW_SECONDS = _TURTLE_WINDOW_MINUTES * 60
+TURTLE_HIT_THRESHOLD = _TURTLE_HIT_THRESHOLD
 TURTLE_COOLDOWN_SECONDS = 3600
 
 # States where a member cannot be attacked at all. Everything else counts as
@@ -638,7 +640,7 @@ class WarTracker:
             Dict of {user_id: {'war_hits': N, 'outside_hits': N, 'total_incoming': N,
                                'war_incoming': N, 'outside_incoming': N,
                                'hosps_given': N, 'hosps_received': N,
-                               'mugs_given': N}},
+                               'mugs_given': N, 'mugs_outside': N}},
             or None if the attacks log could not be read in full. Callers must
             branch on None rather than render the zeros it would otherwise
             imply.
@@ -654,7 +656,8 @@ class WarTracker:
                 stats[uid] = {
                     'war_hits': 0, 'outside_hits': 0, 'chain_outside_hits': 0,
                     'total_incoming': 0, 'war_incoming': 0, 'outside_incoming': 0,
-                    'hosps_given': 0, 'hosps_received': 0, 'mugs_given': 0,
+                    'hosps_given': 0, 'hosps_received': 0,
+                    'mugs_given': 0, 'mugs_outside': 0,
                 }
 
         try:
@@ -732,6 +735,12 @@ class WarTracker:
                             stats[attacker_id]['mugs_given'] += 1
                     else:
                         stats[attacker_id]['outside_hits'] += 1
+                        # Mugging a non-enemy during a war still costs 25% of
+                        # the respect the chain would have earned, so it is
+                        # tracked too - just reported apart from mugging the
+                        # opponent, which is the explicit war rule.
+                        if result == 'Mugged':
+                            stats[attacker_id]['mugs_outside'] += 1
                         # Count chain outside hit if this attack fell within a chain >= 10
                         ts = attack.get('timestamp_started', 0)
                         if _in_chain(ts):
@@ -1376,6 +1385,7 @@ class WarTracker:
                 'incoming': incoming,
                 'outside_incoming': outside_incoming,
                 'mugs': log_stats.get('mugs_given', 0),
+                'mugs_outside': log_stats.get('mugs_outside', 0),
                 'score': score
             })
 
@@ -1466,11 +1476,18 @@ class WarTracker:
         # rules forgive one that was returned and owned up to, and it cannot see
         # whether someone posted a notice. Management decides; this just means
         # nobody has to read 1,800 attack rows to find the candidates.
-        muggers = [m for m in member_stats if m.get('mugs')]
+        muggers = [m for m in member_stats if m.get('mugs') or m.get('mugs_outside')]
         if muggers:
-            mug_lines = [f'- **{m["name"]}** mugged {m["mugs"]}x '
-                         f'(rule is Leave, not mug)' for m in
-                         sorted(muggers, key=lambda x: -x['mugs'])[:15]]
+            mug_lines = []
+            for m in sorted(muggers, key=lambda x: -(x['mugs'] * 10 + x['mugs_outside']))[:15]:
+                bits = []
+                if m['mugs']:
+                    bits.append(f'**{m["mugs"]}x on the opponent**')
+                if m['mugs_outside']:
+                    bits.append(f'{m["mugs_outside"]}x outside')
+                mug_lines.append(f'- **{m["name"]}** mugged ' + ', '.join(bits))
+            mug_lines.append('-# Opponent mugs break the war rule (Leave, not mug). '
+                             'Outside mugs cost 25% of the chain respect.')
             if len(embed.fields) >= 24:
                 embeds.append(embed)
                 embed = create_embed(title='⚔️ Report (continued)', color=color)

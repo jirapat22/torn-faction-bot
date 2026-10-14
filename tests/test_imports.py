@@ -2590,6 +2590,88 @@ def test_turtle_alert_fires_only_for_exposed_members():
          wars_mod.save_json) = orig
 
 
+def test_only_recruiting_oc_slots_count_as_joinable():
+    """
+    "Unfilled" is not "joinable". Measured live, the faction had 16 empty slots
+    on Recruiting crimes and 9 more on EXPIRED ones that nobody can ever join.
+    Counting the expired 9 would keep the OC check running while there was
+    genuinely nothing to join, which is the exact unfairness the check exists
+    to avoid.
+    """
+    import asyncio
+    import utils.torn_api as api
+
+    payload = {'crimes': [
+        {'status': 'Recruiting', 'executed_at': None, 'difficulty': 2,
+         'slots': [{'user': {'id': 1}}, {'user': None}, {'user': None}]},
+        {'status': 'Expired', 'executed_at': None, 'difficulty': 3,
+         'slots': [{'user': None}, {'user': None}]},
+        {'status': 'Planning', 'executed_at': None, 'difficulty': 4,
+         'slots': [{'user': {'id': 2}}, {'user': {'id': 3}}]},
+    ]}
+
+    async def fake(selections='crimes', path_id=None):
+        return payload
+    orig = api.fetch_faction_data_v2
+    api.fetch_faction_data_v2 = fake
+    try:
+        crimes = asyncio.run(api.fetch_faction_crimes())
+        by_status = {c['status']: c for c in crimes}
+        assert by_status['Recruiting']['open_slots'] == 2
+        assert by_status['Expired']['open_slots'] == 0,             'an expired crime cannot be joined, so its empty slots are not open'
+        assert by_status['Planning']['open_slots'] == 0, 'planning crimes are full'
+        assert sum(c['open_slots'] for c in crimes) == 2
+    finally:
+        api.fetch_faction_data_v2 = orig
+
+
+def test_war_report_separates_opponent_mugs_from_outside_mugs():
+    """
+    Mugging the opponent breaks the explicit war rule (Leave, not mug).
+    Mugging a random outsider during the war is a different thing: it still
+    costs 25% of the chain respect, but it is not the war rule. Reporting them
+    as one number would either overstate the rule break or hide it.
+    """
+    import asyncio
+    from features.wars import WarTracker
+    import utils.torn_api as torn_api_mod
+    from config import TORN_FACTION_ID
+
+    mgr = WarTracker(bot=None)
+
+    async def fake_members():
+        return {'111': {'name': 'Mugger'}, '222': {'name': 'Clean'}}
+    orig = torn_api_mod.fetch_faction_members
+    torn_api_mod.fetch_faction_members = fake_members
+
+    final_data = {
+        'war_id': 1,
+        'factions': {
+            str(TORN_FACTION_ID): {'name': 'Us', 'score': 10,
+                                   'members': {'111': {'attacks': 9, 'score': 5.0},
+                                               '222': {'attacks': 4, 'score': 2.0}}},
+            '999': {'name': 'Them', 'score': 5, 'members': {}},
+        },
+    }
+    attack_stats = {
+        '111': {'war_incoming': 1, 'outside_incoming': 0,
+                'mugs_given': 3, 'mugs_outside': 7},
+        '222': {'war_incoming': 0, 'outside_incoming': 0,
+                'mugs_given': 0, 'mugs_outside': 0},
+        '_friendly_hosps': [],
+    }
+    try:
+        res = asyncio.run(mgr.format_war_management_report(
+            None, final_data=final_data, attack_stats=attack_stats))
+        fields = {f.name: f.value for f in res[0].fields}
+        check = next(v for k, v in fields.items() if 'To check' in k)
+        assert '3x on the opponent' in check, check
+        assert '7x outside' in check, check
+        assert 'Clean' not in check, 'nobody clean should appear'
+    finally:
+        torn_api_mod.fetch_faction_members = orig
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -2625,6 +2707,8 @@ if __name__ == '__main__':
     test_poll_roster_names_who_picked_each_block()
     test_oc_check_skipped_when_no_slots_were_open()
     test_turtle_alert_fires_only_for_exposed_members()
+    test_only_recruiting_oc_slots_count_as_joinable()
+    test_war_report_separates_opponent_mugs_from_outside_mugs()
     test_war_report_counts_hits_taken_from_attack_log()
     test_activity_profile_chunk_detection()
     test_activity_profile_manager_queries()

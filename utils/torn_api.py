@@ -444,7 +444,9 @@ async def fetch_faction_crimes():
         - 'completed': bool
         - 'completion_ts': float (Unix timestamp, 0 if active)
         - 'participants': list of torn_id strings
-        - 'open_slots': int, unfilled slots on this crime (v2 only, else 0)
+        - 'open_slots': int, slots a member could actually JOIN right now
+          (v2 only; -1 when the source cannot say, which is not the same as 0)
+        - 'status': str, raw v2 status, '' when unknown
         - 'difficulty': int OC level, 0 when unknown (v2 only)
 
         The slot fields exist so callers can tell "did not join an OC" apart
@@ -487,10 +489,16 @@ async def fetch_faction_crimes():
                 for s in (slots if isinstance(slots, list) else [])
                 if isinstance(s, dict) and isinstance(s.get('user'), dict) and s['user'].get('id')
             ]
-            # Unfilled slots on a crime still open. A crime that has already
-            # executed cannot be joined, so it contributes nothing.
+            # Slots a member could actually join. "Unfilled" is not the same
+            # as "joinable": measured live, the faction had 16 empty slots on
+            # Recruiting crimes and another 9 on EXPIRED ones that nobody can
+            # ever join. Counting those 9 would keep the OC check running when
+            # there was genuinely nothing to join.
+            # Planning crimes are full and counting down, Successful/Failure
+            # are done, Expired are dead. Only Recruiting accepts members.
+            status = crime.get('status') or ''
             open_slots = 0
-            if not completed:
+            if not completed and status == 'Recruiting':
                 open_slots = sum(
                     1 for s in (slots if isinstance(slots, list) else [])
                     if isinstance(s, dict) and not s.get('user')
@@ -500,6 +508,7 @@ async def fetch_faction_crimes():
                 'completion_ts': completion_ts,
                 'participants': participants,
                 'open_slots': open_slots,
+                'status': status,
                 'difficulty': crime.get('difficulty') or 0,
             })
         if normalized:
@@ -527,6 +536,7 @@ async def fetch_faction_crimes():
                 # v1 (OC1) has no slot model, so open slots are unknowable here.
                 # -1 means unknown, which callers must not read as "none open".
                 'open_slots': -1,
+                'status': '',
                 'difficulty': 0,
             })
 

@@ -91,6 +91,13 @@ VERIFIED_ROLE_NAME = os.getenv("VERIFIED_ROLE_NAME", "Ascended punks")
 # Channel ID for availability polls (0 = use command channel)
 AVAILABILITY_CHANNEL_ID = int(os.getenv("AVAILABILITY_CHANNEL_ID", "0"))
 
+# ===== TURTLE ALERTS =====
+# Tunable without a deploy, because the right value is a judgement call about
+# noise. Defaults are measured against war 50338: 4-in-60 gave 12 alerts/day
+# covering 16 members, where 2-in-30 would have given 128/day for 33 of 35.
+TURTLE_HIT_THRESHOLD = int(os.getenv("TURTLE_HIT_THRESHOLD", "4"))
+TURTLE_WINDOW_MINUTES = int(os.getenv("TURTLE_WINDOW_MINUTES", "60"))
+
 # ===== API RATE LIMITING =====
 # Torn API rate limit settings
 TORN_API_CACHE_SECONDS = int(os.getenv("TORN_API_CACHE_SECONDS", "30"))
