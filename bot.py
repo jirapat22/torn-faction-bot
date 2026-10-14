@@ -28,7 +28,6 @@ from features.enemies import EnemyWatchlist, setup_enemy_commands
 from features.availability import AvailabilityManager, setup_availability_commands, restore_availability_views
 from features.event_reminders import EventReminderManager
 from features.stakeout import StakeoutManager, setup_stakeout_commands
-from features.alliance import AllianceManager, setup_alliance_commands
 from features.flytrack import FlyTracker
 from features.commands import setup_commands
 from features.faction import setup_faction_commands
@@ -86,7 +85,6 @@ enemy_watchlist = None
 availability_manager = None
 event_reminder_manager = None
 stakeout_manager = None
-alliance_manager = None
 fly_tracker = None
 _initialized = False  # Prevent re-initialization on reconnect
 
@@ -118,7 +116,7 @@ async def _start_healthcheck_server():
         loops = [
             daily_inactivity_check, chain_update_check, war_update_check,
             role_sync_check, enemy_status_check, event_reminder_check,
-            stakeout_check, alliance_war_check, fly_check, poll_end_check,
+            stakeout_check, fly_check, poll_end_check,
         ]
         all_running = bot.is_ready() and all(loop.is_running() for loop in loops)
         body = {
@@ -145,7 +143,7 @@ async def on_ready():
     """Called when the bot successfully connects to Discord"""
     global inactivity_tracker, chain_tracker, war_tracker, verification_system
     global role_sync_manager, activity_profile_manager, enemy_watchlist, availability_manager
-    global event_reminder_manager, stakeout_manager, alliance_manager, fly_tracker, _initialized
+    global event_reminder_manager, stakeout_manager, fly_tracker, _initialized
 
     try:
         logger.info(f'Bot logged in as {bot.user.name} (ID: {bot.user.id})')
@@ -249,11 +247,6 @@ async def on_ready():
         # Register the fully-assembled /enemy group (watchlist + stakeout)
         bot.tree.add_command(enemy_group)
 
-        # Initialize alliance manager (ally faction war tracking)
-        alliance_manager = AllianceManager(bot)
-        await alliance_manager.load_data()
-        await setup_alliance_commands(bot, alliance_manager)
-
         # Initialize fly tracker (enemy flight tracking during ranked war)
         fly_tracker = FlyTracker(bot, war_tracker=war_tracker)
         # Needed to turn a Torn id into a Discord mention when warning a member
@@ -271,7 +264,6 @@ async def on_ready():
             role_sync_manager=role_sync_manager,
             enemy_watchlist=enemy_watchlist,
             stakeout_manager=stakeout_manager,
-            alliance_manager=alliance_manager,
             fly_tracker=fly_tracker
         )
 
@@ -313,9 +305,6 @@ async def on_ready():
 
         if not stakeout_check.is_running():
             stakeout_check.start()
-
-        if not alliance_war_check.is_running():
-            alliance_war_check.start()
 
         if not fly_check.is_running():
             fly_check.start()
@@ -513,23 +502,6 @@ async def before_stakeout_check():
     logger.info('Stakeout checker started (checks every 15 minutes)')
 
 
-@tasks.loop(minutes=5)
-async def alliance_war_check():
-    """Background task that runs every 5 minutes to check ally faction wars"""
-    try:
-        if alliance_manager and alliance_manager.get_ally_count() > 0:
-            await alliance_manager.check_ally_wars()
-    except Exception as e:
-        logger.error(f'Error in alliance war check: {e}')
-
-
-@alliance_war_check.before_loop
-async def before_alliance_war_check():
-    """Wait until bot is ready before starting alliance war check"""
-    await bot.wait_until_ready()
-    logger.info('Alliance war checker started (checks every 5 minutes)')
-
-
 @tasks.loop(seconds=60)
 async def fly_check():
     """Background task that runs every 60 seconds to track enemy flights during war"""
@@ -575,7 +547,6 @@ async def loop_watchdog():
         'enemy_status_check': enemy_status_check,
         'event_reminder_check': event_reminder_check,
         'stakeout_check': stakeout_check,
-        'alliance_war_check': alliance_war_check,
         'fly_check': fly_check,
         'poll_end_check': poll_end_check,
     }

@@ -17,7 +17,6 @@ on Railway.
 | `event_reminder_check` | 1h | 35h reminders for Discord events + Torn calendar events; surfaces new in-game faction newsletters |
 | `enemy_status_check` | 15m | Enemy watchlist status (during war) |
 | `stakeout_check` | 15m | Enemy behavior/sleep-pattern tracking |
-| `alliance_war_check` | 5m | Ally-faction war alerts |
 | `role_sync_check` | 1h | Sync Discord roles to Torn faction positions; also records an activity-profile snapshot (when/how often each member is typically online) from the same faction fetch |
 | `fly_check` | 60s | Enemy flight tracking during war (while toggled on) |
 | `poll_end_check` | 1m | Auto-close availability polls and post results |
@@ -33,7 +32,6 @@ on Railway.
 - `/avail` — availability polls (setup ⚙ / summary / mine / list / delete ⚙), plus coverage ⚙ (best time to schedule + quiet hours) and activity ⚙ (who's typically online when, roster-wide or per member); `/tct_now` — current Torn time
 - `/enemy` ⚙ — war enemy watchlist
 - `/stakeout` ⚙ — enemy behavior tracking
-- `/alliance` ⚙ — ally faction war tracking
 - `/announce` ⚙, `/createevent` ⚙ — announcements + Discord scheduled events
 - `/test` ⚙ — manually trigger a background feature check
 
@@ -78,7 +76,7 @@ Railway service's Variables tab. A `PORT`-bound healthcheck endpoint reports
 **Channels** (IDs): `INACTIVITY_ALERTS_CHANNEL_ID`, `ANNOUNCEMENTS_CHANNEL_ID`,
 `WAR_CHANNEL_ID`, `WAR_MANAGEMENT_CHANNEL_ID`, `CHAINING_CHANNEL_ID`,
 `HAPPY_JUMP_CHANNEL_ID`, `GENERAL_CHANNEL_ID`, `EVENT_POSTING_CHANNEL_ID`,
-`ALLIANCE_CHANNEL_ID`, `WELCOME_CHANNEL_ID`, `RULES_CHANNEL_ID`,
+`WELCOME_CHANNEL_ID`, `RULES_CHANNEL_ID`,
 `WAR_TRACKER_CHANNEL_ID` (enemy flight alerts).
 
 **Optional / tunables:** `TORN_PERSONAL_API_KEY`, `FFSCOUTER_API_KEY`,

@@ -35,7 +35,6 @@ WELCOME_CHANNEL_ID = int(os.getenv("WELCOME_CHANNEL_ID", "0"))  # welcome-pit ch
 RULES_CHANNEL_ID = int(os.getenv("RULES_CHANNEL_ID", "0"))  # faction-edicts
 GENERAL_CHANNEL_ID = int(os.getenv("GENERAL_CHANNEL_ID", "0"))  # punk-plaza
 EVENT_POSTING_CHANNEL_ID = int(os.getenv("EVENT_POSTING_CHANNEL_ID") or 0)  # event-posting (blank = unset)
-ALLIANCE_CHANNEL_ID = int(os.getenv("ALLIANCE_CHANNEL_ID", "0"))  # ally faction war alerts
 WAR_TRACKER_CHANNEL_ID = int(os.getenv("WAR_TRACKER_CHANNEL_ID", "1530733433721192498"))  # enemy flight alerts
 
 # ===== TORN API SETTINGS =====

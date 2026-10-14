@@ -7,7 +7,7 @@ A Discord bot for a Torn.com faction (Ascended Punks), deployed on Railway. `dis
 ## Commands
 
 ```bash
-py -3 -m pytest -q tests/          # full suite (60 tests) — use this
+py -3 -m pytest -q tests/          # full suite (59 tests) — use this
 py -3 -m pytest -q tests/test_imports.py::test_flytrack_logic   # single test
 py -3 tests/test_imports.py        # runs test_imports.py ONLY, see note below
 py -3 bot.py                       # run locally (needs .env)
@@ -41,7 +41,7 @@ If the CLI returns `Unauthorized`, it needs `railway login --browserless` run by
 
 ### bot.py is an orchestrator, not logic
 
-Each feature is a manager class owning its own state and JSON file. `bot.py` constructs all 12 in `on_ready()`, wires them together, then starts one `@tasks.loop` per feature. Feature modules hold the logic; `bot.py` holds the schedule.
+Each feature is a manager class owning its own state and JSON file. `bot.py` constructs all 11 in `on_ready()`, wires them together, then starts one `@tasks.loop` per feature. Feature modules hold the logic; `bot.py` holds the schedule.
 
 Three managers are cross-wired by hand after construction, and the order matters because later ones reference earlier ones:
 

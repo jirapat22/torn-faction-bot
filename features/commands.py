@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracker=None, verification_system=None,
                          event_reminder_manager=None, role_sync_manager=None,
-                         enemy_watchlist=None, stakeout_manager=None, alliance_manager=None,
+                         enemy_watchlist=None, stakeout_manager=None,
                          fly_tracker=None):
     """
     Register all slash commands with the bot
@@ -180,7 +180,7 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
                         '`/faction compare|stats <id>` - Compare / analyse a faction\n'
                         '`/enemy watchlist` - War enemy watchlist\n'
                         '`/enemy stakeout` - Track enemy activity / behavior\n'
-                        '`/alliance` - Ally faction war tracking'
+                        ''
                     ),
                     'inline': False,
                 },
@@ -569,7 +569,6 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
         app_commands.Choice(name='Role sync', value='rolesync'),
         app_commands.Choice(name='Enemy watchlist', value='enemies'),
         app_commands.Choice(name='Stakeout check', value='stakeout'),
-        app_commands.Choice(name='Alliance war check', value='alliance'),
     ])
     async def test_feature(interaction: discord.Interaction, feature: str):
         """Manually trigger a background feature for testing (Management only)"""
@@ -588,7 +587,6 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
             'rolesync':   'Role Sync',
             'enemies':    'Enemy Watchlist',
             'stakeout':   'Stakeout Check',
-            'alliance':   'Alliance War Check',
         }
         label = label_map.get(feature, feature)
 
@@ -699,19 +697,6 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
                     color = EMBED_COLOR_SUCCESS
                 else:
                     note = 'Stakeout manager not available.'
-                    color = EMBED_COLOR_WARNING
-
-            elif feature == 'alliance':
-                if alliance_manager:
-                    count = alliance_manager.get_ally_count()
-                    if count > 0:
-                        await alliance_manager.check_ally_wars()
-                        note = f'Checked **{count}** allied faction(s). Any war updates posted to their channel.'
-                    else:
-                        note = 'No allied factions configured.'
-                    color = EMBED_COLOR_SUCCESS
-                else:
-                    note = 'Alliance manager not available.'
                     color = EMBED_COLOR_WARNING
 
             else:
