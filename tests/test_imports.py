@@ -2868,6 +2868,60 @@ def test_bonus_hit_on_a_non_enemy_is_flagged_but_only_when_it_really_was_one():
                for k, v in stats.items())
 
 
+def test_bonus_hit_field_stays_inside_the_discord_limit():
+    """
+    The bonus-hit lines carry two player names and a faction name, so a dozen
+    of them measured 1198 characters against Discord's 1024-char field limit.
+    An over-long field does not get truncated by Discord, it REJECTS the whole
+    embed - which would lose the entire strike report, mugs and absences
+    included, in exactly the war that needed it.
+
+    So the rows are budgeted by length, and the overflow is counted instead.
+    """
+    import asyncio
+    from features.wars import WarTracker
+    import utils.torn_api as torn_api_mod
+    from config import TORN_FACTION_ID
+
+    sent = []
+
+    class FakeChannel:
+        async def send(self, **kw):
+            sent.append(kw.get('embed'))
+
+    class FakeBot:
+        def get_channel(self, _):
+            return FakeChannel()
+
+    mgr = WarTracker(bot=FakeBot())
+    mgr.war_offline = {}
+
+    # 30 bonus hits, every name as long as Torn allows, to push the field past
+    # the limit if nothing is budgeting it.
+    n = 30
+    roster = {str(500 + i): {'name': f'ballcrusher30{i:02d}XX'} for i in range(n)}
+    bonus = [{'attacker_id': str(500 + i), 'chain': 1000,
+              'defender_name': 'SomeLongTargetName',
+              'defender_faction': 'Kentucky Fried Criminals'} for i in range(n)]
+
+    async def fake_members():
+        return roster
+    orig = torn_api_mod.fetch_faction_members
+    torn_api_mod.fetch_faction_members = fake_members
+    try:
+        asyncio.run(mgr.post_strike_candidates(
+            '777', {'_bonus_outside': bonus, '_friendly_hosps': []},
+            {str(TORN_FACTION_ID): {'members': {}}}))
+        assert len(sent) == 1, 'the embed must still be built and sent'
+        field = next(f for f in sent[0].fields if 'Bonus hit' in f.name)
+        assert len(field.value) <= 1024, (
+            f'field is {len(field.value)} chars, Discord rejects over 1024')
+        assert 'ballcrusher3000XX' in field.value, 'must still name the first few'
+        assert 'more' in field.value, 'the ones it dropped must still be counted'
+    finally:
+        torn_api_mod.fetch_faction_members = orig
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -2907,6 +2961,7 @@ if __name__ == '__main__':
     test_chain_break_warning_gates_on_size_and_cooldown()
     test_strike_candidates_separate_certain_from_askable()
     test_bonus_hit_on_a_non_enemy_is_flagged_but_only_when_it_really_was_one()
+    test_bonus_hit_field_stays_inside_the_discord_limit()
     test_war_report_counts_hits_taken_from_attack_log()
     test_activity_profile_chunk_detection()
     test_activity_profile_manager_queries()

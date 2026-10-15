@@ -2045,19 +2045,34 @@ class WarTracker:
             # Named individually rather than counted: the chain number and the
             # target are exactly what makes this checkable against the call-outs
             # in the chain channel.
-            lines = []
-            for b in bonus_hits[:12]:
+            #
+            # Budgeted by LENGTH, not by a fixed row count. These lines carry two
+            # names and a faction name, so a dozen of them can pass Discord's
+            # 1024-char field limit (measured worst case: 1198). An over-long
+            # field does not truncate, it rejects the whole embed - which would
+            # lose the entire strike report, mugs and absences included, for the
+            # one war it was needed.
+            foot = ('\n-# That respect did not count toward the war score. '
+                    'Bonus hits must be called first and land on an enemy.')
+            budget = 1024 - len(foot)
+            lines, used, shown = [], 0, 0
+            for b in bonus_hits:
                 target = b.get('defender_name') or 'unknown'
                 fac = b.get('defender_faction') or 'no faction'
-                lines.append(f"- **{name_of(b.get('attacker_id'))}** took chain "
-                             f"**{b.get('chain')}** on {target} ({fac})")
-            if len(bonus_hits) > 12:
-                lines.append(f'- ...and {len(bonus_hits) - 12} more')
+                line = (f"- **{name_of(b.get('attacker_id'))}** took chain "
+                        f"**{b.get('chain')}** on {target} ({fac})")
+                # Always leave room for the "and N more" line that may follow.
+                more = f'- ...and {len(bonus_hits) - shown} more'
+                if used + len(line) + 1 + len(more) + 1 > budget:
+                    break
+                lines.append(line)
+                used += len(line) + 1
+                shown += 1
+            if shown < len(bonus_hits):
+                lines.append(f'- ...and {len(bonus_hits) - shown} more')
             embed.add_field(
                 name='\U0001f534 Bonus hit on a non-enemy (strike)',
-                value='\n'.join(lines)
-                      + '\n-# That respect did not count toward the war score. '
-                        'Bonus hits must be called first and land on an enemy.',
+                value='\n'.join(lines) + foot,
                 inline=False)
         if absent:
             embed.add_field(
