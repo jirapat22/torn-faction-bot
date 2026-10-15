@@ -3161,8 +3161,10 @@ def test_revive_check_posts_once_per_checkpoint_and_retries_on_failure():
     Two things a scheduled pre-war post must not do: fire twice, or quietly
     give up.
 
-    If a restart lands past BOTH checkpoints, every one already passed is
-    marked on the first post, or the 48h and 6h messages land a minute apart.
+    Every checkpoint already passed is marked on the first post, not just the
+    one that fired. There is only one checkpoint today (6h), so this cannot
+    bite right now - it is here so that adding a second one back does not
+    quietly produce two messages a minute apart.
     And if the roster was unreadable the checkpoint stays open, so the check
     retries next tick instead of being silently consumed.
     """

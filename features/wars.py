@@ -81,11 +81,13 @@ CHAIN_BONUS_MODIFIER_FLOOR = 2
 # from "Friends & faction", but neither of those is "Nobody", which is what the
 # rule asks for.
 #
-# Seconds before war start to post the check. Two passes: one with the
-# availability poll so people have time to act, one close enough to the start
-# that it is the last word. Costs one profile call per member per pass, so it
-# must stay a handful of passes and never a loop.
-REVIVE_CHECK_CHECKPOINTS = (48 * 3600, 6 * 3600)
+# Seconds before war start to post the check. ONE pass, close enough to the
+# start that it is the last word and people still have time to act on it.
+# Deliberately not a second pass two days out: the availability poll already
+# carries the reminder in text, and naming and tagging people that early just
+# means doing it twice. Costs one profile call per member, so it must stay a
+# single pass and never a loop.
+REVIVE_CHECK_CHECKPOINTS = (6 * 3600,)
 
 TURTLE_WINDOW_SECONDS = _TURTLE_WINDOW_MINUTES * 60
 TURTLE_HIT_THRESHOLD = _TURTLE_HIT_THRESHOLD
@@ -2262,7 +2264,7 @@ class WarTracker:
             return
 
         hours = min(passed) // 3600
-        label = f'{hours // 24} days out' if hours >= 48 else f'{hours}h before the war'
+        label = f'{hours}h before the war'
         try:
             sent = await self.post_revive_check(channel, label)
         except Exception as e:

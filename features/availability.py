@@ -539,6 +539,10 @@ class AvailabilityManager:
                 f'Times show in **your** local time, with TCT in brackets.\n\n'
                 f'Posting here is what exempts you. Being offline during a war '
                 f'without it is a strike. Say so even if the answer is "barely on".\n\n'
+                f'\U0001fa78 **Set your revives to "nobody"** before the war '
+                f'starts and leave them off for the whole war. A revived '
+                f'member goes straight back to being farmed. The bot posts who '
+                f'still has them on 6 hours before the start.\n\n'
                 f'\u23f3 **Poll closes when the war starts:** <t:{war_start}:R>\n\n'
                 f'**Time Blocks:**\n' + '\n'.join(block_list)
             ),
