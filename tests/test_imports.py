@@ -2781,6 +2781,93 @@ def test_strike_candidates_separate_certain_from_askable():
         torn_api_mod.fetch_faction_members = orig
 
 
+def test_bonus_hit_on_a_non_enemy_is_flagged_but_only_when_it_really_was_one():
+    """
+    "A bonus hit on an outside target during a war = 1 strike" (war guide).
+
+    This is an accusation, so the discrimination matters more than the catch.
+    Measured against 2,827 live attacks before writing it:
+      - chain position is on every record, and only SUCCESSFUL hits carry one
+        (every Lost/Stalemate/Escape/Interrupted/Timeout record had chain=0)
+      - modifiers.chain_bonus is the ordinary multiplier (1.0-1.74 observed)
+        EXCEPT on a bonus hit, where it is the flat bonus itself (10/20/40/80)
+      - one Arrested record carried chain_bonus=10 with chain=0, which is why
+        the chain position gates the check and the modifier only corroborates
+    """
+    import asyncio
+    from features.wars import WarTracker
+    import features.wars as wars_mod
+    from config import TORN_FACTION_ID
+
+    # The suite pins TORN_FACTION_ID to '1' (see top of this file), so "ours"
+    # has to come from config, not a literal.
+    OURS, ENEMY = str(TORN_FACTION_ID), '53421'
+
+    def hit(aid, chain, bonus, deffac, result='Attacked', defid='999'):
+        a = {
+            'attacker_id': aid, 'attacker_faction': OURS,
+            'attacker_name': f'M{aid}',
+            'defender_id': defid, 'defender_faction': deffac,
+            'defender_name': f'T{defid}', 'defender_factionname': 'Somebody',
+            'result': result, 'timestamp_started': 1000, 'timestamp_ended': 1001,
+            'chain': chain,
+        }
+        if bonus is not None:
+            a['modifiers'] = {'chain_bonus': bonus, 'war': 1}
+        return a
+
+    attacks = {
+        # --- should be flagged ---
+        '1': hit('100', 25, 20, 0),          # bonus on a no-faction random
+        '2': hit('101', 10, 10, '99999'),    # bonus on some other faction
+        '3': hit('102', 50, 40, OURS),       # bonus burned on a faction mate
+        '4': hit('103', 100, None, 0),       # modifier field gone -> still flag
+        # --- should NOT be flagged ---
+        '5': hit('200', 25, 20, ENEMY),      # bonus on the enemy: correct play
+        '6': hit('201', 24, 1.4, 0),         # not a milestone position
+        '7': hit('202', 50, 1.5, 0),         # milestone position, NOT the bonus
+        '8': hit('203', 10, 10, 0, result='Lost'),   # failed attack
+        '9': hit('204', 0, 10, 0),           # the Arrested-shaped anomaly
+    }
+
+    mgr = WarTracker(bot=None)
+
+    async def fake_fetch(from_ts=None, to_ts=None, sort=None):
+        return attacks if (from_ts or 0) <= 1000 else {}
+
+    async def fake_faction_data(selection, *a, **k):
+        return {'chains': {}}  # no chain windows needed for this check
+
+    orig_fetch = wars_mod.fetch_faction_attacks
+    orig_data = wars_mod.fetch_faction_data
+    wars_mod.fetch_faction_attacks = fake_fetch
+    wars_mod.fetch_faction_data = fake_faction_data
+    try:
+        stats = asyncio.run(mgr._get_war_attack_stats(ENEMY, 1000, 2000))
+    finally:
+        wars_mod.fetch_faction_attacks = orig_fetch
+        wars_mod.fetch_faction_data = orig_data
+
+    assert stats is not None, 'readable log must not report unknown'
+
+    flagged = {b['attacker_id'] for b in stats['_bonus_outside']}
+    assert flagged == {'100', '101', '102', '103'}, (
+        f'wrong set flagged: {sorted(flagged)}')
+
+    for uid in ('200', '201', '202', '203', '204'):
+        assert stats.get(uid, {}).get('bonus_outside', 0) == 0, (
+            f'{uid} must not be flagged')
+
+    # the record has to carry what makes it checkable
+    rec = next(b for b in stats['_bonus_outside'] if b['attacker_id'] == '100')
+    assert rec['chain'] == 25 and rec['defender_name'] == 'T999', rec
+
+    # the event log must not leak into per-member iteration
+    assert isinstance(stats['_bonus_outside'], list)
+    assert all(k.startswith('_') or isinstance(v, dict)
+               for k, v in stats.items())
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -2819,6 +2906,7 @@ if __name__ == '__main__':
     test_war_report_separates_opponent_mugs_from_outside_mugs()
     test_chain_break_warning_gates_on_size_and_cooldown()
     test_strike_candidates_separate_certain_from_askable()
+    test_bonus_hit_on_a_non_enemy_is_flagged_but_only_when_it_really_was_one()
     test_war_report_counts_hits_taken_from_attack_log()
     test_activity_profile_chunk_detection()
     test_activity_profile_manager_queries()

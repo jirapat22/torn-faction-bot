@@ -53,6 +53,20 @@ logger = logging.getLogger(__name__)
 #   5 hits in 60min ->   1.0/day, 2 members (too narrow to help)
 # 4-in-60 subsumes a 3-in-30 burst a little later, and catches twice as many
 # people as 3-in-30 for noise that is still well under one an hour.
+# ===== Chain bonus hits =====
+# Chain positions that pay a big FLAT respect bonus, ignoring fair fight, war
+# and chain multipliers. The war guide makes taking one on a non-enemy during
+# a war a strike, because that respect does not count toward the war score.
+CHAIN_BONUS_MILESTONES = frozenset({
+    10, 25, 50, 100, 250, 500, 1000, 2500,
+    5000, 10000, 25000, 50000, 100000,
+})
+# The ordinary chain multiplier caps at x2, so a modifier above that is the
+# flat bonus rather than a multiplier. Measured over 2,827 attacks: normal
+# chain_bonus values ran 1.0-1.74 and bonus hits came back as exactly 10, 20,
+# 40 and 80 (positions 10/25/50/100). Nothing landed between 2 and 10.
+CHAIN_BONUS_MODIFIER_FLOOR = 2
+
 TURTLE_WINDOW_SECONDS = _TURTLE_WINDOW_MINUTES * 60
 TURTLE_HIT_THRESHOLD = _TURTLE_HIT_THRESHOLD
 TURTLE_COOLDOWN_SECONDS = 3600
@@ -655,12 +669,17 @@ class WarTracker:
             or None if the attacks log could not be read in full. Callers must
             branch on None rather than render the zeros it would otherwise
             imply.
+            A "_bonus_outside" key is added at top level with one record per
+            chain bonus hit landed on a non-enemy:
+              [{'timestamp', 'attacker_id', 'attacker_name', 'defender_id',
+                'defender_name', 'defender_faction', 'chain', 'bonus'}, ...]
             A "_friendly_hosps" key is added at top level with the raw event log:
               [{'timestamp', 'attacker_id', 'attacker_name',
                 'defender_id', 'defender_name'}, ...]
         """
         stats = {}
         friendly_hosps = []  # ordered event log
+        bonus_outside = []   # ordered event log of bonus hits on non-enemies
 
         def _ensure(uid):
             if uid not in stats:
@@ -669,6 +688,7 @@ class WarTracker:
                     'total_incoming': 0, 'war_incoming': 0, 'outside_incoming': 0,
                     'hosps_given': 0, 'hosps_received': 0,
                     'mugs_given': 0, 'mugs_outside': 0, 'mugs_faction': 0,
+                    'bonus_outside': 0,
                 }
 
         try:
@@ -710,6 +730,42 @@ class WarTracker:
                 defender_id = str(attack.get('defender_id', 0))
                 defender_faction = str(attack.get('defender_faction', 0))
                 result = attack.get('result', '')
+
+                # ----- Bonus hit on a non-enemy -----
+                # "A bonus hit on an outside target during a war = 1 strike."
+                # Checked HERE, above the friendly-hosp and mug branches, because
+                # those `continue` - and a bonus spent on a faction mate is just
+                # as wasted as one spent on a random, since neither is the enemy.
+                if attacker_faction == our_faction and defender_faction != enemy_faction:
+                    chain_pos = attack.get('chain') or 0
+                    # Only a successful hit advances the chain. Measured over
+                    # 2,827 attacks, every Lost/Stalemate/Escape/Interrupted/
+                    # Timeout record carried chain=0, so this filter is belt and
+                    # braces rather than the thing holding the check up.
+                    if (chain_pos in CHAIN_BONUS_MILESTONES
+                            and result in ('Attacked', 'Mugged', 'Hospitalized', 'Special')):
+                        mods = attack.get('modifiers') or {}
+                        bonus_mod = (mods.get('chain_bonus')
+                                     if isinstance(mods, dict) else None)
+                        # A modifier at or below x2 is positive evidence this was
+                        # NOT the bonus hit, so it is not flagged. A MISSING field
+                        # falls back to the chain position alone: if Torn renames
+                        # the modifier the check should get noisier, never
+                        # silently switch itself off the way `defends` did.
+                        if bonus_mod is None or bonus_mod > CHAIN_BONUS_MODIFIER_FLOOR:
+                            _ensure(attacker_id)
+                            stats[attacker_id]['bonus_outside'] += 1
+                            bonus_outside.append({
+                                'timestamp': (attack.get('timestamp_ended')
+                                              or attack.get('timestamp_started', 0)),
+                                'attacker_id': attacker_id,
+                                'attacker_name': attack.get('attacker_name', ''),
+                                'defender_id': defender_id,
+                                'defender_name': attack.get('defender_name', '') or 'unknown',
+                                'defender_faction': attack.get('defender_factionname', ''),
+                                'chain': chain_pos,
+                                'bonus': bonus_mod,
+                            })
 
                 # Friendly hospitalization — teammate hosps teammate to keep them
                 # safe from enemy attacks. Tracked separately from war/outside hits.
@@ -795,6 +851,7 @@ class WarTracker:
 
         # Attach raw friendly-hosp log under a non-uid key so callers can render it
         stats['_friendly_hosps'] = sorted(friendly_hosps, key=lambda h: h.get('timestamp', 0))
+        stats['_bonus_outside'] = sorted(bonus_outside, key=lambda h: h.get('timestamp', 0))
         return stats
 
     def _chunk_text(self, lines, max_length=1024):
@@ -1905,7 +1962,9 @@ class WarTracker:
         breaks the war rule but the rules forgive one that was returned and
         apologised for, so it has to be asked about first. Being absent is only
         a strike if no notice was posted, and the bot knows the poll but not
-        what was said in chat.
+        what was said in chat. A bonus hit on a non-enemy is stated as a strike
+        because the log settles it completely: the chain position and the
+        target's faction are both in the record, and neither depends on intent.
         """
         channel = self.bot.get_channel(STRIKES_CHANNEL_ID or WAR_MANAGEMENT_CHANNEL_ID) \
             if self.bot else None
@@ -1929,12 +1988,18 @@ class WarTracker:
 
         faction_mugs, opponent_mugs = [], []
         for tid, st in stats.items():
-            if tid == '_friendly_hosps' or not isinstance(st, dict):
+            # Top-level event logs live in this dict under underscore keys
+            # and are lists, not per-member stats.
+            if tid.startswith('_') or not isinstance(st, dict):
                 continue
             if st.get('mugs_faction'):
                 faction_mugs.append((name_of(tid), st['mugs_faction']))
             if st.get('mugs_given'):
                 opponent_mugs.append((name_of(tid), st['mugs_given']))
+
+        # Bonus hits spent on someone who was not the enemy
+        bonus_hits = [b for b in (stats.get('_bonus_outside') or [])
+                      if isinstance(b, dict)]
 
         # Absent too long, and the poll says they never answered
         posted = self._availability_responders(war_id)
@@ -1950,7 +2015,7 @@ class WarTracker:
         no_hits = [name_of(tid) for tid, m in our_members.items()
                    if not m.get('attacks') and str(tid) not in posted]
 
-        if not (faction_mugs or opponent_mugs or absent or no_hits):
+        if not (faction_mugs or opponent_mugs or bonus_hits or absent or no_hits):
             return
 
         embed = create_embed(
@@ -1975,6 +2040,24 @@ class WarTracker:
                                 sorted(opponent_mugs, key=lambda x: -x[1])[:15])
                       + '\n-# Get proof the money went back. If it did and they '
                         'owned up, the rules forgive it.',
+                inline=False)
+        if bonus_hits:
+            # Named individually rather than counted: the chain number and the
+            # target are exactly what makes this checkable against the call-outs
+            # in the chain channel.
+            lines = []
+            for b in bonus_hits[:12]:
+                target = b.get('defender_name') or 'unknown'
+                fac = b.get('defender_faction') or 'no faction'
+                lines.append(f"- **{name_of(b.get('attacker_id'))}** took chain "
+                             f"**{b.get('chain')}** on {target} ({fac})")
+            if len(bonus_hits) > 12:
+                lines.append(f'- ...and {len(bonus_hits) - 12} more')
+            embed.add_field(
+                name='\U0001f534 Bonus hit on a non-enemy (strike)',
+                value='\n'.join(lines)
+                      + '\n-# That respect did not count toward the war score. '
+                        'Bonus hits must be called first and land on an enemy.',
                 inline=False)
         if absent:
             embed.add_field(
