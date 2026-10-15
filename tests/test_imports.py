@@ -3040,6 +3040,68 @@ def test_expired_crime_does_not_count_as_participating():
         'a member in a live Planning crime is genuinely busy')
 
 
+def test_member_with_no_oc_history_is_clocked_from_their_join_date():
+    """
+    A member who has NEVER completed an OC used to be skipped forever: the
+    check needed a last-completion timestamp and there was none, and that
+    never expires. Measured 15/10/2026, two members were invisible this way,
+    one of them 51 days in the faction.
+
+    The clock now falls back to time in the faction MINUS the grace days,
+    because a brand new member cannot do anything in the faction yet. Counting
+    starts the day the grace runs out, not the day they joined - so the grace
+    is a real head start, not just a reporting delay.
+    """
+    import time
+    from features.inactivity import InactivityTracker
+    from config import (OC_NEW_MEMBER_GRACE_DAYS, OC_WARNING_DAYS,
+                        OC_CRITICAL_DAYS)
+
+    g = OC_NEW_MEMBER_GRACE_DAYS
+    now = time.time()
+
+    # Something joinable has to exist or the whole check is skipped by design.
+    crimes = [{'status': 'Recruiting', 'completed': False, 'completion_ts': 0,
+               'participants': [], 'open_slots': 3, 'difficulty': 3}]
+
+    def member(days_in_faction):
+        return {'name': f'N{days_in_faction}', 'level': 7,
+                'days_in_faction': days_in_faction}
+
+    mgr = InactivityTracker(bot=None)
+
+    # Nobody here has any OC history at all.
+    members = {
+        '1': member(g - 1),                       # still inside the grace
+        '2': member(g),                           # grace just ended: 0 days
+        '3': member(g + OC_WARNING_DAYS),         # first day of the nudge
+        '4': member(g + OC_CRITICAL_DAYS),        # first day of strike range
+        '5': member(g + 48),                      # the BunnyBull case
+    }
+    warn, crit, _ = mgr._get_oc_status(members, crimes)
+    warned = {m['torn_name'] for m in warn}
+    critted = {m['torn_name'] for m in crit}
+
+    assert f'N{g - 1}' not in warned | critted, 'inside the grace, untouched'
+    assert f'N{g}' not in warned | critted, (
+        'the grace must be a head start: day 0 of counting, not day 3')
+    assert f'N{g + OC_WARNING_DAYS}' in warned, 'should be nudged'
+    assert f'N{g + OC_CRITICAL_DAYS}' in critted, 'should be strike territory'
+    assert f'N{g + 48}' in critted, 'long-standing member who never joined one'
+
+    # The grace really is subtracted, not just used as a skip.
+    rec = next(m for m in crit if m['torn_name'] == f'N{g + 48}')
+    assert rec['days'] == 48, f"expected 48 days of eligibility, got {rec['days']}"
+    assert rec['never_joined'] is True, 'must be marked so the embed says so'
+    assert rec['last_oc_ts'] is None, 'there is genuinely no last OC'
+
+    # A member WITH history is still clocked from that history, not join date.
+    mgr.last_oc_completion = {'9': now - 1 * 86400}
+    warn2, crit2, _ = mgr._get_oc_status({'9': member(500)}, crimes)
+    assert not warn2 and not crit2, (
+        'one day since a real OC is fine, however long they have been here')
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -3082,6 +3144,7 @@ if __name__ == '__main__':
     test_bonus_hit_field_stays_inside_the_discord_limit()
     test_management_ping_lands_in_the_channel_that_got_the_alert()
     test_expired_crime_does_not_count_as_participating()
+    test_member_with_no_oc_history_is_clocked_from_their_join_date()
     test_war_report_counts_hits_taken_from_attack_log()
     test_activity_profile_chunk_detection()
     test_activity_profile_manager_queries()

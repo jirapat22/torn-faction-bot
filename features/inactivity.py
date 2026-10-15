@@ -261,12 +261,22 @@ class InactivityTracker:
                 continue
 
             last_oc_ts = self.last_oc_completion.get(tid)
-            if last_oc_ts is None:
-                # No accumulated OC history - skip to avoid false positives
-                # (data builds up over time with each daily run)
-                continue
+            never_joined = last_oc_ts is None
+            if never_joined:
+                # No OC on record at all. This used to `continue`, on the
+                # grounds that history builds up over time - but it never
+                # expires, so a member who has genuinely never joined one was
+                # invisible to this check forever. Measured 15/10/2026: two
+                # members, one of them 51 days in the faction.
+                #
+                # The clock falls back to how long they have been in the
+                # faction, less the grace days, because a brand new member
+                # cannot do anything in the faction yet. Counting starts the
+                # day the grace runs out, not the day they joined.
+                days_since = max(0.0, days_in_faction - OC_NEW_MEMBER_GRACE_DAYS)
+            else:
+                days_since = (now - last_oc_ts) / 86400
 
-            days_since = (now - last_oc_ts) / 86400
             if days_since < OC_WARNING_DAYS:
                 continue
 
@@ -276,6 +286,7 @@ class InactivityTracker:
                 'torn_level': member.get('level', '?'),
                 'days': round(days_since, 1),
                 'last_oc_ts': last_oc_ts,
+                'never_joined': never_joined,
             }
 
             if days_since >= OC_CRITICAL_DAYS:
@@ -777,10 +788,16 @@ class InactivityTracker:
                     last_str = format_timestamp(int(last_ts), 'R')
                 else:
                     last_str = 'Never'
+                if data.get('never_joined'):
+                    detail = (f'  never joined an OC · eligible for '
+                              f'{data["days"]:.0f} days')
+                else:
+                    detail = (f'  {data["days"]:.0f} days without OC · '
+                              f'Last OC: {last_str}')
                 lines.append(
                     f'**{data["torn_name"]}** [Lvl {data["torn_level"]}] '
                     f'[profile](<https://www.torn.com/profiles.php?XID={data["torn_id"]}>)\n'
-                    f'  {data["days"]:.0f} days without OC · Last OC: {last_str}'
+                    f'{detail}'
                 )
 
             header = (f'**{len(oc_critical)} member(s)** have not joined an OC for '
@@ -812,10 +829,16 @@ class InactivityTracker:
                     last_str = format_timestamp(int(last_ts), 'R')
                 else:
                     last_str = 'Never'
+                if data.get('never_joined'):
+                    detail = (f'  never joined an OC · eligible for '
+                              f'{data["days"]:.0f} days')
+                else:
+                    detail = (f'  {data["days"]:.0f} days without OC · '
+                              f'Last OC: {last_str}')
                 lines.append(
                     f'**{data["torn_name"]}** [Lvl {data["torn_level"]}] '
                     f'[profile](<https://www.torn.com/profiles.php?XID={data["torn_id"]}>)\n'
-                    f'  {data["days"]:.0f} days without OC · Last OC: {last_str}'
+                    f'{detail}'
                 )
 
             header = (f'**{len(oc_warning)} member(s)** have not joined an OC for '
