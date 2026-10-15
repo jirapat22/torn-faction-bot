@@ -454,7 +454,7 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
                 embed = await war_tracker.format_war_embed(war_info)
                 await interaction.followup.send(embed=embed)
 
-        logger.info('War command registered (/war with status/board/xan/history/trends/fly/flystatus views)')
+        logger.info('War command registered (/war with status/board/xan/history/trends/fly/flystatus/revives views)')
     else:
         logger.warning('war_tracker is None, war command NOT registered')
 
