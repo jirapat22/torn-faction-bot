@@ -225,6 +225,7 @@ async def on_ready():
         # Needed to @-mention a member who is being farmed during a war
         war_tracker.verification_system = verification_system
         await war_tracker.load_turtle_alerts()
+        await war_tracker.load_revive_checks()
 
         # Initialize availability polling system
         from config import VERIFIED_ROLE_NAME
@@ -413,6 +414,11 @@ async def war_update_check():
         # enough to run on the same minute tick as everything else here.
         if war_tracker:
             await war_tracker.check_turtle_alerts()
+        # Pre-war revive check. Reuses the same cached rankedwars fetch, so
+        # quiet ticks cost nothing; the per-member profile calls only happen on
+        # the tick that actually posts, at most twice per war.
+        if war_tracker:
+            await war_tracker.check_revive_status()
     except Exception as e:
         logger.error(f'Error in war update check: {e}')
 

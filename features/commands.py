@@ -353,13 +353,14 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
             app_commands.Choice(name='Trends - Faction W/L record and top contributors (Management)', value='trends'),
             app_commands.Choice(name='Fly - Toggle enemy flight tracking (Management)', value='fly'),
             app_commands.Choice(name='FlyStatus - Who\'s flying/abroad right now', value='flystatus'),
+            app_commands.Choice(name='Revives - Who can still be revived (Management)', value='revives'),
         ])
         async def war(interaction: discord.Interaction, view: app_commands.Choice[str] = None, member: discord.Member = None):
             """Unified war command with multiple views"""
             view_value = view.value if view else 'status'
 
             # Board, xan, history, trends, fly views require management
-            if view_value in ('board', 'xan', 'history', 'trends', 'fly') and not is_management(interaction):
+            if view_value in ('board', 'xan', 'history', 'trends', 'fly', 'revives') and not is_management(interaction):
                 await interaction.response.send_message(
                     embed=create_embed(
                         title='Permission Denied',
@@ -380,6 +381,20 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
                         await interaction.followup.send(embed=embed)
                 else:
                     await interaction.followup.send(embed=embeds)
+
+            elif view_value == 'revives':
+                # One profile call per member, so this is deliberately manual
+                # and management-only rather than something anyone can spam.
+                sent = await war_tracker.post_revive_check(
+                    interaction.channel, 'checked now')
+                if not sent:
+                    await interaction.followup.send(embed=create_embed(
+                        title='Revive check unavailable',
+                        description='Could not read the faction roster, so '
+                                    'nothing is reported. Try again shortly.',
+                        color=EMBED_COLOR_WARNING))
+                else:
+                    await interaction.followup.send('Posted above.', ephemeral=True)
 
             elif view_value == 'xan':
                 war_info = await war_tracker.get_latest_war()

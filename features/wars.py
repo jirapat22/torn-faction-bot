@@ -67,6 +67,26 @@ CHAIN_BONUS_MILESTONES = frozenset({
 # 40 and 80 (positions 10/25/50/100). Nothing landed between 2 and 10.
 CHAIN_BONUS_MODIFIER_FLOOR = 2
 
+# ===== Pre-war revive check =====
+# The war guide tells everyone to set revives to "nobody" for the whole war.
+# A revivable member who gets hospitalised is pulled straight back out and
+# farmed again, which is the bleed the guide calls our biggest problem.
+#
+# Torn exposes this: user/{id}?selections=profile returns `revivable` for OTHER
+# faction members on the faction key. That is unusual - most per-player
+# settings refuse (selections=travel returns error 7 for anyone but the key
+# owner) - so it is worth stating plainly that this one does not.
+#
+# revivable=1 means SOMEBODY can revive them. It cannot tell "Everyone" apart
+# from "Friends & faction", but neither of those is "Nobody", which is what the
+# rule asks for.
+#
+# Seconds before war start to post the check. Two passes: one with the
+# availability poll so people have time to act, one close enough to the start
+# that it is the last word. Costs one profile call per member per pass, so it
+# must stay a handful of passes and never a loop.
+REVIVE_CHECK_CHECKPOINTS = (48 * 3600, 6 * 3600)
+
 TURTLE_WINDOW_SECONDS = _TURTLE_WINDOW_MINUTES * 60
 TURTLE_HIT_THRESHOLD = _TURTLE_HIT_THRESHOLD
 TURTLE_COOLDOWN_SECONDS = 3600
@@ -98,6 +118,9 @@ class WarTracker:
         self.enemy_watchlist = None  # Set by bot.py for auto-clear
         self.pending_wars_file = 'data/pending_wars.json'
         self.turtle_alerts_file = 'data/turtle_alerts.json'
+        self.revive_checks_file = 'data/revive_checks.json'
+        # {war_id: [checkpoint seconds already posted]}
+        self.revive_checks = {}
         self.turtle_cooldowns = {}  # {torn_id: last_alert_ts}
         # {torn_id: longest seconds seen offline during the CURRENT war}.
         # last_action only moves forward when a member acts, so (now - it)
@@ -2106,6 +2129,153 @@ class WarTracker:
             return set()
         return {str((vs.verified_users.get(d) or {}).get('torn_id'))
                 for d in discord_ids if d in (vs.verified_users or {})}
+
+    async def load_revive_checks(self):
+        """Which pre-war revive checkpoints have already been posted."""
+        data = load_json(self.revive_checks_file, default={})
+        self.revive_checks = data.get('done', {}) if isinstance(data, dict) else {}
+
+    async def save_revive_checks(self):
+        save_json(self.revive_checks_file, {'done': self.revive_checks})
+
+    async def scan_revive_status(self):
+        """
+        Who in the faction can still be revived.
+
+        Returns {'on': [(name, torn_id), ...], 'off': n, 'unknown': n,
+                 'total': n} or None if the roster itself could not be read.
+
+        The None-vs-empty rule applies twice here. An unreadable roster returns
+        None, because "nobody has revives on" and "we could not look" must not
+        render the same. A member whose own profile call fails is counted as
+        UNKNOWN rather than assumed safe or assumed guilty - this message names
+        people, so a failed lookup must never become an accusation.
+        """
+        from utils.torn_api import fetch_faction_members, fetch_player_data
+
+        roster = await fetch_faction_members()
+        if not roster:
+            logger.warning('Revive check: roster unreadable, skipping')
+            return None
+
+        on, unknown, off = [], 0, 0
+        for tid, member in roster.items():
+            data = await fetch_player_data(str(tid), selections='profile')
+            if not data:
+                unknown += 1
+                continue
+            rev = data.get('revivable')
+            if rev is None:
+                # The field vanished from the payload. Say unknown rather than
+                # let a .get() default quietly become the answer, which is how
+                # the missing `defends` field turned into "0 hits taken".
+                unknown += 1
+            elif rev:
+                on.append((member.get('name', f'ID:{tid}'), str(tid)))
+            else:
+                off += 1
+
+        on.sort(key=lambda x: x[0].lower())
+        return {'on': on, 'off': off, 'unknown': unknown, 'total': len(roster)}
+
+    async def post_revive_check(self, channel, when_label):
+        """
+        Post the revive check to `channel`. Returns True if something was sent.
+
+        `when_label` says how close the war is, because the same list means
+        something different two days out than it does two hours out.
+        """
+        result = await self.scan_revive_status()
+        if result is None:
+            return False
+
+        on, off, unknown, total = (result['on'], result['off'],
+                                   result['unknown'], result['total'])
+
+        if not on:
+            desc = (f'All **{off}** readable members have revives off. '
+                    f'Nothing to chase.')
+            if unknown:
+                desc += f'\n-# {unknown} could not be read this pass.'
+            await channel.send(embed=create_embed(
+                title=f'\u2705 Revive check \u00b7 {when_label}',
+                description=desc, color=EMBED_COLOR_SUCCESS))
+            return True
+
+        # Mention where we can map them to Discord, because this is a thing the
+        # member has to go and do, not something management can fix for them.
+        lines, used = [], 0
+        for name, tid in on:
+            who = self._mention_for(tid) or f'**{name}**'
+            line = f'- {who} ({name})' if who.startswith('<@') else f'- {who}'
+            if used + len(line) + 1 > 3400:   # embed description cap is 4096
+                lines.append(f'- ...and {len(on) - len(lines)} more')
+                break
+            lines.append(line)
+            used += len(line) + 1
+
+        desc = (f'**{len(on)} of {total}** members can still be revived. '
+                f'Set revives to **nobody** before the war starts.\n\n'
+                + '\n'.join(lines))
+        if unknown:
+            desc += (f'\n\n-# {unknown} member(s) could not be read this pass '
+                     f'and are not listed either way.')
+        desc += ('\n-# A revived member goes straight back to being farmed, '
+                 'which is where most of our points bleed.')
+
+        await channel.send(embed=create_embed(
+            title=f'\U0001fa78 Revive check \u00b7 {when_label}',
+            description=desc, color=EMBED_COLOR_WARNING))
+        return True
+
+    async def check_revive_status(self):
+        """
+        Post the revive check once per checkpoint before a war starts.
+
+        Called every minute from the war loop. get_upcoming_war() reuses the
+        cached rankedwars fetch, so a tick with no war coming costs nothing -
+        and the expensive part (one profile call per member) only runs on the
+        tick that actually posts.
+        """
+        if not self.bot:
+            return
+        upcoming = await self.get_upcoming_war()
+        if not upcoming:
+            return
+
+        now = get_current_timestamp()
+        start = int(upcoming.get('start') or 0)
+        remaining = start - now
+        if remaining <= 0:
+            return  # already started; telling people to prepare is too late
+
+        war_id = str(upcoming['war_id'])
+        done = set(self.revive_checks.get(war_id, []))
+        passed = [c for c in REVIVE_CHECK_CHECKPOINTS
+                  if remaining <= c and c not in done]
+        if not passed:
+            return
+
+        channel = self.bot.get_channel(WAR_CHANNEL_ID)
+        if not channel:
+            logger.warning('Revive check: war channel not found')
+            return
+
+        hours = min(passed) // 3600
+        label = f'{hours // 24} days out' if hours >= 48 else f'{hours}h before the war'
+        try:
+            sent = await self.post_revive_check(channel, label)
+        except Exception as e:
+            logger.error(f'Revive check failed for war {war_id}: {e}')
+            return
+        if not sent:
+            return  # unreadable roster: leave the checkpoint open to retry
+
+        # Mark EVERY checkpoint already passed, not just the one posted, or a
+        # restart that skipped past both would post twice a minute apart.
+        self.revive_checks[war_id] = sorted(done | set(passed))
+        await self.save_revive_checks()
+        logger.info(f'Posted revive check for war {war_id} at {label}')
 
     async def check_pending_war(self):
         """

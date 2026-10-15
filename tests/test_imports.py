@@ -3102,6 +3102,134 @@ def test_member_with_no_oc_history_is_clocked_from_their_join_date():
         'one day since a real OC is fine, however long they have been here')
 
 
+def test_revive_scan_never_turns_a_failed_lookup_into_an_accusation():
+    """
+    This message names people, so a failed lookup must not become a verdict
+    either way. Three distinct "no answer" shapes have to stay separate from
+    a real one:
+
+      - the roster itself is unreadable  -> None, post nothing at all
+      - one member's profile call fails  -> unknown, not listed
+      - `revivable` missing from a 200   -> unknown, not "off"
+
+    The third is the shape that cost the most before: a field that simply
+    disappears from a successful payload, where no guard fires and the .get()
+    default silently becomes the answer, exactly as `defends` did.
+    """
+    import asyncio
+    from features.wars import WarTracker
+    import utils.torn_api as api
+
+    mgr = WarTracker(bot=None)
+
+    roster = {'1': {'name': 'ReviveOn'}, '2': {'name': 'ReviveOff'},
+              '3': {'name': 'FetchFails'}, '4': {'name': 'FieldGone'}}
+    profiles = {
+        '1': {'revivable': 1},
+        '2': {'revivable': 0},
+        '3': None,            # the call failed
+        '4': {'level': 10},   # 200 OK, but the field is gone
+    }
+
+    async def fake_members():
+        return roster
+
+    async def fake_player(tid, selections='profile', **kw):
+        return profiles[str(tid)]
+
+    o_m, o_p = api.fetch_faction_members, api.fetch_player_data
+    api.fetch_faction_members, api.fetch_player_data = fake_members, fake_player
+    try:
+        r = asyncio.run(mgr.scan_revive_status())
+        assert [n for n, _ in r['on']] == ['ReviveOn'], r['on']
+        assert r['off'] == 1, 'only the member we actually read as off'
+        assert r['unknown'] == 2, (
+            f"a failed call and a vanished field are both unknown, got {r['unknown']}")
+
+        # --- roster unreadable: None, never an empty all-clear ---
+        async def no_roster():
+            return None
+        api.fetch_faction_members = no_roster
+        assert asyncio.run(mgr.scan_revive_status()) is None, (
+            'an unreadable roster must not render as "nobody has revives on"')
+    finally:
+        api.fetch_faction_members, api.fetch_player_data = o_m, o_p
+
+
+def test_revive_check_posts_once_per_checkpoint_and_retries_on_failure():
+    """
+    Two things a scheduled pre-war post must not do: fire twice, or quietly
+    give up.
+
+    If a restart lands past BOTH checkpoints, every one already passed is
+    marked on the first post, or the 48h and 6h messages land a minute apart.
+    And if the roster was unreadable the checkpoint stays open, so the check
+    retries next tick instead of being silently consumed.
+    """
+    import asyncio
+    from features.wars import WarTracker, REVIVE_CHECK_CHECKPOINTS
+    import features.wars as wars_mod
+
+    posts = []
+
+    class FakeChannel:
+        async def send(self, **kw):
+            posts.append(kw.get('embed'))
+
+    class FakeBot:
+        def get_channel(self, _):
+            return FakeChannel()
+
+    now = 1_800_000_000
+    mgr = WarTracker(bot=FakeBot())
+    saved = []
+
+    async def fake_save():
+        saved.append(dict(mgr.revive_checks))
+    mgr.save_revive_checks = fake_save
+
+    # war starts inside the TIGHTEST checkpoint, so both have been passed
+    start = now + min(REVIVE_CHECK_CHECKPOINTS) - 60
+
+    async def upcoming():
+        return {'war_id': '999', 'start': start, 'data': {}}
+    mgr.get_upcoming_war = upcoming
+
+    calls = {'n': 0}
+
+    async def ok(channel, label):
+        calls['n'] += 1
+        return True
+
+    orig_ts = wars_mod.get_current_timestamp
+    wars_mod.get_current_timestamp = lambda: now
+    try:
+        mgr.post_revive_check = ok
+        asyncio.run(mgr.check_revive_status())
+        assert calls['n'] == 1, f'posted {calls["n"]} times, expected 1'
+        assert set(mgr.revive_checks['999']) == set(REVIVE_CHECK_CHECKPOINTS), (
+            'every checkpoint already passed must be marked on the first post, '
+            f"got {mgr.revive_checks['999']}")
+
+        # a second tick does nothing
+        asyncio.run(mgr.check_revive_status())
+        assert calls['n'] == 1, 'must not post again for the same war'
+
+        # --- an unreadable roster leaves the checkpoint open ---
+        mgr2 = WarTracker(bot=FakeBot())
+        mgr2.save_revive_checks = fake_save
+        mgr2.get_upcoming_war = upcoming
+
+        async def failed(channel, label):
+            return False
+        mgr2.post_revive_check = failed
+        asyncio.run(mgr2.check_revive_status())
+        assert '999' not in mgr2.revive_checks, (
+            'a failed post must not consume the checkpoint')
+    finally:
+        wars_mod.get_current_timestamp = orig_ts
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -3145,6 +3273,8 @@ if __name__ == '__main__':
     test_management_ping_lands_in_the_channel_that_got_the_alert()
     test_expired_crime_does_not_count_as_participating()
     test_member_with_no_oc_history_is_clocked_from_their_join_date()
+    test_revive_scan_never_turns_a_failed_lookup_into_an_accusation()
+    test_revive_check_posts_once_per_checkpoint_and_retries_on_failure()
     test_war_report_counts_hits_taken_from_attack_log()
     test_activity_profile_chunk_detection()
     test_activity_profile_manager_queries()
