@@ -24,6 +24,9 @@ from config import (
     OC_WARNING_DAYS,
     OC_CRITICAL_DAYS,
     OC_NEW_MEMBER_GRACE_DAYS,
+    TRIAL_DAYS,
+    TRIAL_TARGET_LEVEL,
+    TRIAL_WARNING_DAYS,
     LEFT_FACTION_ALERT_DAYS,
     EMBED_COLOR_WARNING,
     EMBED_COLOR_CRITICAL,
@@ -53,6 +56,10 @@ class InactivityTracker:
         self.oc_data_file = 'data/oc_participation.json'
         self.last_oc_completion = {}  # {torn_id_str: float timestamp} · accumulated across runs
         self.left_faction_file = 'data/left_faction.json'
+        self.trial_file = 'data/trial_tracking.json'
+        # {torn_id: {'warned': bool, 'reviewed': bool}} - so each member is
+        # told once, not every day until their trial ends.
+        self.trial_state = {}
         self.left_faction = {}  # {torn_id_str: {first_gone, torn_name, discord_id, access_revoked}}
         # Set by bot.py once the verification system exists; used to find the
         # verified role when revoking access after the grace period.
@@ -187,7 +194,7 @@ class InactivityTracker:
         # of reporting garbage.
         if crimes is None:
             logger.error('OC participation check SKIPPED: crimes data unavailable this run')
-            return [], [], False
+            return [], [], False, False
 
         now = time.time()
         data_updated = False
@@ -245,10 +252,16 @@ class InactivityTracker:
         oc_warning = []
         oc_critical = []
 
+        # NOTE: this used to return early when every slot was filled, on the
+        # grounds that flagging members for management's queue was unfair. The
+        # faction's rule is the other way round: if there is nothing joinable
+        # it is the member's job to tell management so a crime gets created,
+        # not a reason to sit out. So the check still runs, and the shortage is
+        # reported as context rather than used as a blanket excuse.
         if no_slots_to_join:
-            logger.info('OC participation check SKIPPED: every slot is filled, '
-                        'so nobody could have joined one')
-            return [], [], data_updated
+            logger.info('OC participation check: no open slots this run - '
+                        'flagging anyway, members are expected to ask '
+                        'management for a crime')
 
         for torn_id, member in torn_members.items():
             tid = str(torn_id)
@@ -294,7 +307,7 @@ class InactivityTracker:
             else:
                 oc_warning.append(member_data)
 
-        return oc_warning, oc_critical, data_updated
+        return oc_warning, oc_critical, data_updated, no_slots_to_join
 
     async def _revoke_left_faction_access(self, guild, left_alerts):
         """
@@ -443,6 +456,145 @@ class InactivityTracker:
 
         return alerts, data_updated
 
+    async def load_trial_data(self):
+        """Who has already been warned about, or reviewed for, their trial."""
+        data = load_json(self.trial_file, default={})
+        self.trial_state = data.get('members', {}) if isinstance(data, dict) else {}
+        logger.info(f'Loaded trial tracking for {len(self.trial_state)} members')
+
+    async def save_trial_data(self):
+        save_json(self.trial_file, {'members': self.trial_state})
+
+    def _get_trial_status(self, torn_members):
+        """
+        New members against the two-week trial.
+
+        The guides make two promises that are really one deadline: "reach
+        level 15 within 2 weeks" and "your first 2 weeks are a trial, at the
+        end management reviews your progress". So this fires twice per member
+        and never again: a warning with days still left to act, then the review
+        when the trial is up.
+
+        Returns (warning, failed, passed, updated).
+
+        Every state is latched in self.trial_state, because this runs daily -
+        without it a member who missed the deadline would be re-accused every
+        morning for as long as they stayed.
+        """
+        warning, failed, passed = [], [], []
+        updated = False
+        seen = set()
+
+        for torn_id, member in (torn_members or {}).items():
+            tid = str(torn_id)
+            days = member.get('days_in_faction', 0) or 0
+            level = member.get('level', 0) or 0
+
+            # Well past the review and already dealt with. Skipping before
+            # `seen` also prunes them below, so this file cannot grow forever.
+            if days > TRIAL_DAYS + 7:
+                continue
+            seen.add(tid)
+
+            st = self.trial_state.get(tid)
+            if st is None:
+                st = {'warned': False, 'reviewed': False}
+                self.trial_state[tid] = st
+                updated = True
+
+            # days_in_faction resets when someone leaves and rejoins, so an
+            # early reading means a NEW trial and the old flags must clear or
+            # the second trial is silently never checked.
+            if days < TRIAL_WARNING_DAYS and (st.get('warned') or st.get('reviewed')):
+                st['warned'] = False
+                st['reviewed'] = False
+                updated = True
+
+            data = {
+                'torn_name': member.get('name', f'ID:{tid}'),
+                'torn_id': tid,
+                'torn_level': level,
+                'days': days,
+                'days_left': max(0, TRIAL_DAYS - days),
+            }
+
+            if days >= TRIAL_DAYS:
+                if st.get('reviewed'):
+                    continue
+                st['reviewed'] = True
+                updated = True
+                if level < TRIAL_TARGET_LEVEL:
+                    failed.append(data)
+                else:
+                    passed.append(data)
+            elif days >= TRIAL_WARNING_DAYS and level < TRIAL_TARGET_LEVEL:
+                if st.get('warned'):
+                    continue
+                st['warned'] = True
+                updated = True
+                warning.append(data)
+
+        for tid in [t for t in self.trial_state if t not in seen]:
+            del self.trial_state[tid]
+            updated = True
+
+        return warning, failed, passed, updated
+
+    async def post_trial_alerts(self, channel, warning, failed, passed):
+        """
+        Post the trial results. The warning and the pass notice are routine and
+        stay with the daily check; a missed deadline is strike-or-remove under
+        the rules, so it goes to the strikes channel like the other one.
+        """
+        strikes = (self.bot.get_channel(STRIKES_CHANNEL_ID) or channel) \
+            if self.bot else channel
+
+        def line(d):
+            return (f'**{d["torn_name"]}** [Lvl {d["torn_level"]}] '
+                    f'[profile](<https://www.torn.com/profiles.php?XID={d["torn_id"]}>)')
+
+        if warning:
+            body = '\n'.join(
+                f'{line(d)}\n  day {d["days"]} of {TRIAL_DAYS} \u00b7 '
+                f'**{d["days_left"]} day(s) left** to reach level {TRIAL_TARGET_LEVEL}'
+                for d in sorted(warning, key=lambda x: x['days_left']))
+            await channel.send(embed=create_embed(
+                title='\u23f3 Trial deadline approaching',
+                description=(f'**{len(warning)} new member(s)** are not level '
+                             f'{TRIAL_TARGET_LEVEL} yet with their trial running out.'
+                             f'\n\n{body}\n\n'
+                             f'-# Nudge them now. Levelling is fastest with '
+                             f'attacks, and the Level 15 guide covers it.'),
+                color=EMBED_COLOR_WARNING))
+
+        if failed:
+            body = '\n'.join(
+                f'{line(d)}\n  {d["days"]} days in faction, still level '
+                f'{d["torn_level"]} (needed {TRIAL_TARGET_LEVEL})'
+                for d in sorted(failed, key=lambda x: -x['days']))
+            await strikes.send(embed=create_embed(
+                title='\U0001f534 Trial failed \u00b7 strike or remove',
+                description=(f'**{len(failed)} member(s)** did not reach level '
+                             f'{TRIAL_TARGET_LEVEL} within {TRIAL_DAYS} days.'
+                             f'\n\n{body}\n\n'
+                             f'-# The rules say strike or removal "depending on '
+                             f'progress", so this is a judgement call, not an '
+                             f'automatic strike. Posted once.'),
+                color=EMBED_COLOR_CRITICAL))
+
+        if passed:
+            await channel.send(embed=create_embed(
+                title='\u2705 Trial complete \u00b7 review due',
+                description=(f'**{len(passed)} member(s)** finished their '
+                             f'{TRIAL_DAYS}-day trial at level '
+                             f'{TRIAL_TARGET_LEVEL}+:\n\n'
+                             + '\n'.join(f'{line(d)}\n  level {d["torn_level"]} '
+                                         f'after {d["days"]} days'
+                                         for d in passed)
+                             + '\n\n-# Level is only the hard requirement. '
+                               'Management still reviews the rest.'),
+                color=EMBED_COLOR_SUCCESS))
+
     async def check_and_alert_inactive(self):
         """
         Check for inactive members on Torn and send alerts
@@ -577,7 +729,8 @@ class InactivityTracker:
                 warning_members.append(member_data)
 
         # OC participation check
-        oc_warning, oc_critical, oc_updated = self._get_oc_status(torn_members, crimes)
+        oc_warning, oc_critical, oc_updated, oc_no_slots = self._get_oc_status(
+            torn_members, crimes)
         if oc_updated:
             await self.save_oc_data()
         logger.info(f'OC check: {len(oc_warning)} warning, {len(oc_critical)} critical out of {len(torn_members)} total')
@@ -597,8 +750,21 @@ class InactivityTracker:
         total_inactive = len(warning_members) + len(critical_members)
         total_checked = len(torn_members)
 
+        # New-member trial. Uses the roster already fetched above, so it adds
+        # no API calls at all.
+        trial_warn, trial_failed, trial_passed, trial_updated = \
+            self._get_trial_status(torn_members)
+        if trial_updated:
+            await self.save_trial_data()
+        logger.info(f'Trial check: {len(trial_warn)} approaching, '
+                    f'{len(trial_failed)} failed, {len(trial_passed)} passed')
+
         logger.info(f'Inactivity check: {total_inactive} inactive out of {total_checked} total')
-        await self._send_inactivity_alert(channel, warning_members, critical_members, total_checked, oc_warning, oc_critical, left_alerts)
+        await self._send_inactivity_alert(channel, warning_members, critical_members, total_checked, oc_warning, oc_critical, left_alerts, oc_no_slots)
+        try:
+            await self.post_trial_alerts(channel, trial_warn, trial_failed, trial_passed)
+        except Exception as e:
+            logger.error(f'Trial alerts failed: {e}')
 
     async def test_run(self):
         """
@@ -637,7 +803,7 @@ class InactivityTracker:
             else:
                 warning_members.append(member_data)
 
-        oc_warning, oc_critical, oc_updated = self._get_oc_status(torn_members, crimes)
+        oc_warning, oc_critical, oc_updated, _ = self._get_oc_status(torn_members, crimes)
         if oc_updated:
             await self.save_oc_data()
 
@@ -656,7 +822,7 @@ class InactivityTracker:
             'left_faction': left_alerts,
         }
 
-    async def _send_inactivity_alert(self, channel, warning_members, critical_members, total_faction_members, oc_warning=None, oc_critical=None, left_faction=None):
+    async def _send_inactivity_alert(self, channel, warning_members, critical_members, total_faction_members, oc_warning=None, oc_critical=None, left_faction=None, oc_no_slots=False):
         """
         Send inactivity alert embed to the channel
         ALWAYS posts to inactivity-alerts channel
@@ -803,6 +969,12 @@ class InactivityTracker:
             header = (f'**{len(oc_critical)} member(s)** have not joined an OC for '
                       f'{OC_CRITICAL_DAYS}+ days. They were warned at '
                       f'{OC_WARNING_DAYS} days, so this is strike territory:\n\n')
+            if oc_no_slots:
+                # Context, not an excuse: the rule is that a member with
+                # nothing to join tells management so a crime gets made.
+                header += ('-# No slots were open on this run. Members are '
+                           'expected to ask management for a crime, not sit '
+                           'out.\n\n')
             chunks = []
             current = header
             for line in lines:

@@ -71,6 +71,14 @@ OC_WARNING_DAYS = int(os.getenv("OC_WARNING_DAYS", "2"))
 OC_CRITICAL_DAYS = int(os.getenv("OC_CRITICAL_DAYS", "4"))
 OC_NEW_MEMBER_GRACE_DAYS = int(os.getenv("OC_NEW_MEMBER_GRACE_DAYS", "3"))
 
+# New-member trial. The guides promise "reach level 15 within 2 weeks" and
+# "your first 2 weeks are a trial, at the end management reviews your
+# progress" - one deadline, so one feature. The warning lands early enough
+# that a member can still act on it.
+TRIAL_DAYS = int(os.getenv("TRIAL_DAYS", "14"))
+TRIAL_TARGET_LEVEL = int(os.getenv("TRIAL_TARGET_LEVEL", "15"))
+TRIAL_WARNING_DAYS = int(os.getenv("TRIAL_WARNING_DAYS", "10"))
+
 # Left-faction alert threshold (days before alerting about a verified member not in faction)
 # Grace period for someone who leaves the faction: they keep their verified
 # role (and so their channel access) this many days before it is revoked, and

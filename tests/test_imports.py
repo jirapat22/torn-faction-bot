@@ -934,11 +934,11 @@ def test_oc_check_skipped_when_crimes_unavailable():
     active_crime = [{'completed': False, 'completion_ts': 0, 'participants': ['1', '2']}]
 
     # Normal case: crimes visible -> both protected by being mid-crime
-    warn, crit, _ = tracker._get_oc_status(members, active_crime)
+    warn, crit, _, _slots = tracker._get_oc_status(members, active_crime)
     assert warn == [] and crit == [], 'members in an unexecuted crime must never be flagged'
 
     # Outage: crimes endpoint unreachable (None) -> skip, do NOT flag everyone
-    warn_none, crit_none, updated_none = tracker._get_oc_status(members, None)
+    warn_none, crit_none, updated_none, _slots = tracker._get_oc_status(members, None)
     assert warn_none == [] and crit_none == [], \
         'an unreachable crimes endpoint must skip the OC section, not flag every member'
     assert updated_none is False, 'nothing to persist when crimes data is unavailable'
@@ -946,7 +946,7 @@ def test_oc_check_skipped_when_crimes_unavailable():
     # The old failure mode, preserved as the contrast: [] genuinely means "no
     # crimes exist", so stale members legitimately get flagged. This is exactly
     # why an outage must not be collapsed into [].
-    warn_empty, crit_empty, _ = tracker._get_oc_status(members, [])
+    warn_empty, crit_empty, _, _slots = tracker._get_oc_status(members, [])
     assert len(crit_empty) == 2, 'with a real empty crime list, stale members do get flagged'
 
 
@@ -2433,15 +2433,18 @@ def test_poll_roster_names_who_picked_each_block():
     assert len(big) <= 1000
 
 
-def test_oc_check_skipped_when_no_slots_were_open():
+def test_no_open_slots_is_reported_but_is_not_an_excuse():
     """
-    The rule is "not in an OC while eligible AND slots are open". The check had
-    no concept of open slots, so it flagged members when there was nothing to
-    join - and the OC guide itself tells them to ask management to create one,
-    i.e. it is management's queue, not their fault.
+    This check used to return early when every slot was filled, treating a full
+    queue as management's fault rather than the member's.
+
+    The faction rule is the other way round: a member with nothing to join is
+    expected to TELL management so a crime gets created, not sit out. So the
+    check still runs and still flags, and the shortage is handed back as
+    context for the report instead of silencing it.
 
     An UNKNOWN slot count (-1, which the v1 fallback returns because OC1 has no
-    slot model) must not be read as zero, or the check would switch itself off.
+    slot model) is still not zero, and must not be reported as a shortage.
     """
     import time
     from features.inactivity import InactivityTracker
@@ -2453,20 +2456,26 @@ def test_oc_check_skipped_when_no_slots_were_open():
     # Slots open -> the member really could have joined, so flag them
     crimes = [{'completed': False, 'completion_ts': 0, 'participants': ['222'],
                'open_slots': 3, 'difficulty': 2}]
-    warn, crit, _ = mgr._get_oc_status(members, crimes)
+    warn, crit, _, _slots = mgr._get_oc_status(members, crimes)
     assert warn or crit, 'with a joinable slot this is a real miss'
 
-    # Every slot filled -> nothing to join, so nobody is at fault
+    assert _slots is False, 'slots were open, so no shortage to report'
+
+    # Every slot filled -> STILL flagged, and the shortage reported alongside
     crimes = [{'completed': False, 'completion_ts': 0, 'participants': ['222'],
                'open_slots': 0, 'difficulty': 2}]
-    warn, crit, _ = mgr._get_oc_status(members, crimes)
-    assert not warn and not crit, 'no open slot means no fault'
+    warn, crit, _, no_slots = mgr._get_oc_status(members, crimes)
+    assert warn or crit, (
+        'a full queue is not an excuse: the member is expected to ask '
+        'management for a crime')
+    assert no_slots is True, 'the shortage must still be reported as context'
 
-    # Unknown (-1) is not zero: the check must still run
+    # Unknown (-1) is not zero: still runs, and is NOT a reported shortage
     crimes = [{'completed': False, 'completion_ts': 0, 'participants': ['222'],
                'open_slots': -1, 'difficulty': 0}]
-    warn, crit, _ = mgr._get_oc_status(members, crimes)
+    warn, crit, _, no_slots = mgr._get_oc_status(members, crimes)
     assert warn or crit, 'unknown slot counts must not silence the check'
+    assert no_slots is False, 'unknown is not a known shortage'
 
 
 def test_turtle_alert_fires_only_for_exposed_members():
@@ -3030,7 +3039,7 @@ def test_expired_crime_does_not_count_as_participating():
     }
 
     mgr = InactivityTracker(bot=None)
-    warn, crit, _ = mgr._get_oc_status(members, crimes)
+    warn, crit, _, _slots = mgr._get_oc_status(members, crimes)
 
     flagged = {m['torn_name'] for m in (warn + crit)}
     assert 'StuckInExpired' in flagged, (
@@ -3078,7 +3087,7 @@ def test_member_with_no_oc_history_is_clocked_from_their_join_date():
         '4': member(g + OC_CRITICAL_DAYS),        # first day of strike range
         '5': member(g + 48),                      # the BunnyBull case
     }
-    warn, crit, _ = mgr._get_oc_status(members, crimes)
+    warn, crit, _, _slots = mgr._get_oc_status(members, crimes)
     warned = {m['torn_name'] for m in warn}
     critted = {m['torn_name'] for m in crit}
 
@@ -3097,7 +3106,7 @@ def test_member_with_no_oc_history_is_clocked_from_their_join_date():
 
     # A member WITH history is still clocked from that history, not join date.
     mgr.last_oc_completion = {'9': now - 1 * 86400}
-    warn2, crit2, _ = mgr._get_oc_status({'9': member(500)}, crimes)
+    warn2, crit2, _, _slots = mgr._get_oc_status({'9': member(500)}, crimes)
     assert not warn2 and not crit2, (
         'one day since a real OC is fine, however long they have been here')
 
@@ -3232,6 +3241,71 @@ def test_revive_check_posts_once_per_checkpoint_and_retries_on_failure():
         wars_mod.get_current_timestamp = orig_ts
 
 
+def test_trial_check_fires_once_per_member_and_resets_on_rejoin():
+    """
+    The guides make two promises that are one deadline: "reach level 15 within
+    2 weeks" and "your first 2 weeks are a trial, at the end management reviews
+    your progress".
+
+    This runs DAILY, so latching is the whole feature. Without it a member who
+    missed the deadline is re-accused every morning for as long as they stay,
+    which is how an alert channel becomes background noise.
+
+    days_in_faction resets when someone leaves and rejoins, and a second trial
+    that is silently never checked is worse than no check at all.
+    """
+    from features.inactivity import InactivityTracker
+    from config import TRIAL_DAYS, TRIAL_TARGET_LEVEL, TRIAL_WARNING_DAYS
+
+    mgr = InactivityTracker(bot=None)
+    low, ok = TRIAL_TARGET_LEVEL - 1, TRIAL_TARGET_LEVEL
+
+    def roster(days, level):
+        return {'7': {'name': 'Newbie', 'days_in_faction': days, 'level': level}}
+
+    # --- too early: nothing at all ---
+    w, f, p, _ = mgr._get_trial_status(roster(TRIAL_WARNING_DAYS - 1, low))
+    assert not (w or f or p), 'before the warning day there is nothing to say'
+
+    # --- warning day, still under level ---
+    w, f, p, upd = mgr._get_trial_status(roster(TRIAL_WARNING_DAYS, low))
+    assert len(w) == 1 and not f and not p, (w, f, p)
+    assert w[0]['days_left'] == TRIAL_DAYS - TRIAL_WARNING_DAYS
+    assert upd, 'the latch has to be persisted'
+
+    # same day again, and the next day: silence
+    w, f, p, _ = mgr._get_trial_status(roster(TRIAL_WARNING_DAYS, low))
+    assert not w, 'must not warn twice'
+    w, f, p, _ = mgr._get_trial_status(roster(TRIAL_WARNING_DAYS + 1, low))
+    assert not w, 'must not warn again the next day either'
+
+    # --- deadline, still under level: failed, once ---
+    w, f, p, _ = mgr._get_trial_status(roster(TRIAL_DAYS, low))
+    assert len(f) == 1 and not p, (w, f, p)
+    assert f[0]['torn_level'] == low
+    w, f, p, _ = mgr._get_trial_status(roster(TRIAL_DAYS + 1, low))
+    assert not f, 'a missed deadline must not be re-accused daily'
+
+    # --- a REJOIN resets the trial ---
+    w, f, p, _ = mgr._get_trial_status(roster(1, low))       # fresh clock
+    assert not (w or f or p), 'day 1 of a new trial says nothing yet'
+    w, f, p, _ = mgr._get_trial_status(roster(TRIAL_WARNING_DAYS, low))
+    assert len(w) == 1, 'the second trial must be checked, not silently skipped'
+
+    # --- someone who made it: review due, not a failure ---
+    mgr2 = InactivityTracker(bot=None)
+    w, f, p, _ = mgr2._get_trial_status(roster(TRIAL_DAYS, ok))
+    assert len(p) == 1 and not f, (w, f, p)
+
+    # --- long-past members are pruned, so the file cannot grow forever ---
+    mgr3 = InactivityTracker(bot=None)
+    mgr3.trial_state = {'999': {'warned': True, 'reviewed': True}}
+    w, f, p, upd = mgr3._get_trial_status(roster(TRIAL_DAYS + 30, ok))
+    assert not (w or f or p), 'well past the review there is nothing to post'
+    assert mgr3.trial_state == {}, f'stale entries must be pruned: {mgr3.trial_state}'
+    assert upd
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -3264,7 +3338,7 @@ if __name__ == '__main__':
     test_fly_auto_starts_but_never_overrides_a_manual_toggle_off()
     test_fly_auto_start_retries_when_enable_fails()
     test_poll_roster_names_who_picked_each_block()
-    test_oc_check_skipped_when_no_slots_were_open()
+    test_no_open_slots_is_reported_but_is_not_an_excuse()
     test_turtle_alert_fires_only_for_exposed_members()
     test_only_recruiting_oc_slots_count_as_joinable()
     test_war_report_separates_opponent_mugs_from_outside_mugs()
@@ -3275,6 +3349,7 @@ if __name__ == '__main__':
     test_management_ping_lands_in_the_channel_that_got_the_alert()
     test_expired_crime_does_not_count_as_participating()
     test_member_with_no_oc_history_is_clocked_from_their_join_date()
+    test_trial_check_fires_once_per_member_and_resets_on_rejoin()
     test_revive_scan_never_turns_a_failed_lookup_into_an_accusation()
     test_revive_check_posts_once_per_checkpoint_and_retries_on_failure()
     test_war_report_counts_hits_taken_from_attack_log()
