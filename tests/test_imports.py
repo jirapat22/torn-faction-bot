@@ -2990,6 +2990,56 @@ def test_management_ping_lands_in_the_channel_that_got_the_alert():
         inact_mod.MANAGEMENT_PING_ROLE_ID = orig_role
 
 
+def test_expired_crime_does_not_count_as_participating():
+    """
+    Torn reports an Expired crime with completed=False, exactly like a live
+    one. It is dead: it timed out without ever running, so anyone still
+    sitting in it is not participating in anything.
+
+    Without the status check those members read as busy and get skipped by the
+    OC check entirely - and they are precisely the people worth flagging, since
+    the crime they joined never happened. Same shape as the Expired-slots bug,
+    where unfillable slots read as joinable.
+
+    Verified against the live payload: Expired crimes really do carry
+    completed=False, while Successful and Failure carry True.
+    """
+    import time
+    from features.inactivity import InactivityTracker
+
+    now = time.time()
+    old = now - 20 * 86400          # last real OC, well past any threshold
+
+    crimes = [
+        # dead, but shaped like a live one
+        {'status': 'Expired', 'completed': False, 'completion_ts': 0,
+         'participants': ['100'], 'open_slots': 0, 'difficulty': 3},
+        # genuinely live
+        {'status': 'Planning', 'completed': False, 'completion_ts': 0,
+         'participants': ['200'], 'open_slots': 0, 'difficulty': 3},
+        # finished, and it is what builds the history
+        {'status': 'Successful', 'completed': True, 'completion_ts': old,
+         'participants': ['100', '200'], 'open_slots': 0, 'difficulty': 3},
+        # something joinable must exist, or the check skips everything
+        {'status': 'Recruiting', 'completed': False, 'completion_ts': 0,
+         'participants': [], 'open_slots': 2, 'difficulty': 3},
+    ]
+    members = {
+        '100': {'name': 'StuckInExpired', 'level': 10, 'days_in_faction': 40},
+        '200': {'name': 'ActuallyPlanning', 'level': 10, 'days_in_faction': 40},
+    }
+
+    mgr = InactivityTracker(bot=None)
+    warn, crit, _ = mgr._get_oc_status(members, crimes)
+
+    flagged = {m['torn_name'] for m in (warn + crit)}
+    assert 'StuckInExpired' in flagged, (
+        'a member sitting in an Expired crime is not participating and must '
+        f'still be checked; got {flagged}')
+    assert 'ActuallyPlanning' not in flagged, (
+        'a member in a live Planning crime is genuinely busy')
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -3031,6 +3081,7 @@ if __name__ == '__main__':
     test_bonus_hit_on_a_non_enemy_is_flagged_but_only_when_it_really_was_one()
     test_bonus_hit_field_stays_inside_the_discord_limit()
     test_management_ping_lands_in_the_channel_that_got_the_alert()
+    test_expired_crime_does_not_count_as_participating()
     test_war_report_counts_hits_taken_from_attack_log()
     test_activity_profile_chunk_detection()
     test_activity_profile_manager_queries()

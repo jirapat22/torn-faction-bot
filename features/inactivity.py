@@ -212,6 +212,10 @@ class InactivityTracker:
             open_slots += n
         no_slots_to_join = slots_known and open_slots == 0
 
+        # Statuses where a crime can no longer be participated in. Only
+        # Recruiting and Planning are live.
+        OC_DEAD_STATUSES = ('Expired', 'Successful', 'Failure')
+
         # Build active_in_oc and update accumulated last_oc_completion
         # crimes is a normalized list from fetch_faction_crimes()
         active_in_oc = set()
@@ -221,11 +225,18 @@ class InactivityTracker:
                 continue
             completed = crime.get('completed', False)
             completion_ts = crime.get('completion_ts', 0)
+            # An Expired crime timed out without ever running, so anyone still
+            # sitting in it is NOT participating in anything - but Torn reports
+            # it with completed=False, the same shape as a live crime. Without
+            # this, an OC that expires with people in it would mark exactly
+            # those people as busy and skip them from the check. Same trap as
+            # Expired slots counting as joinable.
+            dead = crime.get('status') in OC_DEAD_STATUSES
             for tid in crime.get('participants', []):
                 tid = str(tid)
-                if not completed:
+                if not completed and not dead:
                     active_in_oc.add(tid)
-                elif completion_ts:
+                elif completed and completion_ts:
                     tc = float(completion_ts)
                     if tid not in self.last_oc_completion or tc > self.last_oc_completion[tid]:
                         self.last_oc_completion[tid] = tc
