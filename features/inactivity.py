@@ -659,9 +659,24 @@ class InactivityTracker:
         has_oc_issues = bool(oc_warning or oc_critical)
         has_left = bool(left_faction)
 
-        # Only ping management if there's something to report
-        if MANAGEMENT_PING_ROLE_ID and (has_inactivity or has_oc_issues or has_left):
-            await channel.send(f'<@&{MANAGEMENT_PING_ROLE_ID}>')
+        # Only the CRITICAL tier is strike territory, so only it goes to the
+        # strikes channel. A 2-day nudge is not a strike and belongs with the
+        # rest of the daily check.
+        oc_channel = (self.bot.get_channel(STRIKES_CHANNEL_ID) or channel) \
+            if self.bot else channel
+
+        # The ping has to land where the content lands. Routing OC criticals to
+        # the strikes channel while the ping stayed here produced a bare
+        # @Management mention with nothing under it (seen 15/10/2026): everyone
+        # got pinged into an empty channel while the actual alert sat elsewhere.
+        here = bool(has_inactivity or has_left or oc_warning)
+        there = bool(oc_critical)
+        if MANAGEMENT_PING_ROLE_ID:
+            if here:
+                await channel.send(f'<@&{MANAGEMENT_PING_ROLE_ID}>')
+            # Only a second ping when it is genuinely a second channel.
+            if there and (oc_channel.id != channel.id or not here):
+                await oc_channel.send(f'<@&{MANAGEMENT_PING_ROLE_ID}>')
 
         # If everyone is active on both checks, post a positive summary
         if not warning_members and not critical_members and not oc_warning and not oc_critical and not left_faction:
@@ -770,10 +785,8 @@ class InactivityTracker:
             if current:
                 chunks.append(current)
 
-            # OC misses are strike material, so they go to the strikes channel
-            # when one is set. Falls back to this channel otherwise, so turning
-            # the feature on is opt-in and nothing is ever silently dropped.
-            oc_channel = self.bot.get_channel(STRIKES_CHANNEL_ID) or channel
+            # Strike territory, so it goes to the strikes channel (computed
+            # above, together with the ping that has to accompany it).
             for i, chunk in enumerate(chunks):
                 title = '🔴 OC Participation Critical' if i == 0 else '🔴 OC Critical (continued)'
                 embed = create_embed(title=title, description=chunk.strip(), color=EMBED_COLOR_CRITICAL)
@@ -807,11 +820,11 @@ class InactivityTracker:
             if current:
                 chunks.append(current)
 
-            oc_channel = self.bot.get_channel(STRIKES_CHANNEL_ID) or channel
+            # A nudge, not a strike - stays with the rest of the daily check.
             for i, chunk in enumerate(chunks):
                 title = '⚠️ OC Participation Warning' if i == 0 else '⚠️ OC Warning (continued)'
                 embed = create_embed(title=title, description=chunk.strip(), color=EMBED_COLOR_WARNING)
-                await oc_channel.send(embed=embed)
+                await channel.send(embed=embed)
             logger.info(f'Sent OC warning alert for {len(oc_warning)} members')
 
         # ── Left-faction alerts ──────────────────────────────────────────────

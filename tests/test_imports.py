@@ -2922,6 +2922,74 @@ def test_bonus_hit_field_stays_inside_the_discord_limit():
         torn_api_mod.fetch_faction_members = orig
 
 
+def test_management_ping_lands_in_the_channel_that_got_the_alert():
+    """
+    Regression, seen in production on 15/10/2026.
+
+    Routing OC criticals to the strikes channel left the @Management ping
+    behind in the daily-check channel, so management was pinged into a channel
+    with nothing in it while the actual alert sat somewhere else. A ping with
+    no content is worse than no ping: it trains people to ignore the next one.
+
+    The ping now follows the content, and the nudge tier stays put because a
+    2-day reminder is not strike material.
+    """
+    import asyncio
+    from features.inactivity import InactivityTracker
+
+    class FakeChannel:
+        def __init__(self, cid):
+            self.id = cid
+            self.posts = []
+
+        async def send(self, content=None, embed=None, **kw):
+            self.posts.append(('ping' if content else 'embed',
+                               embed.title if embed else content))
+
+    daily = FakeChannel(111)
+    strikes = FakeChannel(222)
+
+    class FakeBot:
+        def get_channel(self, cid):
+            return strikes if cid == 222 else daily
+
+        def get_guild(self, _):
+            return None
+
+    import features.inactivity as inact_mod
+    orig_sid = inact_mod.STRIKES_CHANNEL_ID
+    orig_role = inact_mod.MANAGEMENT_PING_ROLE_ID
+    inact_mod.STRIKES_CHANNEL_ID = 222
+    inact_mod.MANAGEMENT_PING_ROLE_ID = 999
+
+    mgr = InactivityTracker(bot=FakeBot())
+    crit = [{'torn_name': 'Druid1999', 'torn_id': '4460611', 'torn_level': 15,
+             'days': 15.0, 'last_oc_ts': 1790000000.0}]
+    try:
+        # ONLY an OC critical: the exact shape that produced the bare ping.
+        asyncio.run(mgr._send_inactivity_alert(
+            daily, [], [], 35, oc_warning=[], oc_critical=crit, left_faction=[]))
+
+        assert not any(k == 'ping' for k, _ in daily.posts), (
+            f'bare ping left in the daily channel: {daily.posts}')
+        assert any(k == 'ping' for k, _ in strikes.posts), (
+            f'the strikes channel got the alert but no ping: {strikes.posts}')
+        assert any(k == 'embed' for k, _ in strikes.posts), 'alert must be there'
+
+        # And a nudge-only run stays in the daily channel, pinged there.
+        daily.posts.clear()
+        strikes.posts.clear()
+        asyncio.run(mgr._send_inactivity_alert(
+            daily, [], [], 35, oc_warning=crit, oc_critical=[], left_faction=[]))
+        assert any(k == 'ping' for k, _ in daily.posts), 'nudge must ping here'
+        assert any(k == 'embed' for k, _ in daily.posts), 'nudge stays here'
+        assert not strikes.posts, (
+            f'a 2-day nudge is not strike material: {strikes.posts}')
+    finally:
+        inact_mod.STRIKES_CHANNEL_ID = orig_sid
+        inact_mod.MANAGEMENT_PING_ROLE_ID = orig_role
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -2962,6 +3030,7 @@ if __name__ == '__main__':
     test_strike_candidates_separate_certain_from_askable()
     test_bonus_hit_on_a_non_enemy_is_flagged_but_only_when_it_really_was_one()
     test_bonus_hit_field_stays_inside_the_discord_limit()
+    test_management_ping_lands_in_the_channel_that_got_the_alert()
     test_war_report_counts_hits_taken_from_attack_log()
     test_activity_profile_chunk_detection()
     test_activity_profile_manager_queries()
