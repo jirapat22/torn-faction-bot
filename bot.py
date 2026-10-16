@@ -371,6 +371,17 @@ async def daily_inactivity_check():
         if strike_manager:
             await strike_manager.post_weekly_digest()
 
+        # Torn-vs-Discord roster drift, weekly. Decides its own day, so
+        # there is no extra loop to keep alive.
+        try:
+            from features.discord_roster import post_weekly_roster_check
+            from config import ROSTER_CHECK_WEEKDAY, INACTIVITY_ALERTS_CHANNEL_ID
+            await post_weekly_roster_check(
+                bot, bot.get_guild(GUILD_ID), verification_system,
+                INACTIVITY_ALERTS_CHANNEL_ID, ROSTER_CHECK_WEEKDAY)
+        except Exception as e:
+            logger.error(f'Weekly roster check failed: {e}')
+
         # Channel cleanup. Rides the daily loop but sweeps WEEKLY - it
         # checks the weekday itself, so there is no second loop to keep
         # alive. Narrow by design: welcome pit and the war-tracker feed

@@ -110,6 +110,11 @@ CLEANUP_MAX_PER_RUN = int(os.getenv("CLEANUP_MAX_PER_RUN", "40"))
 # from the strike digest so the two reports do not land together.
 CLEANUP_WEEKDAY = int(os.getenv("CLEANUP_WEEKDAY", "6"))
 
+# Weekly Torn-vs-Discord roster check. A different day again from the strike
+# digest (Sat) and the cleanup sweep (Sun), so the three weekly posts land
+# apart instead of as one wall on one morning.
+ROSTER_CHECK_WEEKDAY = int(os.getenv("ROSTER_CHECK_WEEKDAY", "2"))
+
 # Where the sweep reports what it removed. Deleting is the one thing here
 # that destroys data, so it never happens silently.
 CLEANUP_REPORT_CHANNEL_ID = int(os.getenv("CLEANUP_REPORT_CHANNEL_ID", "0"))

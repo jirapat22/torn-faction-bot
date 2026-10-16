@@ -127,7 +127,10 @@ async def _make_api_request(endpoint, params=None, use_personal_key=False, cache
         cached = api_cache[cache_key]
         age = time.time() - cached['timestamp']
         if age < ttl:
-            logger.info(f'Using cached data for {endpoint} (age: {age:.1f}s)')
+            # DEBUG, not INFO: this fires several times a minute and was
+            # 496 of the 500 lines Railway retains, so a real failure was
+            # pushed out of the log before anyone could read it.
+            logger.debug(f'Using cached data for {endpoint} (age: {age:.1f}s)')
             return cached['data']
 
     # Periodically prune expired cache entries
@@ -233,36 +236,6 @@ async def fetch_faction_data_v2(selections='wars', path_id=None):
     return data
 
 
-async def fetch_chain_data():
-    """
-    Fetch current chain data
-
-    Returns:
-        Dict with chain data or None if error
-    """
-    data = await fetch_faction_data('chain')
-
-    if not data:
-        return None
-
-    chain = data.get('chain', {})
-    return chain
-
-
-async def fetch_war_data():
-    """
-    Fetch current war data
-
-    Returns:
-        Dict with war data or None if error
-    """
-    data = await fetch_faction_data('wars')
-
-    if not data:
-        return None
-
-    wars = data.get('wars', {})
-    return wars
 
 
 async def verify_api_key():
@@ -275,27 +248,6 @@ async def verify_api_key():
     data = await _make_api_request(f'faction/{TORN_FACTION_ID}', {'selections': 'basic'})
     return data is not None
 
-
-async def get_member_last_action(torn_id):
-    """
-    Get a specific member's last action timestamp
-
-    Args:
-        torn_id: Torn user ID
-
-    Returns:
-        Unix timestamp of last action, or None if error
-    """
-    members = await fetch_faction_members()
-
-    if not members:
-        return None
-
-    member = members.get(str(torn_id))
-    if not member:
-        return None
-
-    return member.get('last_action', {}).get('timestamp')
 
 
 async def fetch_faction_attacks(from_ts=None, to_ts=None, sort=None):

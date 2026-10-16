@@ -24,7 +24,6 @@ sys.path.insert(0, str(ROOT))
 MODULES = [
     'config',
     'utils.helpers',
-    'utils.timestamps',
     'utils.torn_api',
     'features.commands',
     'features.availability',
@@ -3809,6 +3808,141 @@ def test_cleanup_sweeps_once_a_week_and_reports_what_it_took():
     assert mgr._due(force=True) is True, 'force is for running it by hand'
 
 
+def test_discord_roster_classifies_every_way_the_two_lists_drift():
+    """
+    Every alert the bot sends assumes the Torn roster and the Discord server
+    match. They drift four distinct ways, and each costs the member silently,
+    so each has to be named separately rather than lumped into "mismatch".
+
+    The one worth being careful about is somebody who DID register and whose
+    Discord account has since left the server: they are unreachable exactly
+    like someone who never registered, but they are a different conversation,
+    so the detail says which.
+    """
+    from features.discord_roster import classify, build_embed
+
+    roster = {
+        '1': {'name': 'Present'},     # registered, in the server: fine
+        '2': {'name': 'NoDiscord'},   # never registered, not in the server
+        '3': {'name': 'LeftServer'},  # registered, Discord account gone
+    }
+    verified = {
+        '100': {'torn_id': 1, 'torn_name': 'Present'},
+        '300': {'torn_id': 3, 'torn_name': 'LeftServer'},
+        '400': {'torn_id': 9, 'torn_name': 'Quitter'},   # in server, off roster
+        '500': {'torn_id': 8, 'torn_name': 'Ghost'},     # neither: dead record
+    }
+    present = {'100', '400', '700', '999'}   # 700 unregistered, 999 is a bot
+    bots = {'999'}
+
+    r = classify(roster, verified, present, bots)
+
+    names = lambda key: [n for n, _d in r[key]]
+    assert names('not_in_discord') == ['NoDiscord', 'LeftServer'] or \
+           sorted(names('not_in_discord')) == ['LeftServer', 'NoDiscord'], r
+    assert 'Present' not in names('not_in_discord'), 'they are reachable'
+
+    # the two unreachable cases are told apart in the detail
+    detail = dict(r['not_in_discord'])
+    assert 'never registered' in detail['NoDiscord']
+    assert 'left the server' in detail['LeftServer'], detail
+
+    assert names('unregistered') == ['<@700>'], r['unregistered']
+    assert '<@999>' not in names('unregistered'), 'a bot never registers'
+    assert '<@100>' not in names('unregistered'), 'they did register'
+
+    assert names('left_faction') == ['<@400>'], r['left_faction']
+    assert names('stale_link') == ['Ghost'], r['stale_link']
+
+    # --- everything agreeing says so, rather than printing empty sections ---
+    clean = classify({'1': {'name': 'Present'}},
+                     {'100': {'torn_id': 1, 'torn_name': 'Present'}},
+                     {'100'}, set())
+    assert all(not v for v in clean.values()), clean
+    e = build_embed(clean, 1, 1)
+    assert 'agree' in e.title.lower(), e.title
+
+    # --- a mismatch embed counts them and names the sections ---
+    e2 = build_embed(r, len(roster), 3)
+    assert '5' in e2.description, 'total mismatches stated'
+    for fragment in ('not reachable', 'never registered', 'not on the faction'):
+        assert fragment in e2.description, fragment
+
+
+def test_role_sync_only_touches_roles_it_manages():
+    """
+    roles.py is the highest blast radius untested code in the repo: it adds
+    and removes real people's Discord roles, and the audit found it had no
+    coverage at all.
+
+    The invariant that matters is containment. sync_member_role may only ever
+    remove a role that is in the CONFIGURED position map - a member's Verified
+    role, their colour role, anything a human gave them by hand must survive a
+    sync untouched. Get that wrong and a sync strips the server.
+    """
+    import asyncio
+    from features.roles import RoleSyncManager
+
+    class Role:
+        def __init__(self, rid, name):
+            self.id, self.name = rid, name
+        def __repr__(self):
+            return f'<{self.name}>'
+        def __eq__(self, other):
+            return isinstance(other, Role) and other.id == self.id
+        def __hash__(self):
+            return hash(self.id)
+
+    LEADER, MEMBER = Role(10, 'Leader'), Role(11, 'Member')
+    VERIFIED, COLOUR = Role(99, 'Verified'), Role(98, 'Pink')
+
+    class Guild:
+        roles = [LEADER, MEMBER, VERIFIED, COLOUR]
+        def get_role(self, rid):
+            return next((r for r in self.roles if r.id == rid), None)
+
+    class Member:
+        name = 'Someone'
+        def __init__(self, roles):
+            self.roles = list(roles)
+            self.added, self.removed = [], []
+        async def add_roles(self, *roles, reason=None):
+            self.added.extend(roles)
+            self.roles.extend(roles)
+        async def remove_roles(self, *roles, reason=None):
+            self.removed.extend(roles)
+            self.roles = [r for r in self.roles if r not in roles]
+
+    mgr = RoleSyncManager(bot=None)
+    # Positions are keyed lowercase, which get_roles_for_position relies on.
+    mgr.position_roles = {'leader': [10], 'member': [11]}
+    managed = mgr.get_all_position_role_ids()
+    assert managed == {10, 11}, (
+        f'the managed set must be exactly the configured roles: {managed}')
+
+    # --- promoted: gains Leader, loses Member, keeps everything else ---
+    m = Member([MEMBER, VERIFIED, COLOUR])
+    changed = asyncio.run(mgr.sync_member_role(Guild(), m, 'Leader'))
+    assert changed is True
+    assert LEADER in m.added, m.added
+    assert MEMBER in m.removed, m.removed
+    assert VERIFIED not in m.removed and COLOUR not in m.removed, (
+        f'a sync must never strip roles it does not manage: {m.removed}')
+    assert VERIFIED in m.roles and COLOUR in m.roles
+
+    # --- already correct: no API calls at all ---
+    m2 = Member([LEADER, VERIFIED])
+    assert asyncio.run(mgr.sync_member_role(Guild(), m2, 'Leader')) is False
+    assert not m2.added and not m2.removed, 'a no-op must not call Discord'
+
+    # --- unknown position: managed roles go, unmanaged ones stay ---
+    m3 = Member([LEADER, VERIFIED, COLOUR])
+    asyncio.run(mgr.sync_member_role(Guild(), m3, 'NotAPosition'))
+    assert LEADER in m3.removed, 'no mapping means no managed role'
+    assert VERIFIED in m3.roles and COLOUR in m3.roles, (
+        f'unmanaged roles survive an unknown position: {m3.roles}')
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -3860,6 +3994,8 @@ if __name__ == '__main__':
     test_parse_when_accepts_what_people_actually_type()
     test_cleanup_only_ever_deletes_the_bots_own_noise()
     test_cleanup_sweeps_once_a_week_and_reports_what_it_took()
+    test_discord_roster_classifies_every_way_the_two_lists_drift()
+    test_role_sync_only_touches_roles_it_manages()
     test_revive_scan_never_turns_a_failed_lookup_into_an_accusation()
     test_revive_check_posts_once_per_checkpoint_and_retries_on_failure()
     test_war_report_counts_hits_taken_from_attack_log()

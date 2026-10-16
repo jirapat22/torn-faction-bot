@@ -528,6 +528,7 @@ async def setup_verification_commands(bot, verification_system: VerificationSyst
         app_commands.Choice(name='unverify - Remove verification from member', value='unverify'),
         app_commands.Choice(name='fixrole - Give verified role to registered users missing it', value='fixrole'),
         app_commands.Choice(name='bulksync - Re-verify members by matching nicknames to faction', value='bulksync'),
+        app_commands.Choice(name='roster - Who is in Torn but not Discord, and the reverse', value='roster'),
         app_commands.Choice(name='stats - Show verification statistics', value='stats')
     ])
     @app_commands.choices(setting=[
@@ -742,6 +743,19 @@ async def setup_verification_commands(bot, verification_system: VerificationSyst
                            f"**Failed:** {result['failed']}",
                 color=EMBED_COLOR_SUCCESS
             )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+
+        elif action == 'roster':
+            # Ephemeral: this names people, and the weekly post in the
+            # inactivity channel is the shared copy.
+            from features.discord_roster import run_check
+            embed, _result = await run_check(
+                interaction.client, guild, verification_system)
+            if embed is None:
+                await interaction.followup.send(
+                    'Could not read the faction roster, so nothing is '
+                    'reported. Try again shortly.', ephemeral=True)
+                return
             await interaction.followup.send(embed=embed, ephemeral=True)
 
         elif action == 'bulksync':

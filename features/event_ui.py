@@ -31,22 +31,6 @@ logger = logging.getLogger(__name__)
 _DATE_FORMATS = ('%d-%m-%Y', '%Y-%m-%d', '%d/%m/%Y', '%Y/%m/%d')
 
 
-def _parse_event_datetime(date_str: str, time_str: str) -> datetime:
-    """Parse a date+time pair, accepting DD-MM-YYYY, YYYY-MM-DD, or slash variants.
-
-    Returns a UTC-aware datetime; raises ValueError if no format matches.
-    """
-    last_err = None
-    for fmt in _DATE_FORMATS:
-        try:
-            dt = datetime.strptime(f'{date_str} {time_str}', f'{fmt} %H:%M')
-            return dt.replace(tzinfo=timezone.utc)
-        except ValueError as e:
-            last_err = e
-    raise ValueError(f'Could not parse date/time. Accepted formats: '
-                     f'DD-MM-YYYY, YYYY-MM-DD, DD/MM/YYYY, YYYY/MM/DD. '
-                     f'Last error: {last_err}')
-
 
 def _announce_channel_id(event_name: str) -> int:
     """Route an event announcement to the channel matching its type,

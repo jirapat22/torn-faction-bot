@@ -61,12 +61,6 @@ def date_to_internal(date_str: str) -> str:
     return dt.strftime('%Y-%m-%d')
 
 
-def internal_to_display(internal_str: str) -> str:
-    """Convert internal YYYY-MM-DD to DD-MM-YYYY for display"""
-    dt = datetime.strptime(internal_str, '%Y-%m-%d')
-    return dt.strftime('%d-%m-%Y')
-
-
 class AvailabilityManager:
     """Manages availability polls and member responses"""
 
