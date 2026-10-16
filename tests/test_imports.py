@@ -1590,6 +1590,128 @@ def test_incoming_split_does_not_dump_war_hits_into_outside():
     assert split({}, {}) == (0, 0)
 
 
+def test_strike_candidates_feed_the_ledger_with_the_right_types():
+    """
+    Every tier the attacks log can settle has to reach the ledger as its OWN
+    candidate, typed, so "how many strikes does X have" is answerable and so a
+    dismissal can be remembered per thing rather than per war.
+
+    The context is the war id on purpose: the same member being absent again
+    next war is a NEW candidate, not a duplicate of the one dismissed last time.
+    """
+    import asyncio
+    from features.wars import WarTracker, WAR_OFFLINE_STRIKE_HOURS
+    import utils.torn_api as torn_api_mod
+    from config import TORN_FACTION_ID
+
+    got = []
+
+    class FakeLedger:
+        async def post_candidate(self, tid, name, stype, reason, context='', channel=None):
+            got.append((str(tid), stype, context))
+            return True
+
+    class FakeChannel:
+        async def send(self, **kw):
+            pass
+
+    class FakeBot:
+        def get_channel(self, _):
+            return FakeChannel()
+
+    class FakeAvail:
+        polls = {'p1': {'war_id': '777'}}
+        data = {'p1': {'0': [555]}}        # discord 555 answered
+
+    class FakeVS:
+        verified_users = {'555': {'torn_id': 100}}
+
+    mgr = WarTracker(bot=FakeBot())
+    mgr.strike_manager = FakeLedger()
+    mgr.availability_manager = FakeAvail()
+    mgr.verification_system = FakeVS()
+    over = (WAR_OFFLINE_STRIKE_HOURS + 6) * 3600
+    mgr.war_offline = {'100': over, '200': over}
+
+    async def fake_members():
+        return {str(i): {'name': f'M{i}'} for i in (100, 200, 300, 400, 500)}
+    orig = torn_api_mod.fetch_faction_members
+    torn_api_mod.fetch_faction_members = fake_members
+
+    attack_stats = {
+        '400': {'mugs_faction': 2, 'mugs_given': 5},
+        '_bonus_outside': [{'attacker_id': '500', 'chain': 25,
+                            'defender_name': 'Rando', 'defender_faction': ''}],
+        '_friendly_hosps': [],
+    }
+    report_factions = {str(TORN_FACTION_ID): {'members': {
+        '100': {'attacks': 0}, '300': {'attacks': 0}, '400': {'attacks': 9}}}}
+
+    try:
+        asyncio.run(mgr.post_strike_candidates('777', attack_stats, report_factions))
+    finally:
+        torn_api_mod.fetch_faction_members = orig
+
+    kinds = {(t, k) for t, k, _ in got}
+    assert ('400', 'mug_faction') in kinds, kinds
+    assert ('400', 'mug_opp') in kinds, kinds
+    assert ('500', 'bonus') in kinds, kinds
+    assert ('200', 'war_offline') in kinds, 'absent, no poll answer'
+    assert ('100', 'war_offline') not in kinds, 'answering the poll is the notice'
+    assert ('300', 'war_nohits') in kinds, 'zero attacks, no poll answer'
+    assert ('100', 'war_nohits') not in kinds, 'they answered the poll'
+
+    assert all(c == '777' for _t, _k, c in got), (
+        f'every candidate must be scoped to the war: {got}')
+
+
+def test_strike_candidates_still_post_without_a_ledger():
+    """
+    The ledger is wired in bot.py after the war tracker exists, and this repo
+    has already shipped a bug where that order was wrong and a manager bound
+    None. A war report is archived permanently, so losing it because the
+    ledger was missing would be unrecoverable - it falls back to one embed
+    and says so, instead of silently posting nothing.
+    """
+    import asyncio
+    from features.wars import WarTracker
+    import utils.torn_api as torn_api_mod
+    from config import TORN_FACTION_ID
+
+    sent = []
+
+    class FakeChannel:
+        async def send(self, **kw):
+            sent.append(kw.get('embed'))
+
+    class FakeBot:
+        def get_channel(self, _):
+            return FakeChannel()
+
+    mgr = WarTracker(bot=FakeBot())      # NO strike_manager attribute
+    mgr.war_offline = {}
+
+    async def fake_members():
+        return {str(500 + i): {'name': f'ballcrusher30{i:02d}XX'} for i in range(30)}
+    orig = torn_api_mod.fetch_faction_members
+    torn_api_mod.fetch_faction_members = fake_members
+    try:
+        asyncio.run(mgr.post_strike_candidates(
+            '777',
+            {'_bonus_outside': [{'attacker_id': str(500 + i), 'chain': 1000,
+                                 'defender_name': 'SomeLongTargetName',
+                                 'defender_faction': 'Kentucky Fried Criminals'}
+                                for i in range(30)],
+             '_friendly_hosps': []},
+            {str(TORN_FACTION_ID): {'members': {}}}))
+    finally:
+        torn_api_mod.fetch_faction_members = orig
+
+    assert len(sent) == 1, 'the report must still go out'
+    assert len(sent[0].description) <= 4096, (
+        f'embed description is {len(sent[0].description)}, Discord rejects over 4096')
+
+
 def test_war_report_counts_hits_taken_from_attack_log():
     """
     War 50338's management report said "Total Times Hit: 0" for every member
@@ -2711,85 +2833,6 @@ def test_chain_break_warning_gates_on_size_and_cooldown():
         ch_mod.get_current_timestamp = orig_now
 
 
-def test_strike_candidates_separate_certain_from_askable():
-    """
-    The report has to keep three different levels of certainty apart, or
-    management can't act on any of it.
-
-    Mugging a faction mate has no exception in the rules (sparring and friendly
-    hosps are allowed by agreement, mugging each other never is), so it is
-    stated as a strike. Mugging the opponent breaks the war rule but the rules
-    forgive a mug that was returned and apologised for, so it has to be asked
-    about. Being absent only counts if no notice was posted, and ANSWERING THE
-    POLL is a notice - that exemption is the whole point of the poll existing.
-    """
-    import asyncio
-    from features.wars import WarTracker, WAR_OFFLINE_STRIKE_HOURS
-    import features.wars as wars_mod
-    import utils.torn_api as torn_api_mod
-    from config import TORN_FACTION_ID
-
-    sent = []
-
-    class FakeChannel:
-        async def send(self, **kw):
-            sent.append(kw.get('embed'))
-
-    class FakeBot:
-        def get_channel(self, _):
-            return FakeChannel()
-
-    class FakeAvail:
-        polls = {'p1': {'war_id': '777'}}
-        data = {'p1': {'0': [555]}}        # discord id 555 answered
-
-    class FakeVS:
-        verified_users = {'555': {'torn_id': 100},   # answered the poll
-                          '666': {'torn_id': 200}}   # did not
-
-    mgr = WarTracker(bot=FakeBot())
-    mgr.availability_manager = FakeAvail()
-    mgr.verification_system = FakeVS()
-    over = (WAR_OFFLINE_STRIKE_HOURS + 6) * 3600
-    mgr.war_offline = {'100': over, '200': over, '300': 3600}
-
-    async def fake_members():
-        return {'100': {'name': 'Posted'}, '200': {'name': 'Silent'},
-                '300': {'name': 'Around'}, '400': {'name': 'Mugger'}}
-    orig = torn_api_mod.fetch_faction_members
-    torn_api_mod.fetch_faction_members = fake_members
-
-    attack_stats = {
-        '400': {'mugs_faction': 2, 'mugs_given': 5},
-        '_friendly_hosps': [],
-    }
-    report_factions = {str(TORN_FACTION_ID): {'members': {
-        '100': {'attacks': 0}, '200': {'attacks': 3}, '300': {'attacks': 0},
-        '400': {'attacks': 9}}}}
-
-    try:
-        asyncio.run(mgr.post_strike_candidates('777', attack_stats, report_factions))
-        assert len(sent) == 1
-        fields = {f.name: f.value for f in sent[0].fields}
-
-        faction = next(v for k, v in fields.items() if 'faction mate' in k)
-        assert 'Mugger' in faction and 'x2' in faction
-
-        opp = next(v for k, v in fields.items() if 'opponent' in k)
-        assert 'x5' in opp and 'money went back' in opp, 'must say to ask first'
-
-        off = next(v for k, v in fields.items() if 'Offline' in k)
-        assert 'Silent' in off, 'absent with no poll answer is a candidate'
-        assert 'Posted' not in off, 'answering the poll is the notice'
-        assert 'Around' not in off, 'under the threshold'
-
-        nohits = next(v for k, v in fields.items() if 'No hits' in k)
-        assert 'Around' in nohits, 'zero attacks and no poll answer is a candidate'
-        assert 'Posted' not in nohits, 'they answered, so not a candidate'
-    finally:
-        torn_api_mod.fetch_faction_members = orig
-
-
 def test_bonus_hit_on_a_non_enemy_is_flagged_but_only_when_it_really_was_one():
     """
     "A bonus hit on an outside target during a war = 1 strike" (war guide).
@@ -2875,60 +2918,6 @@ def test_bonus_hit_on_a_non_enemy_is_flagged_but_only_when_it_really_was_one():
     assert isinstance(stats['_bonus_outside'], list)
     assert all(k.startswith('_') or isinstance(v, dict)
                for k, v in stats.items())
-
-
-def test_bonus_hit_field_stays_inside_the_discord_limit():
-    """
-    The bonus-hit lines carry two player names and a faction name, so a dozen
-    of them measured 1198 characters against Discord's 1024-char field limit.
-    An over-long field does not get truncated by Discord, it REJECTS the whole
-    embed - which would lose the entire strike report, mugs and absences
-    included, in exactly the war that needed it.
-
-    So the rows are budgeted by length, and the overflow is counted instead.
-    """
-    import asyncio
-    from features.wars import WarTracker
-    import utils.torn_api as torn_api_mod
-    from config import TORN_FACTION_ID
-
-    sent = []
-
-    class FakeChannel:
-        async def send(self, **kw):
-            sent.append(kw.get('embed'))
-
-    class FakeBot:
-        def get_channel(self, _):
-            return FakeChannel()
-
-    mgr = WarTracker(bot=FakeBot())
-    mgr.war_offline = {}
-
-    # 30 bonus hits, every name as long as Torn allows, to push the field past
-    # the limit if nothing is budgeting it.
-    n = 30
-    roster = {str(500 + i): {'name': f'ballcrusher30{i:02d}XX'} for i in range(n)}
-    bonus = [{'attacker_id': str(500 + i), 'chain': 1000,
-              'defender_name': 'SomeLongTargetName',
-              'defender_faction': 'Kentucky Fried Criminals'} for i in range(n)]
-
-    async def fake_members():
-        return roster
-    orig = torn_api_mod.fetch_faction_members
-    torn_api_mod.fetch_faction_members = fake_members
-    try:
-        asyncio.run(mgr.post_strike_candidates(
-            '777', {'_bonus_outside': bonus, '_friendly_hosps': []},
-            {str(TORN_FACTION_ID): {'members': {}}}))
-        assert len(sent) == 1, 'the embed must still be built and sent'
-        field = next(f for f in sent[0].fields if 'Bonus hit' in f.name)
-        assert len(field.value) <= 1024, (
-            f'field is {len(field.value)} chars, Discord rejects over 1024')
-        assert 'ballcrusher3000XX' in field.value, 'must still name the first few'
-        assert 'more' in field.value, 'the ones it dropped must still be counted'
-    finally:
-        torn_api_mod.fetch_faction_members = orig
 
 
 def test_management_ping_lands_in_the_channel_that_got_the_alert():
@@ -3306,6 +3295,82 @@ def test_trial_check_fires_once_per_member_and_resets_on_rejoin():
     assert upd
 
 
+def test_strike_ledger_remembers_dismissals_and_expires_strikes():
+    """
+    The ledger exists because detection without a record left "how many
+    strikes does X have?" answerable only by scrolling a channel.
+
+    Two behaviours carry the whole thing:
+
+    DISMISS MEMORY. The daily checks re-detect the same thing every morning.
+    Without remembering a no, management would be asked the same question
+    forever, which is exactly the noise that made the old alerts unreadable.
+
+    EXPIRY ON READ. The leader asked for strikes to stop piling up, but a row
+    is never deleted - expiry is computed when reading, so an aged-out strike
+    stops counting while the history stays auditable.
+    """
+    import time
+    from features.strikes import StrikeManager
+    from config import STRIKE_EXPIRY_DAYS
+
+    sm = StrikeManager(bot=None)
+
+    # a fresh candidate is open
+    assert sm.is_open('oc', '111', '') is True
+
+    # ...and is not, once it is pending a decision
+    sm.pending[sm.key_for('oc', '111', '')] = {'torn_id': '111'}
+    assert sm.is_open('oc', '111', '') is False, 'must not post twice'
+
+    # dismissing it keeps it closed for good
+    del sm.pending[sm.key_for('oc', '111', '')]
+    sm.dismissed[sm.key_for('oc', '111', '')] = time.time()
+    assert sm.is_open('oc', '111', '') is False, (
+        'a dismissed candidate must not be raised again tomorrow')
+
+    # a DIFFERENT type for the same member is still open
+    assert sm.is_open('trial', '111', '') is True
+
+    # --- war context keeps candidates per war ---
+    sm2 = StrikeManager(bot=None)
+    sm2.dismissed[sm2.key_for('war_offline', '222', '100')] = time.time()
+    assert sm2.is_open('war_offline', '222', '100') is False, 'same war, settled'
+    assert sm2.is_open('war_offline', '222', '101') is True, (
+        'being absent again NEXT war is a new candidate, not a duplicate')
+
+    # --- an issued strike also closes the candidate ---
+    sm3 = StrikeManager(bot=None)
+    rec = sm3.add('333', 'Repeat', 'oc', 'no OC')
+    rec['context'] = ''
+    assert len(sm3.active('333')) == 1
+    assert sm3.is_open('oc', '333', '') is False, 'already struck for this'
+
+    # --- expiry is on READ: the row survives, the count does not ---
+    rec['issued_at'] = time.time() - (STRIKE_EXPIRY_DAYS + 1) * 86400
+    assert sm3.active('333') == [], 'an expired strike must stop counting'
+    assert len(sm3.history('333')) == 1, (
+        'but the record itself must remain, so history stays auditable')
+    assert sm3.is_open('oc', '333', '') is True, (
+        'once it expires the same rule can be raised again')
+
+    # --- removing a strike takes it out of the active count ---
+    sm4 = StrikeManager(bot=None)
+    r = sm4.add('444', 'Wrongly', 'bonus', 'mistake')
+    assert len(sm4.active('444')) == 1
+    assert sm4.remove(r['id'], 'management') is not None
+    assert sm4.active('444') == [], 'removed strikes do not count'
+    assert sm4.remove(r['id'], 'management') is None, 'cannot remove twice'
+
+    # --- counts() drives the /strikes all view ---
+    sm5 = StrikeManager(bot=None)
+    sm5.add('1', 'Alpha', 'oc', 'x')
+    sm5.add('1', 'Alpha', 'trial', 'y')
+    sm5.add('2', 'Beta', 'oc', 'z')
+    counts = sm5.counts()
+    assert counts['1'][1] == 2 and counts['2'][1] == 1, counts
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -3343,13 +3408,14 @@ if __name__ == '__main__':
     test_only_recruiting_oc_slots_count_as_joinable()
     test_war_report_separates_opponent_mugs_from_outside_mugs()
     test_chain_break_warning_gates_on_size_and_cooldown()
-    test_strike_candidates_separate_certain_from_askable()
+    test_strike_candidates_feed_the_ledger_with_the_right_types()
     test_bonus_hit_on_a_non_enemy_is_flagged_but_only_when_it_really_was_one()
-    test_bonus_hit_field_stays_inside_the_discord_limit()
+    test_strike_candidates_still_post_without_a_ledger()
     test_management_ping_lands_in_the_channel_that_got_the_alert()
     test_expired_crime_does_not_count_as_participating()
     test_member_with_no_oc_history_is_clocked_from_their_join_date()
     test_trial_check_fires_once_per_member_and_resets_on_rejoin()
+    test_strike_ledger_remembers_dismissals_and_expires_strikes()
     test_revive_scan_never_turns_a_failed_lookup_into_an_accusation()
     test_revive_check_posts_once_per_checkpoint_and_retries_on_failure()
     test_war_report_counts_hits_taken_from_attack_log()

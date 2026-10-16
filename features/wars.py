@@ -19,6 +19,7 @@ from config import (
     WAR_CHANNEL_ID,
     STRIKES_CHANNEL_ID,
     WAR_OFFLINE_STRIKE_HOURS,
+    PREWAR_OFFLINE_HOURS,
     TURTLE_HIT_THRESHOLD as _TURTLE_HIT_THRESHOLD,
     TURTLE_WINDOW_MINUTES as _TURTLE_WINDOW_MINUTES,
     WAR_MANAGEMENT_CHANNEL_ID,
@@ -1978,19 +1979,22 @@ class WarTracker:
 
     async def post_strike_candidates(self, war_id, attack_stats, report_factions):
         """
-        Post what the attacks log can actually settle about the war, to the
-        strikes channel, as candidates rather than verdicts.
+        Turn what the attacks log settles about the war into strike candidates.
 
-        The split matters. Mugging a faction mate has no exception in the rules
-        (sparring and friendly hosps are allowed by agreement, mugging each
-        other never is), so it is stated as a strike. Mugging the opponent
-        breaks the war rule but the rules forgive one that was returned and
-        apologised for, so it has to be asked about first. Being absent is only
-        a strike if no notice was posted, and the bot knows the poll but not
-        what was said in chat. A bonus hit on a non-enemy is stated as a strike
-        because the log settles it completely: the chain position and the
-        target's faction are both in the record, and neither depends on intent.
+        Each one is posted on its own with Issue/Dismiss buttons rather than as
+        a line in a list, because each needs its own decision and the ledger
+        has to know which was which. The context is the war id, so the same
+        member can legitimately be raised again next war.
+
+        The tiers still differ in how certain they are, and the reason text
+        says so. Mugging a faction mate has no exception in the rules (sparring
+        and friendly hosps are allowed by agreement, mugging each other never
+        is). Mugging the opponent breaks the war rule, but the rules forgive
+        one that was returned and apologised for. Being absent is only a strike
+        if no notice was posted, and the bot knows the poll but not what was
+        said in chat. A bonus hit on a non-enemy the log settles completely.
         """
+        sm = getattr(self, 'strike_manager', None)
         channel = self.bot.get_channel(STRIKES_CHANNEL_ID or WAR_MANAGEMENT_CHANNEL_ID) \
             if self.bot else None
         if not channel:
@@ -2004,116 +2008,84 @@ class WarTracker:
         def name_of(tid):
             return (roster.get(str(tid)) or {}).get('name', f'ID:{tid}')
 
-        # Who the war report says made no attacks at all
         our_members = {}
         for fid, fdata in (report_factions or {}).items():
             if str(fid) == str(TORN_FACTION_ID):
                 our_members = fdata.get('members', {}) or {}
                 break
 
-        faction_mugs, opponent_mugs = [], []
+        posted = self._availability_responders(war_id)
+        threshold = WAR_OFFLINE_STRIKE_HOURS * 3600
+
+        # (torn_id, type, reason) - built in order of how certain they are, so
+        # the channel reads worst-first.
+        candidates = []
+
         for tid, st in stats.items():
-            # Top-level event logs live in this dict under underscore keys
-            # and are lists, not per-member stats.
             if tid.startswith('_') or not isinstance(st, dict):
                 continue
             if st.get('mugs_faction'):
-                faction_mugs.append((name_of(tid), st['mugs_faction']))
+                candidates.append((tid, 'mug_faction',
+                    f"Mugged a faction mate x{st['mugs_faction']} during war "
+                    f"#{war_id}. The rules allow sparring and friendly hosps by "
+                    f"agreement; mugging each other has no exception."))
             if st.get('mugs_given'):
-                opponent_mugs.append((name_of(tid), st['mugs_given']))
+                candidates.append((tid, 'mug_opp',
+                    f"Mugged the opponent x{st['mugs_given']} during war "
+                    f"#{war_id}. Ask first: if the money went back and they "
+                    f"owned up, the rules forgive it. Get proof."))
 
-        # Bonus hits spent on someone who was not the enemy
-        bonus_hits = [b for b in (stats.get('_bonus_outside') or [])
-                      if isinstance(b, dict)]
-
-        # Absent too long, and the poll says they never answered
-        posted = self._availability_responders(war_id)
-        threshold = WAR_OFFLINE_STRIKE_HOURS * 3600
-        absent = []
-        for tid, secs in (self.war_offline or {}).items():
-            if secs < threshold:
+        for b in (stats.get('_bonus_outside') or []):
+            if not isinstance(b, dict):
                 continue
-            if str(tid) in posted:
-                continue  # answered the poll, so the rule is satisfied
-            absent.append((name_of(tid), secs / 3600))
+            target = b.get('defender_name') or 'unknown'
+            fac = b.get('defender_faction') or 'no faction'
+            candidates.append((b.get('attacker_id'), 'bonus',
+                f"Took chain bonus **{b.get('chain')}** on {target} ({fac}) "
+                f"during war #{war_id}. That respect did not count toward the "
+                f"war score."))
 
-        no_hits = [name_of(tid) for tid, m in our_members.items()
-                   if not m.get('attacks') and str(tid) not in posted]
+        for tid, secs in (self.war_offline or {}).items():
+            if secs < threshold or str(tid) in posted:
+                continue  # answering the poll is the notice
+            candidates.append((tid, 'war_offline',
+                f"Offline {secs / 3600:.0f}h during war #{war_id} and did not "
+                f"answer the availability poll. Check for a notice in chat "
+                f"before acting."))
 
-        if not (faction_mugs or opponent_mugs or bonus_hits or absent or no_hits):
+        for tid, m in our_members.items():
+            if m.get('attacks') or str(tid) in posted:
+                continue
+            candidates.append((tid, 'war_nohits',
+                f"Made no attacks at all in war #{war_id} and did not answer "
+                f"the availability poll."))
+
+        if not candidates:
             return
 
-        embed = create_embed(
-            title=f'\u2696\ufe0f Strike candidates \u00b7 war #{war_id}',
-            description='Nothing here is a strike yet. The log proves what '
-                        'happened, not whether there was a notice, a refund or '
-                        'an apology.',
-            color=EMBED_COLOR_WARNING,
-        )
-        if faction_mugs:
-            embed.add_field(
-                name='\U0001f534 Mugged a faction mate (strike)',
-                value='\n'.join(f'- **{n}** x{c}' for n, c in
-                                sorted(faction_mugs, key=lambda x: -x[1])[:15])
-                      + '\n-# The rules allow sparring and friendly hosps by '
-                        'agreement. Mugging each other has no exception.',
-                inline=False)
-        if opponent_mugs:
-            embed.add_field(
-                name='\U0001f7e0 Mugged the opponent (ask first)',
-                value='\n'.join(f'- **{n}** x{c}' for n, c in
-                                sorted(opponent_mugs, key=lambda x: -x[1])[:15])
-                      + '\n-# Get proof the money went back. If it did and they '
-                        'owned up, the rules forgive it.',
-                inline=False)
-        if bonus_hits:
-            # Named individually rather than counted: the chain number and the
-            # target are exactly what makes this checkable against the call-outs
-            # in the chain channel.
-            #
-            # Budgeted by LENGTH, not by a fixed row count. These lines carry two
-            # names and a faction name, so a dozen of them can pass Discord's
-            # 1024-char field limit (measured worst case: 1198). An over-long
-            # field does not truncate, it rejects the whole embed - which would
-            # lose the entire strike report, mugs and absences included, for the
-            # one war it was needed.
-            foot = ('\n-# That respect did not count toward the war score. '
-                    'Bonus hits must be called first and land on an enemy.')
-            budget = 1024 - len(foot)
-            lines, used, shown = [], 0, 0
-            for b in bonus_hits:
-                target = b.get('defender_name') or 'unknown'
-                fac = b.get('defender_faction') or 'no faction'
-                line = (f"- **{name_of(b.get('attacker_id'))}** took chain "
-                        f"**{b.get('chain')}** on {target} ({fac})")
-                # Always leave room for the "and N more" line that may follow.
-                more = f'- ...and {len(bonus_hits) - shown} more'
-                if used + len(line) + 1 + len(more) + 1 > budget:
-                    break
-                lines.append(line)
-                used += len(line) + 1
-                shown += 1
-            if shown < len(bonus_hits):
-                lines.append(f'- ...and {len(bonus_hits) - shown} more')
-            embed.add_field(
-                name='\U0001f534 Bonus hit on a non-enemy (strike)',
-                value='\n'.join(lines) + foot,
-                inline=False)
-        if absent:
-            embed.add_field(
-                name=f'\U0001f7e1 Offline {WAR_OFFLINE_STRIKE_HOURS}h+ with no poll answer',
-                value='\n'.join(f'- **{n}** {h:.0f}h' for n, h in
-                                sorted(absent, key=lambda x: -x[1])[:15])
-                      + '\n-# Check for a notice in chat before acting.',
-                inline=False)
-        if no_hits:
-            embed.add_field(
-                name='\u26aa No hits at all, no poll answer',
-                value=', '.join(sorted(no_hits)[:40]),
-                inline=False)
+        if sm:
+            await channel.send(embed=create_embed(
+                title=f'\u2696\ufe0f War #{war_id} \u00b7 {len(candidates)} strike candidate(s)',
+                description='Each one below has its own Issue / Dismiss '
+                            'buttons. Nothing is recorded until someone clicks, '
+                            'and a dismissal is remembered.',
+                color=EMBED_COLOR_WARNING))
+            new = 0
+            for tid, stype, reason in candidates:
+                if await sm.post_candidate(tid, name_of(tid), stype, reason,
+                                           context=str(war_id), channel=channel):
+                    new += 1
+            logger.info(f'War {war_id}: {len(candidates)} candidate(s), {new} posted')
+            return
 
-        await channel.send(embed=embed)
-        logger.info(f'Posted strike candidates for war {war_id}')
+        # No ledger wired (shouldn't happen in production, but the war report
+        # must never be lost just because the ledger failed to construct).
+        lines = [f'- **{name_of(t)}** \u00b7 {r}' for t, _k, r in candidates[:15]]
+        await channel.send(embed=create_embed(
+            title=f'\u2696\ufe0f Strike candidates \u00b7 war #{war_id}',
+            description='\n'.join(lines)[:4000],
+            color=EMBED_COLOR_WARNING))
+        logger.warning('Strike candidates posted without the ledger')
 
     def _availability_responders(self, war_id):
         """Torn ids of everyone who answered this war's availability poll."""
@@ -2230,6 +2202,65 @@ class WarTracker:
             description=desc, color=EMBED_COLOR_WARNING))
         return True
 
+    async def post_prewar_offline(self, channel, when_label):
+        """
+        Who has gone quiet in the days before a war starts.
+
+        This is deliberately NOT the post-war absence check. The leader's rule
+        is that members offline this long when we enlist get REMOVED to stop
+        them being free points, which only works if it is known beforehand -
+        reporting it after the war is too late to act on.
+
+        Returns True if something was posted. An unreadable roster returns
+        False so the checkpoint stays open and retries.
+        """
+        from utils.torn_api import fetch_faction_members
+        roster = await fetch_faction_members()
+        if not roster:
+            logger.warning('Pre-war offline: roster unreadable, skipping')
+            return False
+
+        now = get_current_timestamp()
+        threshold = PREWAR_OFFLINE_HOURS * 3600
+        quiet = []
+        for tid, m in roster.items():
+            la = (m.get('last_action') or {}).get('timestamp')
+            if not la:
+                continue  # unknown is not the same as offline
+            gap = now - int(la)
+            if gap >= threshold:
+                quiet.append((m.get('name', f'ID:{tid}'), str(tid), gap / 3600))
+
+        if not quiet:
+            await channel.send(embed=create_embed(
+                title=f'✅ Pre-war activity check · {when_label}',
+                description=(f'Everyone has been active in the last '
+                             f'{PREWAR_OFFLINE_HOURS}h.'),
+                color=EMBED_COLOR_SUCCESS))
+            return True
+
+        quiet.sort(key=lambda x: -x[2])
+        lines, used = [], 0
+        for name, tid, hrs in quiet:
+            who = self._mention_for(tid) or f'**{name}**'
+            line = f'- {who} ({name}) {hrs:.0f}h'
+            if used + len(line) + 1 > 3400:
+                lines.append(f'- ...and {len(quiet) - len(lines)} more')
+                break
+            lines.append(line)
+            used += len(line) + 1
+
+        await channel.send(embed=create_embed(
+            title=f'⚠️ Offline before the war · {when_label}',
+            description=(f'**{len(quiet)} of {len(roster)}** members have not '
+                         f'acted in {PREWAR_OFFLINE_HOURS}h.\n\n'
+                         + '\n'.join(lines)
+                         + '\n\n-# The rule is removal, not a strike, so these '
+                           'do not go to the ledger. Check for a notice first: '
+                           'someone can be offline and still have said so.'),
+            color=EMBED_COLOR_WARNING))
+        return True
+
     async def check_revive_status(self):
         """
         Post the revive check once per checkpoint before a war starts.
@@ -2270,6 +2301,13 @@ class WarTracker:
         except Exception as e:
             logger.error(f'Revive check failed for war {war_id}: {e}')
             return
+        # Same checkpoint, same roster-sized cost, different question: who has
+        # gone quiet. Failing this must not hold back the revive result, which
+        # already went out.
+        try:
+            await self.post_prewar_offline(channel, label)
+        except Exception as e:
+            logger.error(f'Pre-war offline check failed for war {war_id}: {e}')
         if not sent:
             return  # unreadable roster: leave the checkpoint open to retry
 

@@ -572,15 +572,26 @@ class InactivityTracker:
                 f'{line(d)}\n  {d["days"]} days in faction, still level '
                 f'{d["torn_level"]} (needed {TRIAL_TARGET_LEVEL})'
                 for d in sorted(failed, key=lambda x: -x['days']))
-            await strikes.send(embed=create_embed(
-                title='\U0001f534 Trial failed \u00b7 strike or remove',
-                description=(f'**{len(failed)} member(s)** did not reach level '
+            sm = getattr(self, 'strike_manager', None)
+            if sm:
+                for d in failed:
+                    await sm.post_candidate(
+                        d['torn_id'], d['torn_name'], 'trial',
+                        f"{d['days']} days in the faction and still level "
+                        f"{d['torn_level']}, needed {TRIAL_TARGET_LEVEL} within "
+                        f"{TRIAL_DAYS} days. The rules say strike OR removal "
+                        f"depending on progress.",
+                        context='', channel=strikes)
+            else:
+                await strikes.send(embed=create_embed(
+                    title='\U0001f534 Trial failed \u00b7 strike or remove',
+                    description=(f'**{len(failed)} member(s)** did not reach level '
                              f'{TRIAL_TARGET_LEVEL} within {TRIAL_DAYS} days.'
                              f'\n\n{body}\n\n'
                              f'-# The rules say strike or removal "depending on '
                              f'progress", so this is a judgement call, not an '
                              f'automatic strike. Posted once.'),
-                color=EMBED_COLOR_CRITICAL))
+                    color=EMBED_COLOR_CRITICAL))
 
         if passed:
             await channel.send(embed=create_embed(
@@ -985,13 +996,30 @@ class InactivityTracker:
             if current:
                 chunks.append(current)
 
-            # Strike territory, so it goes to the strikes channel (computed
-            # above, together with the ping that has to accompany it).
-            for i, chunk in enumerate(chunks):
-                title = '🔴 OC Participation Critical' if i == 0 else '🔴 OC Critical (continued)'
-                embed = create_embed(title=title, description=chunk.strip(), color=EMBED_COLOR_CRITICAL)
-                await oc_channel.send(embed=embed)
-            logger.info(f'Sent OC critical alert for {len(oc_critical)} members')
+            # Strike territory. Each member becomes its own candidate with
+            # Issue/Dismiss buttons rather than a line in a list, because each
+            # needs its own decision - and a dismissal has to be remembered or
+            # this re-raises every single morning.
+            sm = getattr(self, 'strike_manager', None)
+            posted = 0
+            if sm:
+                for data in oc_critical:
+                    reason = (f"{data['days']:.0f} days without joining an OC "
+                              f"(strike territory at {OC_CRITICAL_DAYS} days). "
+                              f"They were nudged at {OC_WARNING_DAYS} days.")
+                    if data.get('never_joined'):
+                        reason = (f"Never joined an OC, and has been eligible for "
+                                  f"{data['days']:.0f} days.")
+                    if await sm.post_candidate(data['torn_id'], data['torn_name'],
+                                               'oc', reason, context='',
+                                               channel=oc_channel):
+                        posted += 1
+            else:
+                for i, chunk in enumerate(chunks):
+                    title = '🔴 OC Participation Critical' if i == 0 else '🔴 OC Critical (continued)'
+                    embed = create_embed(title=title, description=chunk.strip(), color=EMBED_COLOR_CRITICAL)
+                    await oc_channel.send(embed=embed)
+            logger.info(f'OC critical: {len(oc_critical)} member(s), {posted} new candidate(s)')
 
         if oc_warning:
             lines = []

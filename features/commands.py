@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracker=None, verification_system=None,
                          event_reminder_manager=None, role_sync_manager=None,
                          enemy_watchlist=None, stakeout_manager=None,
-                         fly_tracker=None):
+                         fly_tracker=None, strike_manager=None):
     """
     Register all slash commands with the bot
 
@@ -336,6 +336,108 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
                 chain_data = await chain_tracker.get_current_chain()
                 embed = await chain_tracker.format_chain_embed(chain_data)
                 await interaction.followup.send(embed=embed)
+
+    # ===== STRIKES COMMAND =====
+
+    if strike_manager:
+        @bot.tree.command(name='strikes', description='Strike ledger (Management)')
+        @app_commands.describe(
+            view='What to show (default: everyone with active strikes)',
+            member='For Member view: whose record to show',
+            strike_id='For Remove: the 8-character id shown next to the strike'
+        )
+        @app_commands.choices(view=[
+            app_commands.Choice(name='All - everyone with active strikes', value='all'),
+            app_commands.Choice(name='Member - one person\'s full record', value='member'),
+            app_commands.Choice(name='Remove - clear a strike by id', value='remove'),
+        ])
+        async def strikes_cmd(interaction: discord.Interaction,
+                              view: app_commands.Choice[str] = None,
+                              member: discord.Member = None,
+                              strike_id: str = None):
+            if not is_management(interaction):
+                await interaction.response.send_message(
+                    'Management only.', ephemeral=True)
+                return
+            await interaction.response.defer(ephemeral=True)
+
+            from features.strikes import STRIKE_TYPES
+            from config import STRIKE_EXPIRY_DAYS
+            import time as _time
+            sm = strike_manager
+            v = view.value if view else 'all'
+
+            def when(ts):
+                return f'<t:{int(ts)}:R>'
+
+            if v == 'remove':
+                if not strike_id:
+                    await interaction.followup.send(
+                        'Give the 8-character strike id (shown in the Member view).',
+                        ephemeral=True)
+                    return
+                rec = sm.remove(strike_id.strip(), interaction.user.display_name)
+                await sm.save()
+                if not rec:
+                    await interaction.followup.send(
+                        f'No active strike with id `{strike_id}`.', ephemeral=True)
+                    return
+                await interaction.followup.send(
+                    f'Removed `{strike_id}` from **{rec["torn_name"]}** '
+                    f'({STRIKE_TYPES.get(rec["type"], rec["type"])}). '
+                    f'They now have {len(sm.active(rec["torn_id"]))} active.',
+                    ephemeral=True)
+                return
+
+            if v == 'member':
+                if not member:
+                    await interaction.followup.send(
+                        'Pick a member.', ephemeral=True)
+                    return
+                torn_id = inactivity_tracker.get_torn_id(member.id) if inactivity_tracker else None
+                if not torn_id:
+                    await interaction.followup.send(
+                        f'{member.mention} is not registered, so there is no '
+                        f'Torn id to look up. They need `/register` first.',
+                        ephemeral=True)
+                    return
+                act = sm.active(torn_id)
+                hist = sm.history(torn_id)
+                lines = []
+                for s in sorted(act, key=lambda x: -x.get('issued_at', 0)):
+                    lines.append(
+                        f'`{s["id"]}` **{STRIKE_TYPES.get(s["type"], s["type"])}** '
+                        f'{when(s["issued_at"])}\n  {s.get("reason", "")[:160]}')
+                expired = len(hist) - len(act)
+                body = '\n'.join(lines) if lines else 'No active strikes.'
+                await interaction.followup.send(embed=create_embed(
+                    title=f'Strikes \u00b7 {member.display_name}',
+                    description=(f'**{len(act)} active**, {expired} expired or '
+                                 f'removed, {len(hist)} ever.\n\n{body}'[:4000]),
+                    color=EMBED_COLOR_WARNING if act else EMBED_COLOR_SUCCESS),
+                    ephemeral=True)
+                return
+
+            counts = sm.counts()
+            if not counts:
+                await interaction.followup.send(embed=create_embed(
+                    title='Strike ledger',
+                    description=f'Nobody has an active strike. '
+                                f'Strikes expire after {STRIKE_EXPIRY_DAYS} days.',
+                    color=EMBED_COLOR_SUCCESS), ephemeral=True)
+                return
+            rows = sorted(counts.items(), key=lambda kv: -kv[1][1])
+            body = '\n'.join(f'**{n}** \u00b7 {c} active' for _tid, (n, c) in rows)
+            await interaction.followup.send(embed=create_embed(
+                title='Strike ledger',
+                description=(f'{len(rows)} member(s) with active strikes. '
+                             f'Expire after {STRIKE_EXPIRY_DAYS} days.\n\n'
+                             f'{body}\n\n'
+                             f'-# {len(sm.pending)} candidate(s) still waiting '
+                             f'on a decision.')[:4000],
+                color=EMBED_COLOR_WARNING), ephemeral=True)
+
+        logger.info('Strikes command registered (/strikes all/member/remove)')
 
     # ===== WAR COMMAND (Phase 4) =====
 

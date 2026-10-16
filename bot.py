@@ -79,6 +79,7 @@ inactivity_tracker = None
 chain_tracker = None
 war_tracker = None
 verification_system = None
+strike_manager = None
 role_sync_manager = None
 activity_profile_manager = None
 enemy_watchlist = None
@@ -144,6 +145,7 @@ async def on_ready():
     global inactivity_tracker, chain_tracker, war_tracker, verification_system
     global role_sync_manager, activity_profile_manager, enemy_watchlist, availability_manager
     global event_reminder_manager, stakeout_manager, fly_tracker, _initialized
+    global strike_manager
 
     try:
         logger.info(f'Bot logged in as {bot.user.name} (ID: {bot.user.id})')
@@ -185,6 +187,18 @@ async def on_ready():
         await inactivity_tracker.load_trial_data()
         await inactivity_tracker.load_left_faction_data()
 
+        # Strike ledger. Constructed early because the detections below hand
+        # it candidates, and its buttons have to be re-registered on startup.
+        from features.strikes import StrikeManager, StrikeActionView
+        strike_manager = StrikeManager(bot)
+        await strike_manager.load()
+        # Re-register a view per OPEN candidate. discord.py matches a
+        # persistent view by exact custom_id, and ours carry the candidate key,
+        # so a generic view would leave every pre-restart button dead.
+        for _key in list(strike_manager.pending):
+            bot.add_view(StrikeActionView(strike_manager, _key))
+        logger.info(f'Strikes: restored {len(strike_manager.pending)} candidate view(s)')
+
         # Initialize chain tracker
         chain_tracker = ChainTracker(bot)
         await chain_tracker.load_chain_history()
@@ -202,6 +216,10 @@ async def on_ready():
         # Reverse link: the daily left-faction check needs the configured
         # verified role id to revoke access once the grace period expires.
         inactivity_tracker.verification_system = verification_system
+        # The strike ledger needs verification to map a Torn id to a Discord
+        # user for the DM; the detections need the ledger to post candidates.
+        strike_manager.verification_system = verification_system
+        inactivity_tracker.strike_manager = strike_manager
         await verification_system.load_config()
         await setup_verification_commands(bot, verification_system)
 
@@ -225,6 +243,7 @@ async def on_ready():
         war_tracker.enemy_watchlist = enemy_watchlist
         # Needed to @-mention a member who is being farmed during a war
         war_tracker.verification_system = verification_system
+        war_tracker.strike_manager = strike_manager
         await war_tracker.load_turtle_alerts()
         await war_tracker.load_revive_checks()
 
@@ -270,7 +289,8 @@ async def on_ready():
             role_sync_manager=role_sync_manager,
             enemy_watchlist=enemy_watchlist,
             stakeout_manager=stakeout_manager,
-            fly_tracker=fly_tracker
+            fly_tracker=fly_tracker,
+            strike_manager=strike_manager
         )
 
         # Sync slash commands with Discord (guild-specific for instant updates)

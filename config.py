@@ -79,6 +79,17 @@ TRIAL_DAYS = int(os.getenv("TRIAL_DAYS", "14"))
 TRIAL_TARGET_LEVEL = int(os.getenv("TRIAL_TARGET_LEVEL", "15"))
 TRIAL_WARNING_DAYS = int(os.getenv("TRIAL_WARNING_DAYS", "10"))
 
+# How long an issued strike counts against a member. The leader's concern was
+# that "too many strikes might be difficult to monitor" - expiry is what keeps
+# the active list short enough to act on, while the record itself is kept
+# forever so history stays auditable.
+STRIKE_EXPIRY_DAYS = int(os.getenv("STRIKE_EXPIRY_DAYS", "60"))
+
+# Hours before a war starts to check who has gone quiet. The rule is that
+# members offline this long when we enlist get removed rather than struck,
+# so this fires BEFORE the war instead of reporting it afterwards.
+PREWAR_OFFLINE_HOURS = int(os.getenv("PREWAR_OFFLINE_HOURS", "24"))
+
 # Left-faction alert threshold (days before alerting about a verified member not in faction)
 # Grace period for someone who leaves the faction: they keep their verified
 # role (and so their channel access) this many days before it is revoked, and
