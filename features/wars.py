@@ -18,6 +18,7 @@ from utils.torn_api import fetch_faction_data, fetch_faction_data_v2, fetch_fact
 from config import (
     WAR_CHANNEL_ID,
     LEADER_USER_ID,
+    WAR_GUIDE_CHANNEL_ID,
     INACTIVITY_ALERTS_CHANNEL_ID,
     AVAILABILITY_CHANNEL_ID,
     STRIKES_CHANNEL_ID,
@@ -125,6 +126,9 @@ class WarTracker:
         self.pending_wars_file = 'data/pending_wars.json'
         self.turtle_alerts_file = 'data/turtle_alerts.json'
         self.revive_checks_file = 'data/revive_checks.json'
+        self.bleed_file = 'data/bleed_streaks.json'
+        # {torn_id: {'streak': n, 'warned': bool, 'last_war': id}}
+        self.bleed_streaks = {}
         # {war_id: [checkpoint seconds already posted]}
         self.revive_checks = {}
         self.turtle_cooldowns = {}  # {torn_id: last_alert_ts}
@@ -2092,6 +2096,119 @@ class WarTracker:
         await channel.send(embed=embed)
         logger.info(f'Turtle alert posted for {len(lines)} member(s)')
 
+    async def load_bleed_streaks(self):
+        """Consecutive wars each member has taken more hits than they landed."""
+        data = load_json(self.bleed_file, default={})
+        self.bleed_streaks = data.get('members', {}) if isinstance(data, dict) else {}
+
+    async def save_bleed_streaks(self):
+        save_json(self.bleed_file, {'members': self.bleed_streaks})
+
+    async def check_bleeding(self, war_id, report_factions, attack_stats):
+        """
+        Escalate members who keep feeding the enemy, warning before striking.
+
+        Measured across wars 47427, 48339 and 50338: five members took more
+        than they landed in EVERY war they played, together 591 of 2,364 hits
+        taken. Meanwhile members like EyeUhhn went 86 -> 11 -> 6, which is why
+        a single bad war is not the signal. Only a repeat is.
+
+        So the first repeat gets a DM with the turtling guide, because bleeding
+        is usually not knowing how rather than not caring, and only a further
+        war of it becomes a strike candidate.
+
+        Does nothing when the attacks log was unreadable: a member cannot be
+        accused of bleeding on numbers that were never read.
+        """
+        if attack_stats is None:
+            logger.info('Bleed check skipped: attacks log unreadable')
+            return
+        our = {}
+        for fid, fdata in (report_factions or {}).items():
+            if str(fid) == str(TORN_FACTION_ID):
+                our = fdata.get('members', {}) or {}
+                break
+        if not our:
+            return
+
+        sm = getattr(self, 'strike_manager', None)
+        changed = False
+        warned, flagged = [], []
+
+        for tid, m in our.items():
+            tid = str(tid)
+            st = attack_stats.get(tid) or {}
+            made = m.get('attacks', 0) or 0
+            taken = st.get('total_incoming', 0) or 0
+            rec = self.bleed_streaks.get(tid) or {'streak': 0, 'warned': False}
+
+            if taken <= made:
+                # A clean war resets everything. Somebody who fixed it should
+                # not stay one bad war away from a strike forever.
+                if rec.get('streak') or rec.get('warned'):
+                    self.bleed_streaks.pop(tid, None)
+                    changed = True
+                continue
+
+            rec['streak'] = rec.get('streak', 0) + 1
+            rec['last_war'] = str(war_id)
+            self.bleed_streaks[tid] = rec
+            changed = True
+
+            if rec['streak'] < 2:
+                continue  # one bad war is not a pattern
+
+            name = (st.get('name') or m.get('name') or f'ID:{tid}')
+            detail = (f'{taken} hits taken against {made} made in war '
+                      f'#{war_id}, {rec["streak"]} war(s) in a row.')
+
+            if not rec.get('warned'):
+                rec['warned'] = True
+                warned.append((tid, name, detail))
+            else:
+                flagged.append((tid, name, detail))
+
+        if changed:
+            await self.save_bleed_streaks()
+
+        for tid, name, detail in warned:
+            await self._warn_bleeder(tid, name, detail)
+        if sm:
+            for tid, name, detail in flagged:
+                await sm.post_candidate(
+                    tid, name, 'war_offline',
+                    f'Kept bleeding after a warning. {detail} Every hit they '
+                    f'take scores for the enemy, and abroad it scores 25% more.',
+                    context=str(war_id))
+        if warned or flagged:
+            logger.info(f'Bleed check: {len(warned)} warned, '
+                        f'{len(flagged)} raised as candidates')
+
+    async def _warn_bleeder(self, torn_id, name, detail):
+        """DM a repeat bleeder the fix, not just the finding."""
+        sm = getattr(self, 'strike_manager', None)
+        discord_id = sm.discord_id_for(torn_id) if sm else None
+        guide = (f' Turtling is covered in <#{WAR_GUIDE_CHANNEL_ID}>.'
+                 if WAR_GUIDE_CHANNEL_ID else '')
+        text = (f'{detail}\n\nEvery hit you take scores for the enemy, and '
+                f'if you are abroad it scores them 25% more. When you are not '
+                f'online and hitting, you should not be hittable: ipecac syrup '
+                f'or a wrong blood bag covers about an hour, a small explosive '
+                f'device up to five hours, and a friendly bounty covers a '
+                f'night.{guide}\n\nThis is a warning, not a strike. If it '
+                f'happens again next war it becomes one.')
+        if not discord_id:
+            logger.info(f'Bleed warning: {name} is not registered, cannot DM')
+            return
+        try:
+            user = await self.bot.fetch_user(int(discord_id))
+            await user.send(embed=create_embed(
+                title='\U0001f6e1\ufe0f You are losing us points',
+                description=text, color=EMBED_COLOR_WARNING))
+            logger.info(f'Bleed warning DM sent to {name}')
+        except Exception as e:
+            logger.info(f'Bleed warning: could not DM {name}: {e}')
+
     async def post_strike_candidates(self, war_id, attack_stats, report_factions):
         """
         Turn what the attacks log settles about the war into strike candidates.
@@ -2772,6 +2889,12 @@ class WarTracker:
                             logger.info('Auto-posted xan report to management')
                     except Exception as e:
                         logger.error(f'Auto xan post failed: {e}')
+
+                try:
+                    await self.check_bleeding(
+                        self.current_war_id, report_factions, attack_stats)
+                except Exception as e:
+                    logger.error(f'Bleed check failed: {e}')
 
                 try:
                     await self.post_strike_candidates(

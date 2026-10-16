@@ -3490,6 +3490,86 @@ def test_war_insight_counts_categories_and_never_invents_hits_taken():
     assert mgr._war_insight_text({}, stats) is None
 
 
+def test_bleeding_warns_before_it_strikes_and_resets_on_a_clean_war():
+    """
+    Measured across wars 47427, 48339 and 50338: five members took more than
+    they landed in EVERY war they played, together 591 of 2,364 hits taken.
+    Meanwhile EyeUhhn went 86 -> 11 -> 6 across the same wars.
+
+    That contrast is the whole design. One bad war is not a signal, so nothing
+    happens. The first REPEAT gets a DM with the fix in it, because bleeding
+    is usually not knowing how to turtle rather than not caring. Only a
+    further war of it becomes a strike candidate.
+
+    A clean war clears the record completely: somebody who fixed it must not
+    stay one bad war away from a strike forever.
+    """
+    import asyncio
+    from features.wars import WarTracker
+    from config import TORN_FACTION_ID
+
+    candidates, warnings = [], []
+
+    class FakeLedger:
+        def discord_id_for(self, tid):
+            return None
+        async def post_candidate(self, tid, name, stype, reason, context='', channel=None):
+            candidates.append((str(tid), stype, context))
+            return True
+
+    mgr = WarTracker(bot=None)
+    mgr.strike_manager = FakeLedger()
+
+    async def fake_warn(tid, name, detail):
+        warnings.append(str(tid))
+    mgr._warn_bleeder = fake_warn
+
+    def war(war_id, made, taken):
+        report = {str(TORN_FACTION_ID): {'members': {'1': {'attacks': made}}}}
+        stats = {'1': {'total_incoming': taken, 'name': 'Bleeder'}}
+        asyncio.run(mgr.check_bleeding(war_id, report, stats))
+
+    # war 1: bled, but once is not a pattern
+    war('100', made=2, taken=30)
+    assert warnings == [] and candidates == [], (warnings, candidates)
+    assert mgr.bleed_streaks['1']['streak'] == 1
+
+    # war 2: bled again -> warned, still not a strike
+    war('101', made=1, taken=25)
+    assert warnings == ['1'], warnings
+    assert candidates == [], 'a warning is not a strike'
+    assert mgr.bleed_streaks['1']['warned'] is True
+
+    # war 3: bled after the warning -> candidate
+    war('102', made=0, taken=40)
+    assert warnings == ['1'], 'must not warn the same person twice'
+    assert len(candidates) == 1, candidates
+    assert candidates[0][0] == '1' and candidates[0][2] == '102', candidates
+
+    # war 4: clean war -> the record is wiped, not just paused
+    war('103', made=20, taken=3)
+    assert '1' not in mgr.bleed_streaks, (
+        'fixing it must clear the record, not leave them one war from a strike')
+
+    # and the next bad war starts over at "not a pattern"
+    war('104', made=0, taken=10)
+    assert len(candidates) == 1, 'back to square one, no new candidate'
+    assert warnings == ['1']
+
+    # --- an unreadable log must not EXONERATE anyone either ---
+    # With no stats every member reads as 0 hits taken, which looks like a
+    # clean war and would silently wipe every streak on the books. That is
+    # the real damage an unreadable log does here, not a false accusation.
+    mgr2 = WarTracker(bot=None)
+    mgr2.strike_manager = FakeLedger()
+    mgr2.bleed_streaks = {'9': {'streak': 2, 'warned': True, 'last_war': '199'}}
+    asyncio.run(mgr2.check_bleeding(
+        '200', {str(TORN_FACTION_ID): {'members': {'9': {'attacks': 0}}}}, None))
+    assert mgr2.bleed_streaks.get('9', {}).get('streak') == 2, (
+        'an unreadable log must leave the record untouched, not read as a '
+        f'clean war: {mgr2.bleed_streaks}')
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -3537,6 +3617,7 @@ if __name__ == '__main__':
     test_strike_ledger_remembers_dismissals_and_expires_strikes()
     test_strike_notify_choices_are_exclusive_and_tracked()
     test_war_insight_counts_categories_and_never_invents_hits_taken()
+    test_bleeding_warns_before_it_strikes_and_resets_on_a_clean_war()
     test_revive_scan_never_turns_a_failed_lookup_into_an_accusation()
     test_revive_check_posts_once_per_checkpoint_and_retries_on_failure()
     test_war_report_counts_hits_taken_from_attack_log()

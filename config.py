@@ -89,6 +89,10 @@ STRIKE_EXPIRY_DAYS = int(os.getenv("STRIKE_EXPIRY_DAYS", "60"))
 # Unset falls back to the management role, so nothing is silently unaddressed.
 LEADER_USER_ID = int(os.getenv("LEADER_USER_ID", "0"))
 
+# The war guide post, linked when warning somebody about bleeding so the
+# message carries the fix and not just the accusation.
+WAR_GUIDE_CHANNEL_ID = int(os.getenv("WAR_GUIDE_CHANNEL_ID", "0"))
+
 # Weekday to post the strike digest, 0 = Monday. Weekly rather than daily:
 # strikes expire at 60 days and move slowly, so a daily post would mostly
 # repeat itself and become wallpaper.

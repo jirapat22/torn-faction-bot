@@ -252,6 +252,7 @@ async def on_ready():
         war_tracker.strike_manager = strike_manager
         await war_tracker.load_turtle_alerts()
         await war_tracker.load_revive_checks()
+        await war_tracker.load_bleed_streaks()
 
         # Initialize availability polling system
         from config import VERIFIED_ROLE_NAME
