@@ -17,6 +17,8 @@ from utils.helpers import load_json, save_json, create_embed, format_timestamp, 
 from utils.torn_api import fetch_faction_data, fetch_faction_data_v2, fetch_faction_attacks
 from config import (
     WAR_CHANNEL_ID,
+    INACTIVITY_ALERTS_CHANNEL_ID,
+    AVAILABILITY_CHANNEL_ID,
     STRIKES_CHANNEL_ID,
     WAR_OFFLINE_STRIKE_HOURS,
     PREWAR_OFFLINE_HOURS,
@@ -2220,6 +2222,12 @@ class WarTracker:
             logger.warning('Pre-war offline: roster unreadable, skipping')
             return False
 
+        # Who has gone quiet is an activity question, so it reads alongside the
+        # daily inactivity checks rather than in the war room, where it would
+        # compete with the calls people actually need to act on.
+        channel = (self.bot.get_channel(INACTIVITY_ALERTS_CHANNEL_ID) or channel) \
+            if self.bot else channel
+
         now = get_current_timestamp()
         threshold = PREWAR_OFFLINE_HOURS * 3600
         quiet = []
@@ -2258,6 +2266,69 @@ class WarTracker:
                          + '\n\n-# The rule is removal, not a strike, so these '
                            'do not go to the ledger. Check for a notice first: '
                            'someone can be offline and still have said so.'),
+            color=EMBED_COLOR_WARNING))
+        return True
+
+    async def post_poll_chasers(self, war_id, when_label):
+        """
+        Mention everyone who never answered the availability poll.
+
+        Answering is what exempts a member from the absence strike, so a
+        silent member this close to the start is either about to break the
+        rule or simply forgot - and the second one is worth a ping. Posted in
+        the availability channel so the mention sits next to the poll they
+        need to click.
+
+        Returns True if something was posted.
+        """
+        from utils.torn_api import fetch_faction_members
+        if not self.bot or not AVAILABILITY_CHANNEL_ID:
+            return False
+        channel = self.bot.get_channel(AVAILABILITY_CHANNEL_ID)
+        if not channel:
+            logger.warning('Poll chase: availability channel not found')
+            return False
+
+        roster = await fetch_faction_members()
+        if not roster:
+            logger.warning('Poll chase: roster unreadable, skipping')
+            return False
+
+        answered = self._availability_responders(war_id)
+        if not answered:
+            # No poll, or nobody has answered at all. Chasing the whole faction
+            # on a poll that may not exist would be worse than saying nothing.
+            logger.info('Poll chase: no responders recorded, skipping')
+            return False
+
+        silent = [(m.get('name', f'ID:{t}'), str(t))
+                  for t, m in roster.items() if str(t) not in answered]
+        if not silent:
+            await channel.send(embed=create_embed(
+                title=f'\u2705 Availability \u00b7 {when_label}',
+                description='Everyone has answered the poll.',
+                color=EMBED_COLOR_SUCCESS))
+            return True
+
+        silent.sort(key=lambda x: x[0].lower())
+        lines, used = [], 0
+        for name, tid in silent:
+            who = self._mention_for(tid) or f'**{name}**'
+            line = f'- {who} ({name})' if who.startswith('<@') else f'- {who}'
+            if used + len(line) + 1 > 3400:
+                lines.append(f'- ...and {len(silent) - len(lines)} more')
+                break
+            lines.append(line)
+            used += len(line) + 1
+
+        await channel.send(embed=create_embed(
+            title=f'\u23f0 Still no availability answer \u00b7 {when_label}',
+            description=(f'**{len(silent)} of {len(roster)}** have not answered '
+                         f'the poll above.\n\n' + '\n'.join(lines)
+                         + '\n\n-# Answering is what exempts you from the '
+                           'absence strike. Say so even if the answer is '
+                           '"barely on". The poll closes an hour before the '
+                           'war starts.'),
             color=EMBED_COLOR_WARNING))
         return True
 
@@ -2308,6 +2379,11 @@ class WarTracker:
             await self.post_prewar_offline(channel, label)
         except Exception as e:
             logger.error(f'Pre-war offline check failed for war {war_id}: {e}')
+        # Same pass again: who still has not said whether they will be around.
+        try:
+            await self.post_poll_chasers(war_id, label)
+        except Exception as e:
+            logger.error(f'Poll chase failed for war {war_id}: {e}')
         if not sent:
             return  # unreadable roster: leave the checkpoint open to retry
 

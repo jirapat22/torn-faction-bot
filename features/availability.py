@@ -39,6 +39,7 @@ logger = logging.getLogger(__name__)
 WAR_POLL_LEAD_SECONDS = 48 * 3600   # post once the war is this close
 WAR_POLL_SPAN_HOURS = 24            # cover the first day of the war
 WAR_POLL_BLOCK_HOURS = 4            # -> 6 blocks, one message, readable on mobile
+WAR_POLL_CLOSE_LEAD_SECONDS = 3600  # close this long BEFORE the war starts
 
 BLOCK_LABELS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L',
                 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X']
@@ -512,9 +513,11 @@ class AvailabilityManager:
             logger.error(f'Availability: war poll for {war_id} produced no blocks')
             return
 
-        # Close the poll as the war starts - that is when the coverage picture
-        # stops being a plan and starts being history.
-        self.polls[poll_id]['poll_end_unix'] = war_start
+        # Close an hour BEFORE the war. Closing exactly at the start left the
+        # coverage picture changing right up to the moment it was needed, and
+        # an answer typed as the war begins is not a plan anyone can act on.
+        # It also gives the 6h chase a deadline that actually falls due.
+        self.polls[poll_id]['poll_end_unix'] = war_start - WAR_POLL_CLOSE_LEAD_SECONDS
         self.polls[poll_id]['closed'] = False
         self.polls[poll_id]['war_id'] = war_id
 

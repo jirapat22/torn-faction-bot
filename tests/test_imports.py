@@ -2353,7 +2353,10 @@ def test_war_poll_posts_once_two_days_out():
         assert len(mgr.polls) == 1
         poll = list(mgr.polls.values())[0]
         assert poll['war_id'] == '50999'
-        assert poll['poll_end_unix'] == wt.start, 'poll closes as the war starts'
+        from features.availability import WAR_POLL_CLOSE_LEAD_SECONDS
+        assert poll['poll_end_unix'] == wt.start - WAR_POLL_CLOSE_LEAD_SECONDS, (
+            'the poll closes an hour BEFORE the war: an answer typed as the '
+            'war begins is not a plan anyone can act on')
 
         # Runs every minute - a second tick must not post again
         asyncio.run(mgr.check_war_poll(wt))
