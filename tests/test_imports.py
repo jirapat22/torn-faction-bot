@@ -3711,6 +3711,104 @@ def test_cleanup_only_ever_deletes_the_bots_own_noise():
     assert asyncio.run(CleanupManager(bot=None).sweep()) == {}
 
 
+def test_cleanup_sweeps_once_a_week_and_reports_what_it_took():
+    """
+    Deleting is the one thing here that destroys data, so it happens on a
+    schedule it cannot overrun and it never happens silently.
+
+    The week stamp, not "7 days since last run", is what stops a restart
+    sweeping twice - and a week the bot was down is skipped rather than
+    running late and deleting a double batch.
+    """
+    import asyncio
+    import discord
+    from datetime import datetime, timezone
+    import features.cleanup as cleanup_mod
+    from features.cleanup import CleanupManager
+
+    saved = {}
+    cleanup_mod.load_json = lambda path, default=None: dict(saved) or (default or {})
+    cleanup_mod.save_json = lambda path, data: saved.update(data)
+
+    sent = []
+
+    class U:
+        def __init__(self, uid):
+            self.id = uid
+
+    class Msg:
+        def __init__(self, author_id, mtype=discord.MessageType.default, pinned=False):
+            self.author, self.type, self.pinned = U(author_id), mtype, pinned
+            self.gone = False
+        async def delete(self):
+            self.gone = True
+
+    class Hist:
+        def __init__(self, msgs):
+            self.msgs = msgs
+        def __call__(self, **kw):
+            return self
+        def __aiter__(self):
+            self._it = iter(self.msgs)
+            return self
+        async def __anext__(self):
+            try:
+                return next(self._it)
+            except StopIteration:
+                raise StopAsyncIteration
+
+    class Chan:
+        name = 'swept'
+        def __init__(self, msgs):
+            self.history = Hist(msgs)
+        async def send(self, **kw):
+            sent.append(kw.get('embed'))
+
+    # 3 bot posts, 1 join notice, 2 human messages, 1 pinned bot post
+    msgs = ([Msg(999) for _ in range(3)]
+            + [Msg(5, mtype=discord.MessageType.new_member)]
+            + [Msg(5), Msg(6)]
+            + [Msg(999, pinned=True)])
+    chan = Chan(msgs)
+
+    class FakeBot:
+        user = U(999)
+        def get_channel(self, _cid):
+            return chan
+
+    mgr = CleanupManager(bot=FakeBot())
+    mgr._targets = lambda: [(1, 'welcome')]
+    cleanup_mod.CLEANUP_REPORT_CHANNEL_ID = 1   # unset means no report at all
+
+    res = asyncio.run(mgr.sweep(force=True))
+    stat = res['welcome']
+    assert stat['deleted'] == 4, stat          # 3 bot + 1 join
+    assert stat['bot'] == 3 and stat['joins'] == 1, stat
+    assert stat['kept'] == 3, f'2 humans + 1 pinned must survive: {stat}'
+    assert sum(1 for m in msgs if m.gone) == 4
+    assert not any(m.gone for m in msgs if m.pinned or m.author.id in (5, 6)
+                   and m.type is discord.MessageType.default)
+
+    # --- it reported, and the report says what was KEPT too ---
+    assert len(sent) == 1, 'a delete must never be silent'
+    body = sent[0].description
+    assert '4' in body and 'kept 3' in body, body
+    assert 'strikes' in body, 'the report states what is never swept'
+
+    # --- same week: refuses to run again ---
+    now = datetime.now(timezone.utc)
+    year, week, weekday = now.isocalendar()
+    cleanup_mod.CLEANUP_WEEKDAY = weekday - 1     # make today the sweep day
+    assert mgr._due() is False, (
+        'already swept this week, so it must not run again')
+
+    # --- a different weekday is never due, even unswept ---
+    saved.clear()
+    cleanup_mod.CLEANUP_WEEKDAY = (weekday - 1 + 3) % 7
+    assert mgr._due() is False, 'only sweeps on its own weekday'
+    assert mgr._due(force=True) is True, 'force is for running it by hand'
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -3761,6 +3859,7 @@ if __name__ == '__main__':
     test_bleeding_warns_before_it_strikes_and_resets_on_a_clean_war()
     test_parse_when_accepts_what_people_actually_type()
     test_cleanup_only_ever_deletes_the_bots_own_noise()
+    test_cleanup_sweeps_once_a_week_and_reports_what_it_took()
     test_revive_scan_never_turns_a_failed_lookup_into_an_accusation()
     test_revive_check_posts_once_per_checkpoint_and_retries_on_failure()
     test_war_report_counts_hits_taken_from_attack_log()

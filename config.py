@@ -106,6 +106,14 @@ STRIKE_DIGEST_WEEKDAY = int(os.getenv("STRIKE_DIGEST_WEEKDAY", "0"))
 CLEANUP_DAYS = int(os.getenv("CLEANUP_DAYS", "30"))
 CLEANUP_MAX_PER_RUN = int(os.getenv("CLEANUP_MAX_PER_RUN", "40"))
 
+# Weekly, not daily: 0 = Monday, 6 = Sunday. Deliberately a different day
+# from the strike digest so the two reports do not land together.
+CLEANUP_WEEKDAY = int(os.getenv("CLEANUP_WEEKDAY", "6"))
+
+# Where the sweep reports what it removed. Deleting is the one thing here
+# that destroys data, so it never happens silently.
+CLEANUP_REPORT_CHANNEL_ID = int(os.getenv("CLEANUP_REPORT_CHANNEL_ID", "0"))
+
 # Hours before a war starts to check who has gone quiet. The rule is that
 # members offline this long when we enlist get removed rather than struck,
 # so this fires BEFORE the war instead of reporting it afterwards.

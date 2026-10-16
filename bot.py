@@ -371,9 +371,10 @@ async def daily_inactivity_check():
         if strike_manager:
             await strike_manager.post_weekly_digest()
 
-        # Channel cleanup rides the daily loop. Narrow by design: welcome pit
-        # and the war-tracker feed only, never a channel you would cite in a
-        # dispute.
+        # Channel cleanup. Rides the daily loop but sweeps WEEKLY - it
+        # checks the weekday itself, so there is no second loop to keep
+        # alive. Narrow by design: welcome pit and the war-tracker feed
+        # only, never a channel you would cite in a dispute.
         try:
             from features.cleanup import CleanupManager
             swept = await CleanupManager(bot).sweep()
