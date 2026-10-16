@@ -98,6 +98,14 @@ WAR_GUIDE_CHANNEL_ID = int(os.getenv("WAR_GUIDE_CHANNEL_ID", "0"))
 # repeat itself and become wallpaper.
 STRIKE_DIGEST_WEEKDAY = int(os.getenv("STRIKE_DIGEST_WEEKDAY", "0"))
 
+# Channel cleanup. Only the welcome pit and the war-tracker feed are swept,
+# and only messages the bot or Discord itself posted - never a person's words.
+# The cap is on SPEED, not total: messages over 14 days old cannot be bulk
+# deleted, so a backlog drains over several daily runs instead of hammering
+# the API in one go.
+CLEANUP_DAYS = int(os.getenv("CLEANUP_DAYS", "30"))
+CLEANUP_MAX_PER_RUN = int(os.getenv("CLEANUP_MAX_PER_RUN", "40"))
+
 # Hours before a war starts to check who has gone quiet. The rule is that
 # members offline this long when we enlist get removed rather than struck,
 # so this fires BEFORE the war instead of reporting it afterwards.

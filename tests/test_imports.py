@@ -3570,6 +3570,147 @@ def test_bleeding_warns_before_it_strikes_and_resets_on_a_clean_war():
         f'clean war: {mgr2.bleed_streaks}')
 
 
+def test_parse_when_accepts_what_people_actually_type():
+    """
+    Management said the date and time fields were the hard part of making an
+    event, not the command. So one free-text box has to accept what somebody
+    would write in chat, and still accept the old rigid formats, because the
+    point is to stop REQUIRING them.
+
+    Everything is TCT, which is UTC. Nothing here guesses at local time.
+    """
+    from datetime import datetime, timezone, timedelta
+    from utils.when import parse_when, WhenError
+
+    # A Wednesday, 10:00 UTC, so "saturday" and "already gone today" are both
+    # testable without waiting for a particular day.
+    now = datetime(2026, 10, 14, 10, 0, tzinfo=timezone.utc)
+    assert now.weekday() == 2
+
+    def p(text):
+        return parse_when(text, now=now)
+
+    # --- relative ---
+    assert p('in 3 days') == now + timedelta(days=3)
+    assert p('in 2 hours') == now + timedelta(hours=2)
+    assert p('in 90 minutes') == now + timedelta(minutes=90)
+
+    # --- weekday names pick the NEXT one ---
+    sat = p('saturday 8pm')
+    assert (sat.weekday(), sat.hour, sat.minute) == (5, 20, 0), sat
+    assert sat.day == 17, 'the coming Saturday, not one in the past'
+    assert p('sat 20:00') == sat, 'abbreviations and 24h agree'
+    assert p('Saturday 8:00pm') == sat, 'case and minutes agree'
+
+    # today's weekday, with the time already gone -> next week
+    wed = p('wednesday 09:00')
+    assert wed.weekday() == 2 and wed.day == 21, (
+        f'09:00 Wednesday has passed, so it means next week: {wed}')
+
+    # --- today / tomorrow ---
+    assert p('tomorrow 20:00') == datetime(2026, 10, 15, 20, 0, tzinfo=timezone.utc)
+    assert p('today 23:00') == datetime(2026, 10, 14, 23, 0, tzinfo=timezone.utc)
+
+    # a bare time already gone today means tomorrow: an event in the past is
+    # never what anybody wanted
+    assert p('9am') == datetime(2026, 10, 15, 9, 0, tzinfo=timezone.utc)
+    assert p('8pm') == datetime(2026, 10, 14, 20, 0, tzinfo=timezone.utc)
+
+    # --- the old rigid formats still work ---
+    assert p('25-01-2027 14:30') == datetime(2027, 1, 25, 14, 30, tzinfo=timezone.utc)
+    assert p('2027-01-25 14:30') == datetime(2027, 1, 25, 14, 30, tzinfo=timezone.utc)
+
+    # --- noise people type without thinking ---
+    assert p('saturday at 8pm TCT') == sat
+    assert p('  SATURDAY   8PM  ') == sat
+    assert p('saturday @ 8pm') == sat
+
+    # --- 2000-style and the 4-digit-year trap ---
+    assert p('tomorrow 2000') == datetime(2026, 10, 15, 20, 0, tzinfo=timezone.utc)
+    assert p('25-01-2027 2030') == datetime(2027, 1, 25, 20, 30, tzinfo=timezone.utc), (
+        'the year must not be eaten as a time')
+
+    # --- things that must be refused, not guessed ---
+    for bad in ('', '   ', 'soonish', 'next month', 'saturday 25:00',
+                '32-01-2027 10:00'):
+        try:
+            p(bad)
+            raise AssertionError(f'{bad!r} should not have parsed')
+        except WhenError:
+            pass
+
+    # a date with no time is refused rather than silently set to midnight
+    try:
+        p('25-01-2027')
+        raise AssertionError('a date with no time should be refused')
+    except WhenError as e:
+        assert '20:00' in str(e), 'the error should show what to type'
+
+
+def test_cleanup_only_ever_deletes_the_bots_own_noise():
+    """
+    Auto-delete is the one feature here that destroys data, so the guards
+    matter more than the behaviour.
+
+    It may remove exactly two things: messages the bot itself posted, and
+    Discord's own join notices. A member's words are never touched whatever
+    their age, a pinned message is never touched because somebody pinned it
+    on purpose, and the swept channel list is only ever the welcome pit and
+    the war-tracker feed - never one that would be cited in a strike dispute.
+    """
+    import asyncio
+    import discord
+    from features.cleanup import CleanupManager
+    from config import (WELCOME_CHANNEL_ID, WAR_TRACKER_CHANNEL_ID,
+                        STRIKES_CHANNEL_ID, WAR_MANAGEMENT_CHANNEL_ID,
+                        INACTIVITY_ALERTS_CHANNEL_ID)
+
+    class U:
+        def __init__(self, uid):
+            self.id = uid
+
+    class Msg:
+        def __init__(self, author_id, mtype=discord.MessageType.default,
+                     pinned=False):
+            self.author = U(author_id)
+            self.type = mtype
+            self.pinned = pinned
+            self.deleted = False
+
+        async def delete(self):
+            self.deleted = True
+
+    class FakeBot:
+        user = U(999)
+
+    mgr = CleanupManager(bot=FakeBot())
+
+    bot_msg = Msg(999)
+    human_msg = Msg(123)
+    join_msg = Msg(123, mtype=discord.MessageType.new_member)
+    pinned_bot = Msg(999, pinned=True)
+    pinned_join = Msg(123, mtype=discord.MessageType.new_member, pinned=True)
+
+    assert mgr._deletable(bot_msg) is True, 'the bot cleans up after itself'
+    assert mgr._deletable(join_msg) is True, 'a join notice is noise'
+    assert mgr._deletable(human_msg) is False, (
+        "a member's own words are never deleted, whatever their age")
+    assert mgr._deletable(pinned_bot) is False, 'pinned beats any age rule'
+    assert mgr._deletable(pinned_join) is False
+
+    # --- the swept list is the narrow one, and nothing citable is in it ---
+    ids = {cid for cid, _label in mgr._targets()}
+    assert ids <= {WELCOME_CHANNEL_ID, WAR_TRACKER_CHANNEL_ID}, ids
+    for protected in (STRIKES_CHANNEL_ID, WAR_MANAGEMENT_CHANNEL_ID,
+                      INACTIVITY_ALERTS_CHANNEL_ID):
+        if protected:
+            assert protected not in ids, (
+                f'{protected} holds evidence and must never be swept')
+
+    # --- no bot, no deletions ---
+    assert asyncio.run(CleanupManager(bot=None).sweep()) == {}
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -3618,6 +3759,8 @@ if __name__ == '__main__':
     test_strike_notify_choices_are_exclusive_and_tracked()
     test_war_insight_counts_categories_and_never_invents_hits_taken()
     test_bleeding_warns_before_it_strikes_and_resets_on_a_clean_war()
+    test_parse_when_accepts_what_people_actually_type()
+    test_cleanup_only_ever_deletes_the_bots_own_noise()
     test_revive_scan_never_turns_a_failed_lookup_into_an_accusation()
     test_revive_check_posts_once_per_checkpoint_and_retries_on_failure()
     test_war_report_counts_hits_taken_from_attack_log()

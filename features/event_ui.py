@@ -11,6 +11,7 @@ Also auto-announces a created event to the channel matching its type.
 import discord
 from datetime import datetime, timezone, timedelta
 from utils.helpers import create_embed, is_management
+from utils.when import parse_when, WhenError
 from config import (
     EMBED_COLOR_INFO,
     EMBED_COLOR_SUCCESS,
@@ -109,18 +110,14 @@ class CommonEventModal(discord.ui.Modal):
 
         self.event_type = event_type
 
-    event_date = discord.ui.TextInput(
-        label='Date (DD-MM-YYYY or YYYY-MM-DD)',
-        placeholder='E.g., 25-01-2026 or 2026-01-25',
+    # One box, not two. Management said the date and time fields were the
+    # hard part of making an event, so this takes what people would type in
+    # chat and still accepts the old explicit formats.
+    event_when = discord.ui.TextInput(
+        label='When? (TCT)',
+        placeholder='saturday 8pm  |  tomorrow 20:00  |  in 3 days  |  25-01-2026 14:30',
         required=True,
-        max_length=10
-    )
-
-    event_time = discord.ui.TextInput(
-        label='Time (HH:MM in TCT/UTC)',
-        placeholder='E.g., 14:30',
-        required=True,
-        max_length=5
+        max_length=60
     )
 
     event_description = discord.ui.TextInput(
@@ -136,13 +133,14 @@ class CommonEventModal(discord.ui.Modal):
 
         try:
             name = self.default_name
-            date = self.event_date.value
-            time = self.event_time.value
             duration = self.default_duration
+            when_text = self.event_when.value
+            event_start = parse_when(when_text)
+            date = event_start.strftime('%d-%m-%Y')
+            time = event_start.strftime('%H:%M')
 
             description = self.event_description.value.strip() if self.event_description.value.strip() else self.default_desc
 
-            event_start = _parse_event_datetime(date, time)
             event_end = event_start + timedelta(hours=duration)
 
             event_description = f'{description}\n\n⏰ Time: {date} {time} TCT (UTC)'
@@ -185,11 +183,13 @@ class CommonEventModal(discord.ui.Modal):
 
         except ValueError as e:
             error_embed = create_embed(
-                title='Invalid Format',
-                description='Please use one of:\n'
-                           '• Date: DD-MM-YYYY (25-01-2026) or YYYY-MM-DD (2026-01-25)\n'
-                           '• Time: HH:MM (14:30) · TCT/UTC\n\n'
-                           f'Error: {str(e)}',
+                title='When?',
+                description=(f'{e}\n\nAll of these work:\n'
+                             '• `saturday 8pm`\n'
+                             '• `tomorrow 20:00`\n'
+                             '• `in 3 days`\n'
+                             '• `25-01-2026 14:30`\n\n'
+                             '-# Times are TCT (UTC).'),
                 color=EMBED_COLOR_CRITICAL
             )
             await interaction.followup.send(embed=error_embed, ephemeral=True)
@@ -223,18 +223,11 @@ class CustomEventModal(discord.ui.Modal):
         max_length=100
     )
 
-    event_date = discord.ui.TextInput(
-        label='Date (DD-MM-YYYY or YYYY-MM-DD)',
-        placeholder='E.g., 25-01-2026 or 2026-01-25',
+    event_when = discord.ui.TextInput(
+        label='When? (TCT)',
+        placeholder='saturday 8pm  |  tomorrow 20:00  |  in 3 days  |  25-01-2026 14:30',
         required=True,
-        max_length=10
-    )
-
-    event_time = discord.ui.TextInput(
-        label='Time (HH:MM in TCT/UTC)',
-        placeholder='E.g., 14:30',
-        required=True,
-        max_length=5
+        max_length=60
     )
 
     event_duration = discord.ui.TextInput(
@@ -257,12 +250,12 @@ class CustomEventModal(discord.ui.Modal):
 
         try:
             name = self.event_name.value
-            date = self.event_date.value
-            time = self.event_time.value
             duration = int(self.event_duration.value) if self.event_duration.value else self.default_duration
             description = self.event_desc.value
 
-            event_start = _parse_event_datetime(date, time)
+            event_start = parse_when(self.event_when.value)
+            date = event_start.strftime('%d-%m-%Y')
+            time = event_start.strftime('%H:%M')
             event_end = event_start + timedelta(hours=duration)
 
             if description:
@@ -311,11 +304,13 @@ class CustomEventModal(discord.ui.Modal):
 
         except ValueError as e:
             error_embed = create_embed(
-                title='Invalid Format',
-                description='Please use one of:\n'
-                           '• Date: DD-MM-YYYY (25-01-2026) or YYYY-MM-DD (2026-01-25)\n'
-                           '• Time: HH:MM (14:30) · TCT/UTC\n\n'
-                           f'Error: {str(e)}',
+                title='When?',
+                description=(f'{e}\n\nAll of these work:\n'
+                             '• `saturday 8pm`\n'
+                             '• `tomorrow 20:00`\n'
+                             '• `in 3 days`\n'
+                             '• `25-01-2026 14:30`\n\n'
+                             '-# Times are TCT (UTC).'),
                 color=EMBED_COLOR_CRITICAL
             )
             await interaction.followup.send(embed=error_embed, ephemeral=True)

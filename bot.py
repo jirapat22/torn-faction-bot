@@ -371,6 +371,17 @@ async def daily_inactivity_check():
         if strike_manager:
             await strike_manager.post_weekly_digest()
 
+        # Channel cleanup rides the daily loop. Narrow by design: welcome pit
+        # and the war-tracker feed only, never a channel you would cite in a
+        # dispute.
+        try:
+            from features.cleanup import CleanupManager
+            swept = await CleanupManager(bot).sweep()
+            if any(swept.values()):
+                logger.info(f'Cleanup: {swept}')
+        except Exception as e:
+            logger.error(f'Cleanup failed: {e}')
+
         # Auto-verify using Torn's official Torn<->Discord account link, which the
         # player establishes through Torn itself and so proves ownership. A Discord
         # nickname does NOT — it's user-set, so anyone could claim another member's
