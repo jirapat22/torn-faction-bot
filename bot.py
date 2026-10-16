@@ -189,15 +189,21 @@ async def on_ready():
 
         # Strike ledger. Constructed early because the detections below hand
         # it candidates, and its buttons have to be re-registered on startup.
-        from features.strikes import StrikeManager, StrikeActionView
+        from features.strikes import (StrikeManager, StrikeActionView,
+                                      StrikeDeliveredView)
         strike_manager = StrikeManager(bot)
         await strike_manager.load()
-        # Re-register a view per OPEN candidate. discord.py matches a
-        # persistent view by exact custom_id, and ours carry the candidate key,
-        # so a generic view would leave every pre-restart button dead.
+        # Re-register a view per OPEN candidate, and per strike still awaiting
+        # someone to deliver it. discord.py matches a persistent view by exact
+        # custom_id, and ours carry the candidate key or strike id, so a
+        # generic view would leave every pre-restart button dead.
         for _key in list(strike_manager.pending):
             bot.add_view(StrikeActionView(strike_manager, _key))
-        logger.info(f'Strikes: restored {len(strike_manager.pending)} candidate view(s)')
+        _awaiting = strike_manager.awaiting_notice()
+        for _s in _awaiting:
+            bot.add_view(StrikeDeliveredView(strike_manager, _s['id']))
+        logger.info(f'Strikes: restored {len(strike_manager.pending)} candidate '
+                    f'view(s), {len(_awaiting)} awaiting notice')
 
         # Initialize chain tracker
         chain_tracker = ChainTracker(bot)

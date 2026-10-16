@@ -349,6 +349,7 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
         @app_commands.choices(view=[
             app_commands.Choice(name='All - everyone with active strikes', value='all'),
             app_commands.Choice(name='Member - one person\'s full record', value='member'),
+            app_commands.Choice(name='Awaiting - strikes nobody has told the member about', value='awaiting'),
             app_commands.Choice(name='Remove - clear a strike by id', value='remove'),
         ])
         async def strikes_cmd(interaction: discord.Interaction,
@@ -389,6 +390,33 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
                     ephemeral=True)
                 return
 
+            if v == 'awaiting':
+                # A strike someone took on to deliver personally but never
+                # marked as told is the one failure mode of the "I'll tell
+                # them" option, so it gets its own view rather than hiding in
+                # the list.
+                out = sm.awaiting_notice()
+                if not out:
+                    await interaction.followup.send(embed=create_embed(
+                        title='Nothing awaiting notice',
+                        description='Every active strike has either been sent '
+                                    'by the bot or marked as told.',
+                        color=EMBED_COLOR_SUCCESS), ephemeral=True)
+                    return
+                body = '\n'.join(
+                    f'`{s["id"]}` **{s["torn_name"]}** \u00b7 '
+                    f'{STRIKE_TYPES.get(s["type"], s["type"])} \u00b7 '
+                    f'{when(s["issued_at"])}\n  taken on by '
+                    f'{s.get("issued_by", "?")}'
+                    for s in sorted(out, key=lambda x: x.get('issued_at', 0)))
+                await interaction.followup.send(embed=create_embed(
+                    title=f'\u23f3 {len(out)} strike(s) awaiting notice',
+                    description=(f'{body}\n\n-# Use the "Mark as told" button '
+                                 f'on the original message once the member has '
+                                 f'been spoken to.')[:4000],
+                    color=EMBED_COLOR_WARNING), ephemeral=True)
+                return
+
             if v == 'member':
                 if not member:
                     await interaction.followup.send(
@@ -405,9 +433,11 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
                 hist = sm.history(torn_id)
                 lines = []
                 for s in sorted(act, key=lambda x: -x.get('issued_at', 0)):
+                    flag = {'pending': ' \u23f3 *not told yet*',
+                            'done': '', 'bot': ''}.get(s.get('notified'), '')
                     lines.append(
                         f'`{s["id"]}` **{STRIKE_TYPES.get(s["type"], s["type"])}** '
-                        f'{when(s["issued_at"])}\n  {s.get("reason", "")[:160]}')
+                        f'{when(s["issued_at"])}{flag}\n  {s.get("reason", "")[:160]}')
                 expired = len(hist) - len(act)
                 body = '\n'.join(lines) if lines else 'No active strikes.'
                 await interaction.followup.send(embed=create_embed(
@@ -433,8 +463,9 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
                 description=(f'{len(rows)} member(s) with active strikes. '
                              f'Expire after {STRIKE_EXPIRY_DAYS} days.\n\n'
                              f'{body}\n\n'
-                             f'-# {len(sm.pending)} candidate(s) still waiting '
-                             f'on a decision.')[:4000],
+                             f'-# {len(sm.pending)} candidate(s) waiting on a '
+                             f'decision, {len(sm.awaiting_notice())} strike(s) '
+                             f'awaiting notice.')[:4000],
                 color=EMBED_COLOR_WARNING), ephemeral=True)
 
         logger.info('Strikes command registered (/strikes all/member/remove)')

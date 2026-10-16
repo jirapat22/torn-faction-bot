@@ -7,15 +7,25 @@ could only be answered by scrolling a channel. This module is the missing
 half: a durable per-member ledger, and a candidate -> human click -> strike
 flow so nothing is ever recorded without someone deciding it.
 
+A candidate offers three mutually exclusive choices, and whoever clicked is
+shown on the resolved message:
+
+  Strike, bot tells them   - recorded, DM sent, and the DM's exact text is
+                             echoed into the channel so management can see
+                             what the member was actually told
+  Strike, I'll tell them   - recorded and flagged AWAITING NOTICE, so a strike
+                             cannot quietly exist that nobody ever delivered.
+                             The message keeps a "Mark as told" button.
+  Dismiss                  - no strike, remembered so the same daily detection
+                             stops re-raising it every morning
+
 Three stores, all in data/strikes.json:
 
   strikes   - issued strikes, the ledger itself
   pending   - candidates posted but not yet actioned, keyed so the button can
               find its details after a restart (a Discord custom_id is capped
               at 100 chars and cannot carry a reason string)
-  dismissed - candidates management said no to, so a daily detection stops
-              re-raising the same thing every morning. This is what makes the
-              channel quiet enough to be worth reading.
+  dismissed - candidates management said no to
 """
 
 import time
@@ -31,12 +41,10 @@ from config import (
     EMBED_COLOR_WARNING,
     EMBED_COLOR_SUCCESS,
     EMBED_COLOR_CRITICAL,
-    EMBED_COLOR_INFO,
 )
 
 logger = logging.getLogger(__name__)
 
-# Short codes so a custom_id stays well inside Discord's 100-char limit.
 STRIKE_TYPES = {
     'inactive': 'Offline with no notice',
     'war_offline': 'Offline during a war',
@@ -53,13 +61,24 @@ STRIKE_TYPES = {
 }
 
 
+def dm_text(stype, reason):
+    """
+    The message a struck member receives. Built in one place because the
+    channel echoes it verbatim - management should see exactly what was sent,
+    not a paraphrase that could drift from it.
+    """
+    return (f'**{STRIKE_TYPES.get(stype, stype)}**\n\n{reason}\n\n'
+            f'Strikes expire after {STRIKE_EXPIRY_DAYS} days. If you think '
+            f'this is wrong, say so to management in the server.')
+
+
 class StrikeManager:
     def __init__(self, bot=None):
         self.bot = bot
         self.file = 'data/strikes.json'
-        self.strikes = []     # [{id, torn_id, torn_name, type, reason, ...}]
-        self.pending = {}     # {key: {...}}
-        self.dismissed = {}   # {key: timestamp}
+        self.strikes = []
+        self.pending = {}
+        self.dismissed = {}
 
     # ---------- persistence ----------
 
@@ -71,6 +90,7 @@ class StrikeManager:
         self.pending = data.get('pending', {}) or {}
         self.dismissed = data.get('dismissed', {}) or {}
         logger.info(f'Strikes: {len(self.active())} active, '
+                    f'{len(self.awaiting_notice())} awaiting notice, '
                     f'{len(self.pending)} pending, {len(self.dismissed)} dismissed')
 
     async def save(self):
@@ -89,8 +109,7 @@ class StrikeManager:
         """
         Strikes that still count. Expiry is computed on READ rather than by
         deleting rows, so a strike that aged out is still in the file and the
-        history stays auditable - you can always see what someone did in
-        March even though it no longer counts against them.
+        history stays auditable.
         """
         cutoff = self._expiry_cutoff()
         out = [s for s in self.strikes
@@ -100,23 +119,38 @@ class StrikeManager:
         return out
 
     def history(self, torn_id):
-        """Everything ever recorded for a member, expired and removed included."""
         return [s for s in self.strikes if str(s.get('torn_id')) == str(torn_id)]
 
-    def add(self, torn_id, torn_name, stype, reason, issued_by='bot', war_id=None):
+    def awaiting_notice(self):
+        """
+        Active strikes someone took on to deliver personally and has not yet
+        marked as told. Without this a "I'll message them" click would be
+        indistinguishable from a member who was never actually informed.
+        """
+        return [s for s in self.active() if s.get('notified') == 'pending']
+
+    def add(self, torn_id, torn_name, stype, reason, issued_by='bot',
+            context='', notified='bot'):
         rec = {
             'id': uuid.uuid4().hex[:8],
             'torn_id': str(torn_id),
             'torn_name': torn_name,
             'type': stype,
             'reason': reason,
+            'context': str(context),
             'issued_at': time.time(),
             'issued_by': issued_by,
-            'war_id': war_id,
+            'notified': notified,      # 'bot' | 'pending' | 'done'
             'status': 'active',
         }
         self.strikes.append(rec)
         return rec
+
+    def get(self, strike_id):
+        for s in self.strikes:
+            if s.get('id') == strike_id:
+                return s
+        return None
 
     def remove(self, strike_id, removed_by):
         for s in self.strikes:
@@ -127,8 +161,16 @@ class StrikeManager:
                 return s
         return None
 
+    def mark_told(self, strike_id, by):
+        s = self.get(strike_id)
+        if not s or s.get('notified') != 'pending':
+            return None
+        s['notified'] = 'done'
+        s['notified_by'] = by
+        s['notified_at'] = time.time()
+        return s
+
     def counts(self):
-        """{torn_id: (name, n)} for everyone with at least one active strike."""
         out = {}
         for s in self.active():
             tid = str(s['torn_id'])
@@ -142,14 +184,13 @@ class StrikeManager:
     def key_for(stype, torn_id, context=''):
         """
         Identity of a candidate. The context separates things that can
-        legitimately recur: a war-offline candidate is per war, so the same
-        member can be raised again next war, but a daily OC candidate uses a
-        stable context and therefore stays dismissed.
+        legitimately recur: a war candidate is per war, so the same member can
+        be raised again next war, but a daily one uses a stable context and
+        therefore stays dismissed.
         """
         return f'{stype}:{torn_id}:{context}'
 
     def is_open(self, stype, torn_id, context=''):
-        """False if this exact candidate is already posted, dismissed or struck."""
         key = self.key_for(stype, torn_id, context)
         if key in self.pending or key in self.dismissed:
             return False
@@ -158,10 +199,17 @@ class StrikeManager:
                 return False
         return True
 
+    def discord_id_for(self, torn_id):
+        vs = getattr(self, 'verification_system', None)
+        for discord_id, rec in (getattr(vs, 'verified_users', None) or {}).items():
+            if str((rec or {}).get('torn_id')) == str(torn_id):
+                return str(discord_id)
+        return None
+
     async def post_candidate(self, torn_id, torn_name, stype, reason,
                              context='', channel=None):
         """
-        Post one candidate with Issue / Dismiss buttons. Returns True if posted.
+        Post one candidate with its three choices. Returns True if posted.
 
         One message per candidate rather than a list embed, because each needs
         its own decision - and an actioned message edits itself into its
@@ -195,8 +243,8 @@ class StrikeManager:
             description=(f'**{torn_name}** '
                          f'[profile](<https://www.torn.com/profiles.php?XID={torn_id}>)\n\n'
                          f'{reason}\n\n'
-                         f'-# {prior} active strike(s) already. Nothing is '
-                         f'recorded until someone clicks.'),
+                         f'-# {prior} active strike(s) already. Pick one: '
+                         f'nothing is recorded until you do.'),
             color=EMBED_COLOR_WARNING,
         )
         try:
@@ -208,52 +256,32 @@ class StrikeManager:
             await self.save()
             return False
 
-    async def notify_member(self, torn_id, torn_name, stype, reason, channel):
+    async def send_dm(self, torn_id, stype, reason):
         """
-        Tell the member: a DM, and a mention in the strikes channel.
+        DM the member. Returns (sent, text).
 
-        Both, deliberately. A DM can be closed or ignored and leaves no record
-        anyone else can see; a channel mention is visible but easy to scroll
-        past. The DM failing is normal - plenty of people block DMs from
-        servers - so it is reported, never raised.
+        A failed DM is ordinary - plenty of people block DMs from servers - so
+        it is reported to the channel and never raised.
         """
-        mention = None
-        vs = getattr(self, 'verification_system', None)
-        for discord_id, rec in (getattr(vs, 'verified_users', None) or {}).items():
-            if str((rec or {}).get('torn_id')) == str(torn_id):
-                mention = f'<@{discord_id}>'
-                break
-
-        dm_ok = False
-        if mention:
-            try:
-                user = await self.bot.fetch_user(int(mention[2:-1]))
-                await user.send(embed=create_embed(
-                    title='⚖️ You have received a strike',
-                    description=(f'**{STRIKE_TYPES.get(stype, stype)}**\n\n{reason}\n\n'
-                                 f'Strikes expire after {STRIKE_EXPIRY_DAYS} days. '
-                                 f'If you think this is wrong, reply to management '
-                                 f'in the server.'),
-                    color=EMBED_COLOR_CRITICAL))
-                dm_ok = True
-            except Exception as e:
-                logger.info(f'Strikes: could not DM {torn_name}: {e}')
-
-        if channel:
-            who = mention or f'**{torn_name}**'
-            note = '' if dm_ok else ' (DM did not go through, tell them directly)'
-            try:
-                await channel.send(
-                    f'{who} — strike recorded: '
-                    f'{STRIKE_TYPES.get(stype, stype)}.{note}')
-            except Exception as e:
-                logger.error(f'Strikes: could not post notification: {e}')
-        return dm_ok
+        text = dm_text(stype, reason)
+        discord_id = self.discord_id_for(torn_id)
+        if not discord_id:
+            return False, text
+        try:
+            user = await self.bot.fetch_user(int(discord_id))
+            await user.send(embed=create_embed(
+                title='⚖️ You have received a strike',
+                description=text,
+                color=EMBED_COLOR_CRITICAL))
+            return True, text
+        except Exception as e:
+            logger.info(f'Strikes: could not DM {torn_id}: {e}')
+            return False, text
 
 
 class StrikeActionView(discord.ui.View):
     """
-    Issue / Dismiss buttons on a candidate.
+    The three choices on a candidate.
 
     Persistent (timeout=None) and keyed entirely by custom_id, because after a
     restart Discord hands back only that string - the candidate's details are
@@ -265,20 +293,26 @@ class StrikeActionView(discord.ui.View):
         super().__init__(timeout=None)
         self.manager = manager
         if key is not None:
-            self.add_item(StrikeButton(manager, key, issue=True))
-            self.add_item(StrikeButton(manager, key, issue=False))
+            self.add_item(StrikeChoice(manager, key, 'bot'))
+            self.add_item(StrikeChoice(manager, key, 'self'))
+            self.add_item(StrikeChoice(manager, key, 'dismiss'))
 
 
-class StrikeButton(discord.ui.Button):
-    def __init__(self, manager, key, issue):
-        super().__init__(
-            label='Issue strike' if issue else 'Dismiss',
-            style=discord.ButtonStyle.danger if issue else discord.ButtonStyle.secondary,
-            custom_id=f'st:{"i" if issue else "d"}:{key}'[:100],
-        )
+class StrikeChoice(discord.ui.Button):
+    LABELS = {
+        'bot': ('Strike · bot tells them', discord.ButtonStyle.danger),
+        'self': ("Strike · I'll tell them", discord.ButtonStyle.primary),
+        'dismiss': ('Dismiss', discord.ButtonStyle.secondary),
+    }
+    CODES = {'bot': 'b', 'self': 's', 'dismiss': 'd'}
+
+    def __init__(self, manager, key, choice):
+        label, style = self.LABELS[choice]
+        super().__init__(label=label, style=style,
+                         custom_id=f'st:{self.CODES[choice]}:{key}'[:100])
         self.manager = manager
         self.key = key
-        self.issue = issue
+        self.choice = choice
 
     async def callback(self, interaction: discord.Interaction):
         from utils.helpers import is_management
@@ -291,34 +325,104 @@ class StrikeButton(discord.ui.Button):
         cand = m.pending.pop(self.key, None)
         if cand is None:
             await interaction.response.send_message(
-                'This candidate was already actioned.', ephemeral=True)
+                'This one was already actioned.', ephemeral=True)
             return
 
         actor = interaction.user.display_name
-        if self.issue:
-            rec = m.add(cand['torn_id'], cand['torn_name'], cand['type'],
-                        cand['reason'], issued_by=actor,
-                        war_id=cand.get('context') or None)
-            rec['context'] = cand.get('context', '')
-            await m.save()
-            total = len(m.active(cand['torn_id']))
-            embed = create_embed(
-                title=f'\U0001f534 Strike issued · {STRIKE_TYPES.get(cand["type"], cand["type"])}',
-                description=(f'**{cand["torn_name"]}**\n\n{cand["reason"]}\n\n'
-                             f'-# Issued by {actor}. They now have **{total}** '
-                             f'active strike(s). Expires in {STRIKE_EXPIRY_DAYS} days.'),
-                color=EMBED_COLOR_CRITICAL)
-            await interaction.response.edit_message(embed=embed, view=None)
-            await m.notify_member(cand['torn_id'], cand['torn_name'],
-                                  cand['type'], cand['reason'],
-                                  interaction.channel)
-        else:
+        label = STRIKE_TYPES.get(cand['type'], cand['type'])
+
+        if self.choice == 'dismiss':
             m.dismissed[self.key] = time.time()
             await m.save()
-            embed = create_embed(
-                title=f'✅ Dismissed · {STRIKE_TYPES.get(cand["type"], cand["type"])}',
+            await interaction.response.edit_message(embed=create_embed(
+                title=f'✅ Dismissed · {label}',
                 description=(f'**{cand["torn_name"]}**\n\n{cand["reason"]}\n\n'
-                             f'-# Dismissed by {actor}. This will not be raised '
-                             f'again.'),
-                color=EMBED_COLOR_SUCCESS)
-            await interaction.response.edit_message(embed=embed, view=None)
+                             f'-# Dismissed by **{actor}**. Not recorded, and '
+                             f'will not be raised again.'),
+                color=EMBED_COLOR_SUCCESS), view=None)
+            return
+
+        notified = 'bot' if self.choice == 'bot' else 'pending'
+        rec = m.add(cand['torn_id'], cand['torn_name'], cand['type'],
+                    cand['reason'], issued_by=actor,
+                    context=cand.get('context', ''), notified=notified)
+        await m.save()
+        total = len(m.active(cand['torn_id']))
+
+        if self.choice == 'bot':
+            sent, text = await m.send_dm(cand['torn_id'], cand['type'],
+                                         cand['reason'])
+            mention = m.discord_id_for(cand['torn_id'])
+            who = f'<@{mention}>' if mention else f'**{cand["torn_name"]}**'
+            # Echo the DM verbatim so management can see what was actually
+            # said, not a summary of it.
+            head = (f'\U0001f4e8 DM sent to {who}:' if sent
+                    else f'⚠️ Could not DM {who} '
+                         f'(blocked, or not registered). They still need '
+                         f'telling. This is what would have been sent:')
+            await interaction.response.edit_message(embed=create_embed(
+                title=f'\U0001f534 Strike issued · {label}',
+                description=(f'**{cand["torn_name"]}** · `{rec["id"]}`\n\n'
+                             f'{cand["reason"]}\n\n'
+                             f'-# Issued by **{actor}**, bot notified. '
+                             f'{total} active strike(s). Expires in '
+                             f'{STRIKE_EXPIRY_DAYS} days.'),
+                color=EMBED_COLOR_CRITICAL), view=None)
+            try:
+                await interaction.channel.send(f'{head}\n>>> {text}')
+            except Exception as e:
+                logger.error(f'Strikes: could not echo DM: {e}')
+            return
+
+        # 'self' - recorded, but nobody has told them yet
+        await interaction.response.edit_message(embed=create_embed(
+            title=f'\U0001f534 Strike issued · {label}',
+            description=(f'**{cand["torn_name"]}** · `{rec["id"]}`\n\n'
+                         f'{cand["reason"]}\n\n'
+                         f'**{actor} is telling them personally.**\n'
+                         f'-# Recorded and awaiting notice. {total} active '
+                         f'strike(s). Click below once you have told them, so '
+                         f'it stops showing as outstanding.'),
+            color=EMBED_COLOR_CRITICAL),
+            view=StrikeDeliveredView(m, rec['id']))
+
+
+class StrikeDeliveredView(discord.ui.View):
+    """One button, on a strike somebody took on to deliver personally."""
+
+    def __init__(self, manager, strike_id=None):
+        super().__init__(timeout=None)
+        if strike_id is not None:
+            self.add_item(MarkToldButton(manager, strike_id))
+
+
+class MarkToldButton(discord.ui.Button):
+    def __init__(self, manager, strike_id):
+        super().__init__(label='Mark as told',
+                         style=discord.ButtonStyle.success,
+                         custom_id=f'st:t:{strike_id}'[:100])
+        self.manager = manager
+        self.strike_id = strike_id
+
+    async def callback(self, interaction: discord.Interaction):
+        from utils.helpers import is_management
+        if not is_management(interaction):
+            await interaction.response.send_message(
+                'Management only.', ephemeral=True)
+            return
+        m = self.manager
+        rec = m.mark_told(self.strike_id, interaction.user.display_name)
+        if rec is None:
+            await interaction.response.send_message(
+                'Already marked, or no longer outstanding.', ephemeral=True)
+            return
+        await m.save()
+        label = STRIKE_TYPES.get(rec['type'], rec['type'])
+        await interaction.response.edit_message(embed=create_embed(
+            title=f'\U0001f534 Strike issued · {label}',
+            description=(f'**{rec["torn_name"]}** · `{rec["id"]}`\n\n'
+                         f'{rec["reason"]}\n\n'
+                         f'-# Issued by **{rec.get("issued_by")}**, told by '
+                         f'**{interaction.user.display_name}**. '
+                         f'{len(m.active(rec["torn_id"]))} active strike(s).'),
+            color=EMBED_COLOR_CRITICAL), view=None)

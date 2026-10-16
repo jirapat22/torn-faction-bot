@@ -3371,6 +3371,60 @@ def test_strike_ledger_remembers_dismissals_and_expires_strikes():
     assert counts['1'][1] == 2 and counts['2'][1] == 1, counts
 
 
+def test_strike_notify_choices_are_exclusive_and_tracked():
+    """
+    A candidate offers three mutually exclusive choices and only one happens.
+
+    The one that needs a guard is "I'll tell them": it records a strike that
+    NOBODY HAS DELIVERED, which is indistinguishable from a member who was
+    never informed unless it is tracked separately. That is what
+    awaiting_notice() is for, and why the message keeps a "Mark as told"
+    button instead of resolving outright.
+    """
+    from features.strikes import StrikeManager, dm_text, STRIKE_TYPES
+
+    sm = StrikeManager(bot=None)
+
+    # --- bot notifies: nothing is left outstanding ---
+    a = sm.add('1', 'Alpha', 'oc', 'no OC', issued_by='Mgr', notified='bot')
+    assert sm.awaiting_notice() == [], 'the bot already told them'
+
+    # --- management notifies: it stays outstanding until marked ---
+    b = sm.add('2', 'Beta', 'trial', 'missed 15', issued_by='Mgr',
+               notified='pending')
+    out = sm.awaiting_notice()
+    assert [s['id'] for s in out] == [b['id']], out
+    assert len(sm.active('2')) == 1, 'it counts as a strike either way'
+
+    assert sm.mark_told(b['id'], 'Mgr2') is not None
+    assert sm.awaiting_notice() == [], 'marked, so no longer outstanding'
+    assert sm.get(b['id'])['notified_by'] == 'Mgr2', 'who told them is recorded'
+    assert sm.mark_told(b['id'], 'Mgr2') is None, 'cannot mark twice'
+
+    # a bot-notified strike was never outstanding, so it cannot be marked
+    assert sm.mark_told(a['id'], 'Mgr2') is None
+
+    # --- an expired strike drops out of the outstanding list too ---
+    from config import STRIKE_EXPIRY_DAYS
+    import time
+    c = sm.add('3', 'Gamma', 'oc', 'x', notified='pending')
+    assert len(sm.awaiting_notice()) == 1
+    c['issued_at'] = time.time() - (STRIKE_EXPIRY_DAYS + 1) * 86400
+    assert sm.awaiting_notice() == [], (
+        'chasing someone over a strike that no longer counts is pointless')
+
+    # --- the DM text is built once, so the channel echo cannot drift ---
+    t = dm_text('bonus', 'took chain 25 on a random')
+    assert STRIKE_TYPES['bonus'] in t and 'took chain 25' in t
+    assert str(STRIKE_EXPIRY_DAYS) in t, 'the member is told when it expires'
+
+    # --- dismissal still records nothing in the ledger ---
+    sm2 = StrikeManager(bot=None)
+    sm2.dismissed[sm2.key_for('oc', '9', '')] = time.time()
+    assert sm2.active('9') == [], 'a dismissal is not a strike'
+    assert sm2.is_open('oc', '9', '') is False
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -3416,6 +3470,7 @@ if __name__ == '__main__':
     test_member_with_no_oc_history_is_clocked_from_their_join_date()
     test_trial_check_fires_once_per_member_and_resets_on_rejoin()
     test_strike_ledger_remembers_dismissals_and_expires_strikes()
+    test_strike_notify_choices_are_exclusive_and_tracked()
     test_revive_scan_never_turns_a_failed_lookup_into_an_accusation()
     test_revive_check_posts_once_per_checkpoint_and_retries_on_failure()
     test_war_report_counts_hits_taken_from_attack_log()
