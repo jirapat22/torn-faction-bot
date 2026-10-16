@@ -85,6 +85,15 @@ TRIAL_WARNING_DAYS = int(os.getenv("TRIAL_WARNING_DAYS", "10"))
 # forever so history stays auditable.
 STRIKE_EXPIRY_DAYS = int(os.getenv("STRIKE_EXPIRY_DAYS", "60"))
 
+# The leader, pinged for Xanax reimbursements since that is their job alone.
+# Unset falls back to the management role, so nothing is silently unaddressed.
+LEADER_USER_ID = int(os.getenv("LEADER_USER_ID", "0"))
+
+# Weekday to post the strike digest, 0 = Monday. Weekly rather than daily:
+# strikes expire at 60 days and move slowly, so a daily post would mostly
+# repeat itself and become wallpaper.
+STRIKE_DIGEST_WEEKDAY = int(os.getenv("STRIKE_DIGEST_WEEKDAY", "0"))
+
 # Hours before a war starts to check who has gone quiet. The rule is that
 # members offline this long when we enlist get removed rather than struck,
 # so this fires BEFORE the war instead of reporting it afterwards.

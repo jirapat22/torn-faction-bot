@@ -3428,6 +3428,68 @@ def test_strike_notify_choices_are_exclusive_and_tracked():
     assert sm2.is_open('oc', '9', '') is False
 
 
+def test_war_insight_counts_categories_and_never_invents_hits_taken():
+    """
+    The board insight leads every line with a count, because "9 of 34 made no
+    hits" survives being skim-read and a list of names does not.
+
+    The guard that matters: hits taken come from the attacks log, and when
+    that could not be read in full the bleed line must say UNKNOWN rather
+    than report everyone as untouched. Reporting a quiet war because the log
+    was unreachable is the oldest bug in this repo.
+    """
+    from features.wars import WarTracker
+    from config import TORN_FACTION_ID
+
+    mgr = WarTracker(bot=None)
+    mgr.war_member_stats = {'wars': [{
+        'war_id': '100', 'enemy_name': 'Old Foes', 'result': 'defeat',
+        'members': {'1': {'attacks': 5}, '2': {'attacks': 0}, '3': {'attacks': 0}},
+    }]}
+
+    report = {str(TORN_FACTION_ID): {'members': {
+        '1': {'attacks': 40, 'score': 300},   # carried it
+        '2': {'attacks': 2, 'score': 10},     # token effort, farmed
+        '3': {'attacks': 0, 'score': 0},      # nothing, answered the poll
+        '4': {'attacks': 0, 'score': 0},      # nothing, said nothing
+    }}}
+    stats = {
+        '1': {'total_incoming': 2, 'name': 'Carrier'},
+        '2': {'total_incoming': 30, 'name': 'Bled'},
+        '3': {'total_incoming': 0, 'name': 'Excused'},
+        '4': {'total_incoming': 1, 'name': 'Silent'},
+    }
+
+    txt = mgr._war_insight_text(report, stats, responders={'3'})
+    assert txt, 'should produce an insight'
+
+    assert 'Carrier' in txt and '1 of 4' not in txt
+    assert '2 of 4 made at least one hit' in txt, txt
+
+    # the bleed line names the member who took far more than they gave
+    assert 'Bled' in txt and '30 taken vs 2 made' in txt, txt
+
+    # counts, and the poll exemption kept separate from real silence
+    assert '2 of 4 made no hits' in txt, txt
+    assert 'Silent' in txt, 'no hits and no poll answer must be named'
+    assert 'Excused' not in txt.split('Did nothing')[1], (
+        'answering the poll is the notice, so they are counted not named')
+
+    # comparison against the previous war
+    assert 'war #100' in txt and 'Old Foes' in txt, txt
+
+    # --- the log was unreadable: say so, never report zero ---
+    txt2 = mgr._war_insight_text(report, None, responders=set())
+    assert 'unknown' in txt2.lower(), txt2
+    assert 'could not be read' in txt2, (
+        'an unreadable attacks log must be stated, not shown as nobody '
+        f'being hit: {txt2}')
+    assert 'taken vs' not in txt2, 'no bleed figures can be claimed'
+
+    # --- no member data at all ---
+    assert mgr._war_insight_text({}, stats) is None
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -3474,6 +3536,7 @@ if __name__ == '__main__':
     test_trial_check_fires_once_per_member_and_resets_on_rejoin()
     test_strike_ledger_remembers_dismissals_and_expires_strikes()
     test_strike_notify_choices_are_exclusive_and_tracked()
+    test_war_insight_counts_categories_and_never_invents_hits_taken()
     test_revive_scan_never_turns_a_failed_lookup_into_an_accusation()
     test_revive_check_posts_once_per_checkpoint_and_retries_on_failure()
     test_war_report_counts_hits_taken_from_attack_log()

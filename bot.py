@@ -365,6 +365,10 @@ async def daily_inactivity_check():
     try:
         if inactivity_tracker:
             await inactivity_tracker.check_and_alert_inactive()
+        # Weekly strike digest. Rides the daily loop and decides for itself
+        # whether this is the day, so there is no second loop to keep alive.
+        if strike_manager:
+            await strike_manager.post_weekly_digest()
 
         # Auto-verify using Torn's official Torn<->Discord account link, which the
         # player establishes through Torn itself and so proves ownership. A Discord

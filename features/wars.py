@@ -17,6 +17,7 @@ from utils.helpers import load_json, save_json, create_embed, format_timestamp, 
 from utils.torn_api import fetch_faction_data, fetch_faction_data_v2, fetch_faction_attacks
 from config import (
     WAR_CHANNEL_ID,
+    LEADER_USER_ID,
     INACTIVITY_ALERTS_CHANNEL_ID,
     AVAILABILITY_CHANNEL_ID,
     STRIKES_CHANNEL_ID,
@@ -901,6 +902,118 @@ class WarTracker:
             chunks.append('\n'.join(current_chunk))
 
         return chunks
+
+    def _war_insight_text(self, report_factions, attack_stats, responders=None):
+        """
+        The read-out management actually wants from a war board: who carried
+        it, who bled, who did nothing, and whether we are getting better.
+
+        Counts lead each line, because "9 of 34 made no hits" lands harder
+        than a list of names and survives being skim-read.
+
+        Hits taken come from the attacks log, so when it could not be read
+        this says so rather than reporting everyone as untouched - the same
+        rule the rest of the war reporting follows.
+        """
+        our = {}
+        for fid, fdata in (report_factions or {}).items():
+            if str(fid) == str(TORN_FACTION_ID):
+                our = fdata.get('members', {}) or {}
+                break
+        if not our:
+            return None
+
+        stats = attack_stats or {}
+        log_ok = attack_stats is not None
+        responders = responders or set()
+
+        rows = []
+        for tid, m in our.items():
+            st = stats.get(str(tid)) or {}
+            hits = m.get('attacks', 0) or 0
+            taken = (st.get('total_incoming', 0) or 0) if log_ok else None
+            rows.append({
+                'tid': str(tid),
+                'name': st.get('name') or m.get('name') or f'ID:{tid}',
+                'hits': hits,
+                'score': m.get('score', 0) or 0,
+                'taken': taken,
+            })
+
+        total = len(rows)
+        fought = [r for r in rows if r['hits'] > 0]
+        nothing = [r for r in rows if r['hits'] == 0]
+        excused = [r for r in nothing if r['tid'] in responders]
+
+        lines = []
+
+        # --- who carried it ---
+        top = sorted(fought, key=lambda r: -r['score'])[:3]
+        if top:
+            total_score = sum(r['score'] for r in rows) or 1
+            share = sum(r['score'] for r in top) / total_score * 100
+            lines.append(
+                '**Carried it** \u00b7 ' + ', '.join(
+                    f"{r['name']} ({r['hits']} hits, {r['score']:.0f})" for r in top)
+                + f'\n-# Top 3 scored {share:.0f}% of our total. '
+                  f'{len(fought)} of {total} made at least one hit.')
+
+        # --- who bled ---
+        if log_ok:
+            bled = sorted((r for r in rows if (r['taken'] or 0) > 0),
+                          key=lambda r: -(r['taken'] - r['hits']))[:3]
+            total_taken = sum(r['taken'] or 0 for r in rows)
+            if bled:
+                lines.append(
+                    '**Bled the most** \u00b7 ' + ', '.join(
+                        f"{r['name']} ({r['taken']} taken vs {r['hits']} made)"
+                        for r in bled)
+                    + f'\n-# {total_taken} hits taken across the faction. '
+                      f'{sum(1 for r in rows if (r["taken"] or 0) > r["hits"])} '
+                      f'members took more than they made.')
+        else:
+            lines.append('**Bled the most** \u00b7 unknown \u2014 the attacks log '
+                         'could not be read in full, so hits taken are not '
+                         'reported rather than shown as zero.')
+
+        # --- who did nothing ---
+        if nothing:
+            silent = [r for r in nothing if r['tid'] not in responders]
+            names = ', '.join(r['name'] for r in sorted(
+                silent, key=lambda r: r['name'])[:12])
+            more = f' +{len(silent) - 12} more' if len(silent) > 12 else ''
+            lines.append(
+                f'**Did nothing** \u00b7 {len(nothing)} of {total} made no hits'
+                + (f', {len(excused)} of them answered the poll'
+                   if excused else '')
+                + (f'\n-# No hits and no poll answer: {names}{more}'
+                   if silent else '\n-# All of them answered the poll.'))
+
+        # --- against last war ---
+        prev = [w for w in (self.war_member_stats.get('wars') or [])
+                if w.get('members')]
+        if prev:
+            last = prev[-1]
+            lm = last.get('members') or {}
+            last_hits = sum(m.get('attacks', 0) or 0 for m in lm.values())
+            last_none = sum(1 for m in lm.values() if not m.get('attacks'))
+            this_hits = sum(r['hits'] for r in rows)
+
+            def delta(now, before, unit=''):
+                if not before:
+                    return f'{now}{unit}'
+                d = now - before
+                sign = '+' if d > 0 else ''
+                return f'{now}{unit} ({sign}{d})'
+
+            lines.append(
+                f'**Against war #{last.get("war_id")}** ({last.get("enemy_name")}, '
+                f'{last.get("result")}) \u00b7 '
+                f'hits {delta(this_hits, last_hits)}, '
+                f'no-shows {delta(len(nothing), last_none)}, '
+                f'roster {delta(total, len(lm))}')
+
+        return '\n\n'.join(lines) if lines else None
 
     async def format_warboard_embed(self, war_info):
         """
@@ -2606,6 +2719,59 @@ class WarTracker:
                         )
                 else:
                     logger.warning('Warning: War management channel not configured')
+
+                # ---- Board and Xanax, posted automatically ----
+                # Management had to remember to run /war board and /war xan
+                # after every war and nothing prompted them. The board is
+                # everyone's business so it pings management; the Xanax
+                # reimbursement is the leader's job alone, so it pings them.
+                # Each is wrapped separately: a failure in one must not cost
+                # the other, or the strike candidates that follow.
+                if management_channel:
+                    mgmt_war = {'war_id': self.current_war_id,
+                                'data': {'factions': mgmt_factions}}
+                    try:
+                        board = await self.format_warboard_embed(mgmt_war)
+                        board = [b for b in (board if isinstance(board, list)
+                                             else [board]) if b]
+                        if board:
+                            ping = (f'<@&{MANAGEMENT_PING_ROLE_ID}> '
+                                    if MANAGEMENT_PING_ROLE_ID else '')
+                            await management_channel.send(
+                                f'{ping}\U0001f4cb **War board \u00b7 war '
+                                f'#{self.current_war_id}** \u00b7 posted '
+                                f'automatically at war end')
+                            for b in board:
+                                await management_channel.send(embed=b)
+                            insight = self._war_insight_text(
+                                report_factions, attack_stats,
+                                self._availability_responders(self.current_war_id))
+                            if insight:
+                                await management_channel.send(embed=create_embed(
+                                    title='\U0001f50e What the board says',
+                                    description=insight[:4000],
+                                    color=EMBED_COLOR_INFO))
+                            logger.info('Auto-posted war board to management')
+                    except Exception as e:
+                        logger.error(f'Auto board post failed: {e}')
+
+                    try:
+                        xan = await self.format_xan_embed(mgmt_war)
+                        xan = [x for x in (xan if isinstance(xan, list)
+                                           else [xan]) if x]
+                        if xan:
+                            who = (f'<@{LEADER_USER_ID}>' if LEADER_USER_ID
+                                   else (f'<@&{MANAGEMENT_PING_ROLE_ID}>'
+                                         if MANAGEMENT_PING_ROLE_ID else ''))
+                            await management_channel.send(
+                                f'{who} \U0001f48a **Xanax reimbursement \u00b7 '
+                                f'war #{self.current_war_id}** \u00b7 posted '
+                                f'automatically at war end')
+                            for x in xan:
+                                await management_channel.send(embed=x)
+                            logger.info('Auto-posted xan report to management')
+                    except Exception as e:
+                        logger.error(f'Auto xan post failed: {e}')
 
                 try:
                     await self.post_strike_candidates(

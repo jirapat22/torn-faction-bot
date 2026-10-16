@@ -37,6 +37,7 @@ import discord
 from utils.helpers import load_json, save_json, create_embed
 from config import (
     STRIKE_EXPIRY_DAYS,
+    STRIKE_DIGEST_WEEKDAY,
     STRIKES_CHANNEL_ID,
     EMBED_COLOR_WARNING,
     EMBED_COLOR_SUCCESS,
@@ -192,6 +193,8 @@ class StrikeManager:
 
     def is_open(self, stype, torn_id, context=''):
         key = self.key_for(stype, torn_id, context)
+        if key.startswith('_'):
+            return False  # bookkeeping keys are not candidates
         if key in self.pending or key in self.dismissed:
             return False
         for s in self.active(torn_id):
@@ -277,6 +280,83 @@ class StrikeManager:
         except Exception as e:
             logger.info(f'Strikes: could not DM {torn_id}: {e}')
             return False, text
+
+
+    async def post_weekly_digest(self, channel=None, force=False):
+        """
+        Once a week: who holds strikes, and what for.
+
+        Weekly rather than daily on purpose. Strikes expire at 60 days and
+        move slowly, so a daily post would mostly repeat itself and become
+        wallpaper - the thing that made the old alerts unreadable.
+
+        Guarded by ISO week number rather than "has 7 days passed", so a
+        restart cannot make it fire twice in the same week, and a week the
+        bot was down is simply skipped instead of firing late.
+        """
+        import datetime as _dt
+        if not self.bot:
+            return False
+        now = _dt.datetime.now(_dt.timezone.utc)
+        year, week, weekday = now.isocalendar()
+        stamp = f'{year}-W{week:02d}'
+
+        if not force:
+            if weekday - 1 != STRIKE_DIGEST_WEEKDAY:
+                return False
+            if self.dismissed.get('_digest') == stamp:
+                return False
+
+        channel = channel or self.bot.get_channel(STRIKES_CHANNEL_ID)
+        if not channel:
+            return False
+
+        counts = self.counts()
+        by_member = {}
+        for s in self.active():
+            by_member.setdefault(str(s['torn_id']), []).append(s)
+
+        if counts:
+            rows = []
+            for tid, recs in sorted(by_member.items(),
+                                    key=lambda kv: -len(kv[1])):
+                name = recs[0].get('torn_name', tid)
+                kinds = {}
+                for r in recs:
+                    k = STRIKE_TYPES.get(r['type'], r['type'])
+                    kinds[k] = kinds.get(k, 0) + 1
+                detail = ', '.join(f'{v}x {k}' if v > 1 else k
+                                   for k, v in sorted(kinds.items()))
+                rows.append(f'**{name}** \u00b7 {len(recs)}\n-# {detail}')
+            body = '\n'.join(rows)
+            desc = (f'{len(counts)} member(s) hold {len(self.active())} active '
+                    f'strike(s).\n\n{body}')
+            pend = len(self.pending)
+            wait = len(self.awaiting_notice())
+            if pend or wait:
+                desc += (f'\n\n-# {pend} candidate(s) waiting on a decision, '
+                         f'{wait} strike(s) nobody has told the member about.')
+            colour = EMBED_COLOR_WARNING
+        else:
+            desc = (f'Nobody holds an active strike. Strikes expire after '
+                    f'{STRIKE_EXPIRY_DAYS} days.')
+            colour = EMBED_COLOR_SUCCESS
+
+        try:
+            await channel.send(embed=create_embed(
+                title=f'\u2696\ufe0f Weekly strike digest \u00b7 {stamp}',
+                description=desc[:4000], color=colour))
+        except Exception as e:
+            logger.error(f'Strike digest failed: {e}')
+            return False
+
+        # Stored alongside dismissals so it shares their persistence; the
+        # underscore key cannot collide with a real candidate key, which is
+        # always "type:torn_id:context".
+        self.dismissed['_digest'] = stamp
+        await self.save()
+        logger.info(f'Posted weekly strike digest {stamp}')
+        return True
 
 
 class StrikeActionView(discord.ui.View):

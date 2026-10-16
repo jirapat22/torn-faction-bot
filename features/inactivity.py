@@ -833,6 +833,28 @@ class InactivityTracker:
             'left_faction': left_alerts,
         }
 
+    async def _send_handled(self, channel, embed):
+        """
+        Post an alert and pre-add a tick to it.
+
+        These tiers are nudges, not strike candidates, so they have no buttons
+        and nothing records what was done about them. A reaction is the
+        cheapest shared memory available: one click marks it handled, and the
+        next person scrolling can see somebody already dealt with it instead
+        of chasing the same member twice.
+        """
+        try:
+            msg = await channel.send(embed=embed)
+        except Exception as e:
+            logger.error(f'Alert send failed: {e}')
+            return None
+        try:
+            await msg.add_reaction('✅')
+        except Exception as e:
+            # A missing Add Reactions permission must not lose the alert.
+            logger.info(f'Could not pre-add the tick: {e}')
+        return msg
+
     async def _send_inactivity_alert(self, channel, warning_members, critical_members, total_faction_members, oc_warning=None, oc_critical=None, left_faction=None, oc_no_slots=False):
         """
         Send inactivity alert embed to the channel
@@ -919,7 +941,7 @@ class InactivityTracker:
             for i, chunk in enumerate(chunks):
                 title = '🔴 Critical Inactivity Alert (Torn)' if i == 0 else '🔴 Critical (continued)'
                 embed = create_embed(title=title, description=chunk.strip(), color=EMBED_COLOR_CRITICAL)
-                await channel.send(embed=embed)
+                await self._send_handled(channel, embed)
             logger.info(f'Sent critical alert for {len(critical_members)} members')
 
         # Send warning alerts
@@ -952,7 +974,7 @@ class InactivityTracker:
             for i, chunk in enumerate(chunks):
                 title = '⚠️ Inactivity Warning (Torn)' if i == 0 else '⚠️ Warning (continued)'
                 embed = create_embed(title=title, description=chunk.strip(), color=EMBED_COLOR_WARNING)
-                await channel.send(embed=embed)
+                await self._send_handled(channel, embed)
             logger.info(f'Sent warning alert for {len(warning_members)} members')
 
         # ── OC Participation alerts ──────────────────────────────────────────
@@ -1043,7 +1065,9 @@ class InactivityTracker:
 
             header = (f'**{len(oc_warning)} member(s)** have not joined an OC for '
                       f'{OC_WARNING_DAYS}+ days. Nudge them now - at '
-                      f'{OC_CRITICAL_DAYS} days it becomes a strike:\n\n')
+                      f'{OC_CRITICAL_DAYS} days it becomes a strike.\n'
+                      f'-# React ✅ once you have dealt with it, so nobody '
+                      f'chases them twice.\n\n')
             chunks = []
             current = header
             for line in lines:
@@ -1058,7 +1082,7 @@ class InactivityTracker:
             for i, chunk in enumerate(chunks):
                 title = '⚠️ OC Participation Warning' if i == 0 else '⚠️ OC Warning (continued)'
                 embed = create_embed(title=title, description=chunk.strip(), color=EMBED_COLOR_WARNING)
-                await channel.send(embed=embed)
+                await self._send_handled(channel, embed)
             logger.info(f'Sent OC warning alert for {len(oc_warning)} members')
 
         # ── Left-faction alerts ──────────────────────────────────────────────
