@@ -353,6 +353,18 @@ async def on_ready():
         # AND every background loop is running; 503 otherwise.
         await _start_healthcheck_server()
 
+        # Refresh the member command board. Runs last because it is the one
+        # piece of startup that is purely cosmetic - it must never be the
+        # reason the bot fails to come up, so it is both wrapped and silent
+        # when the channel is not configured.
+        try:
+            from features.member_commands import refresh as refresh_commands
+            result = await refresh_commands(bot)
+            if result:
+                logger.info(f'Member command board: {result}')
+        except Exception as e:
+            logger.error(f'Member command board failed: {e}')
+
         logger.info('Bot is ready!')
 
     except Exception as e:

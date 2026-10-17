@@ -517,7 +517,8 @@ async def setup_verification_commands(bot, verification_system: VerificationSyst
         member='Member to verify/unverify (for admin actions)',
         torn_id='Torn ID (for manual verification)',
         setting='Setting name (for toggle action)',
-        value='Value to set (for toggle action)'
+        value='Value to set (for toggle action)',
+        confirm='[prune] Actually delete the dead records. Without this it only lists them.'
     )
     @app_commands.choices(action=[
         app_commands.Choice(name='options - View current settings', value='options'),
@@ -529,6 +530,7 @@ async def setup_verification_commands(bot, verification_system: VerificationSyst
         app_commands.Choice(name='fixrole - Give verified role to registered users missing it', value='fixrole'),
         app_commands.Choice(name='bulksync - Re-verify members by matching nicknames to faction', value='bulksync'),
         app_commands.Choice(name='roster - Who is in Torn but not Discord, and the reverse', value='roster'),
+        app_commands.Choice(name='prune - Clear dead records (off the roster AND out of the server)', value='prune'),
         app_commands.Choice(name='stats - Show verification statistics', value='stats')
     ])
     @app_commands.choices(setting=[
@@ -545,7 +547,8 @@ async def setup_verification_commands(bot, verification_system: VerificationSyst
         member: discord.Member = None,
         torn_id: int = None,
         setting: str = None,
-        value: bool = None
+        value: bool = None,
+        confirm: bool = False
     ):
         """Verification admin command"""
         if not is_management(interaction):
@@ -687,6 +690,69 @@ async def setup_verification_commands(bot, verification_system: VerificationSyst
                 color=EMBED_COLOR_SUCCESS
             )
             await interaction.followup.send(embed=embed, ephemeral=True)
+
+        elif action == 'prune':
+            # Dead records: off the Torn roster AND gone from the server, so
+            # there is nobody behind them to affect. Two-step on purpose -
+            # the first run only lists, because a verification record is the
+            # link between a person and their Torn identity and deleting a
+            # live one by accident un-verifies a real member.
+            from features.discord_roster import prunable
+            from utils.torn_api import fetch_faction_members
+
+            roster = await fetch_faction_members()
+            if not roster:
+                await interaction.followup.send(embed=create_embed(
+                    title='Roster unreadable',
+                    description=('Torn did not answer, so every record would '
+                                 'look dead. Nothing was touched - try again '
+                                 'in a minute.'),
+                    color=EMBED_COLOR_WARNING), ephemeral=True)
+                return
+
+            present = {str(m.id) for m in guild.members} if guild else set()
+            dead = prunable(roster, verification_system.verified_users, present)
+
+            if not dead:
+                await interaction.followup.send(embed=create_embed(
+                    title='Nothing to prune',
+                    description=(f'All **{len(verification_system.verified_users)}** '
+                                 f'records point at somebody on the roster or '
+                                 f'in the server.'),
+                    color=EMBED_COLOR_SUCCESS), ephemeral=True)
+                return
+
+            listing = '\n'.join(f'- **{name}** [{tid}] · Discord `{did}`'
+                                 for did, name, tid in dead[:25])
+            if len(dead) > 25:
+                listing += f'\n- ...and {len(dead) - 25} more'
+
+            if not confirm:
+                await interaction.followup.send(embed=create_embed(
+                    title=f'\U0001f9f9 {len(dead)} dead record(s) · nothing removed yet',
+                    description=(f'{listing}\n\nEach one is off the faction '
+                                 f'roster **and** not in this server.\n'
+                                 f'-# Run `/verify prune confirm:True` to clear '
+                                 f'them.'),
+                    color=EMBED_COLOR_INFO), ephemeral=True)
+                return
+
+            cleared = 0
+            for did, _name, _tid in dead:
+                try:
+                    if await verification_system.unregister_user(did, guild=guild):
+                        cleared += 1
+                except Exception as e:
+                    logger.error(f'Prune failed for {did}: {e}')
+            logger.info(f'Verification prune: cleared {cleared} dead record(s)')
+            await interaction.followup.send(embed=create_embed(
+                title=f'\u2705 Cleared {cleared} dead record(s)',
+                description=(f'{listing}\n\n'
+                             f'-# **{len(verification_system.verified_users)}** '
+                             f'records left. Nobody in the server was affected: '
+                             f'every one of these was already gone from both '
+                             f'the faction and the server.'),
+                color=EMBED_COLOR_SUCCESS), ephemeral=True)
 
         elif action == 'unverify':
             if not member:

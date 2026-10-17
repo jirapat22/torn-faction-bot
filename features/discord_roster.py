@@ -85,6 +85,35 @@ def classify(roster, verified_users, guild_member_ids, bot_ids=()):
     }
 
 
+def prunable(roster, verified_users, guild_member_ids):
+    """
+    The verification records that are safe to delete outright: the Torn ID is
+    not on the faction roster AND the Discord account is not in the server
+    either. Nobody is behind them, so they only pad the weekly roster check.
+
+    Returns a list of (discord_id, torn_name, torn_id).
+
+    An unreadable roster returns [] rather than everything. This is the
+    None-vs-empty trap at its most expensive: a failed roster fetch makes
+    every single record look dead, and the "cleanup" would wipe the entire
+    verification database. Refusing to act on a roster we could not read is
+    the only safe answer, and the caller says so out loud.
+    """
+    if not roster:
+        return []
+    roster = {str(k) for k in roster}
+    present = {str(x) for x in (guild_member_ids or set())}
+    out = []
+    for did, rec in (verified_users or {}).items():
+        tid = str((rec or {}).get('torn_id'))
+        if not tid or tid == 'None':
+            continue
+        if tid in roster or str(did) in present:
+            continue
+        out.append((str(did), (rec or {}).get('torn_name', tid), tid))
+    return sorted(out, key=lambda x: (x[1] or '').lower())
+
+
 SECTIONS = [
     ('not_in_discord', '\U0001f534 In the faction, not reachable on Discord',
      'They miss every war call, poll and mention the bot sends.'),

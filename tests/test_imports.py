@@ -3651,11 +3651,17 @@ def test_cleanup_only_ever_deletes_the_bots_own_noise():
     Auto-delete is the one feature here that destroys data, so the guards
     matter more than the behaviour.
 
-    It may remove exactly two things: messages the bot itself posted, and
-    Discord's own join notices. A member's words are never touched whatever
-    their age, a pinned message is never touched because somebody pinned it
-    on purpose, and the swept channel list is only ever the welcome pit and
-    the war-tracker feed - never one that would be cited in a strike dispute.
+    Two rules, and the difference between them is the whole risk:
+
+    - Everywhere, it may remove the bot's own messages and Discord's join
+      notices, and a member's words are safe at any age.
+    - In the welcome pit ONLY, members' messages go too, because the channel
+      is onboarding traffic that is worthless a month later.
+
+    A pinned message survives either rule, in every channel - that is the
+    escape hatch for anything in the welcome pit worth keeping. And the
+    human sweep must never reach a channel that would be cited in a strike
+    dispute, which is what the HUMAN_SWEEP_CHANNELS assertion below is for.
     """
     import asyncio
     import discord
@@ -3693,9 +3699,28 @@ def test_cleanup_only_ever_deletes_the_bots_own_noise():
     assert mgr._deletable(bot_msg) is True, 'the bot cleans up after itself'
     assert mgr._deletable(join_msg) is True, 'a join notice is noise'
     assert mgr._deletable(human_msg) is False, (
-        "a member's own words are never deleted, whatever their age")
+        "outside the welcome pit a member's own words are never deleted")
     assert mgr._deletable(pinned_bot) is False, 'pinned beats any age rule'
     assert mgr._deletable(pinned_join) is False
+
+    # --- the welcome pit sweeps people's messages too, pins excepted ---
+    pinned_human = Msg(123, pinned=True)
+    assert mgr._deletable(human_msg, sweep_humans=True) is True, (
+        'the welcome pit is onboarding traffic and goes in full')
+    assert mgr._deletable(pinned_human, sweep_humans=True) is False, (
+        'a pin is the escape hatch and must hold even there')
+
+    # --- and that sweep is scoped to exactly one channel ---
+    from features.cleanup import HUMAN_SWEEP_CHANNELS
+    assert HUMAN_SWEEP_CHANNELS <= {WELCOME_CHANNEL_ID}, (
+        f'only the welcome pit may sweep human messages: '
+        f'{HUMAN_SWEEP_CHANNELS}')
+    assert WAR_TRACKER_CHANNEL_ID not in HUMAN_SWEEP_CHANNELS
+    for protected in (STRIKES_CHANNEL_ID, WAR_MANAGEMENT_CHANNEL_ID,
+                      INACTIVITY_ALERTS_CHANNEL_ID):
+        if protected:
+            assert protected not in HUMAN_SWEEP_CHANNELS, (
+                f'{protected} holds evidence - never sweep human messages')
 
     # --- the swept list is the narrow one, and nothing citable is in it ---
     ids = {cid for cid, _label in mgr._targets()}
@@ -4149,6 +4174,152 @@ def test_manual_poll_posts_where_the_chaser_looks_for_it():
         av.AVAILABILITY_CHANNEL_ID = original
 
 
+def test_member_command_board_lists_only_member_actions():
+    """
+    The board in #commands-the-punk is read by the whole faction, so every
+    line on it has to be something a plain member can actually run. The
+    failure is quiet and annoying: a member reads the board, types the
+    command and gets "Management only", which teaches them to stop trying.
+
+    The gating lives in the command handlers, not here, so this test reads
+    the real gate expressions out of the source and checks the board against
+    them. Rename or re-gate an action and this goes red instead of the board
+    quietly lying.
+    """
+    import io as _io
+    import os
+    import re
+    from features import member_commands as mc
+    import features.commands as cmds
+    import features.availability as avail
+
+    # --- what the board claims a member can run ---
+    listed = {}
+    for _title, rows in mc.SECTIONS:
+        for cmd, what, chans in rows:
+            m = re.match(r'/(\w+)(?:\s+\w+:([^\s]+))?', cmd)
+            assert m, f'unparseable board entry: {cmd}'
+            listed.setdefault(m.group(1), set()).add((m.group(2) or '').lower())
+            assert what, f'{cmd} has no description'
+
+    src = _io.open(cmds.__file__, encoding='utf-8').read()
+
+    # --- /war: the gate is a tuple of management-only views ---
+    gate = re.search(r"view_value in \(([^)]*)\) and not is_management", src)
+    assert gate, 'could not find the /war management gate - has it moved?'
+    war_gated = {x.strip().strip("'\"") for x in gate.group(1).split(',')}
+    assert 'board' in war_gated and 'xan' in war_gated, war_gated
+    for action in listed.get('war', ()):
+        assert action not in war_gated, (
+            f'/war view:{action} is management-gated but on the member board')
+
+    # --- /chain: single gated view ---
+    chain_gate = re.search(r"view_value == '(\w+)' and not is_management", src)
+    assert chain_gate, 'could not find the /chain management gate'
+    assert chain_gate.group(1) not in listed.get('chain', ()), (
+        f'/chain view:{chain_gate.group(1)} is management-only')
+
+    # --- /avail: these four check is_management in their own branches ---
+    avail_src = _io.open(avail.__file__, encoding='utf-8').read()
+    for action in ('setup', 'delete', 'coverage', 'activity'):
+        assert f"'{action}'" in avail_src, f'{action} vanished from /avail'
+        assert action not in listed.get('avail', ()), (
+            f'/avail action:{action} is management-only but listed')
+
+    # --- wholly management commands must not appear at all ---
+    for name in ('faction', 'strikes', 'verify', 'rolesync', 'announce',
+                 'createevent', 'test'):
+        assert name not in listed, f'/{name} is management-only but listed'
+
+    # --- every listed command still exists somewhere in the codebase ---
+    feature_dir = os.path.dirname(cmds.__file__)
+    blob = ''
+    for fn in os.listdir(feature_dir):
+        if fn.endswith('.py'):
+            blob += _io.open(os.path.join(feature_dir, fn),
+                             encoding='utf-8').read()
+    for name in listed:
+        assert f"name='{name}'" in blob, (
+            f'/{name} is on the board but no command defines it any more')
+
+
+def test_member_command_board_renders_without_unset_channels():
+    """
+    Channel ids come from config, and an unset one is 0. Rendering that would
+    print a dead <#0> mention - so an entry whose channels are all unset has
+    to fall back to saying "any channel" rather than pointing nowhere.
+    """
+    from features import member_commands as mc
+
+    assert mc._where([0, 0]) == 'any channel', 'unset ids must not render'
+    assert mc._where([]) == 'any channel'
+    assert mc._where([0, 123]) == '<#123>', 'the live one survives'
+    assert mc._where([123, 456]) == '<#123> or <#456>'
+
+    e = mc.build_embed([('Test', [('/ping', 'checks the bot', [0])])])
+    assert '<#0>' not in e.description, e.description
+    assert 'any channel' in e.description
+
+    # the real board fits Discord's description limit
+    full = mc.build_embed()
+    assert len(full.description) <= 4096, len(full.description)
+    assert '/register' in full.description
+
+
+def test_prune_refuses_to_act_on_a_roster_it_could_not_read():
+    """
+    /verify prune deletes the records that link a person to their Torn
+    identity, so the dangerous case is not the one it deletes - it is the one
+    it would delete if the roster fetch failed.
+
+    An unreadable roster makes EVERY record look like it points off the
+    roster, which would wipe the whole verification database and un-verify
+    the entire faction. This is the None-vs-empty contract at its most
+    expensive, so prunable() must return nothing at all rather than
+    everything.
+    """
+    from features.discord_roster import prunable
+
+    roster = {'111': {'name': 'Stayed'}, '222': {'name': 'AlsoStayed'}}
+    verified = {
+        '900': {'torn_id': '111', 'torn_name': 'Stayed'},        # on roster
+        '901': {'torn_id': '333', 'torn_name': 'LeftButHere'},   # in server
+        '902': {'torn_id': '444', 'torn_name': 'GoneEntirely'},   # dead
+        '903': {'torn_id': None, 'torn_name': 'Broken'},          # no id
+    }
+    in_server = {'900', '901'}
+
+    # --- the outage cases: nothing is prunable, whatever else is true ---
+    for unreadable in (None, {}, []):
+        assert prunable(unreadable, verified, in_server) == [], (
+            'a roster that could not be read must prune NOTHING')
+
+    # --- the normal case: only the record with nobody behind it ---
+    dead = prunable(roster, verified, in_server)
+    assert [d[0] for d in dead] == ['902'], dead
+    assert dead[0][1] == 'GoneEntirely'
+
+    # --- somebody off the roster but still in the server is NOT dead ---
+    # They are a real person in the server; removing their record would
+    # silently un-verify them.
+    assert '901' not in [d[0] for d in dead], (
+        'a member still in the server keeps their record'
+    )
+
+    # --- a record with no torn_id is left alone rather than guessed at ---
+    assert '903' not in [d[0] for d in dead]
+
+    # --- nothing verified at all cannot crash ---
+    assert prunable(roster, {}, in_server) == []
+    assert prunable(roster, None, None) == []
+
+    # --- an empty server (no members fetched) does not make everyone dead ---
+    # It does widen the set, which is correct: the roster is what proves
+    # faction membership, and these two are off it.
+    wide = prunable(roster, verified, set())
+    assert sorted(d[0] for d in wide) == ['901', '902'], wide
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -4228,4 +4399,7 @@ if __name__ == '__main__':
     test_fly_status_shows_destination_hotspots()
     test_strike_dm_states_the_published_ladder()
     test_manual_poll_posts_where_the_chaser_looks_for_it()
+    test_member_command_board_lists_only_member_actions()
+    test_member_command_board_renders_without_unset_channels()
+    test_prune_refuses_to_act_on_a_roster_it_could_not_read()
     print('All smoke tests passed.')

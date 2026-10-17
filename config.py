@@ -93,6 +93,11 @@ LEADER_USER_ID = int(os.getenv("LEADER_USER_ID", "0"))
 # message carries the fix and not just the accusation.
 WAR_GUIDE_CHANNEL_ID = int(os.getenv("WAR_GUIDE_CHANNEL_ID", "0"))
 
+# Read-only board listing the commands a MEMBER can use (#commands-the-punk).
+# The bot replaces its own previous board rather than appending, so the
+# channel only ever holds the current one.
+MEMBER_COMMANDS_CHANNEL_ID = int(os.getenv("MEMBER_COMMANDS_CHANNEL_ID", "0"))
+
 # Weekday to post the strike digest, 0 = Monday. Weekly rather than daily:
 # strikes expire at 60 days and move slowly, so a daily post would mostly
 # repeat itself and become wallpaper.
