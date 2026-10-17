@@ -4336,6 +4336,106 @@ def test_prune_refuses_to_act_on_a_roster_it_could_not_read():
     assert sorted(d[0] for d in wide) == ['901', '902'], wide
 
 
+def test_config_check_tells_the_difference_between_unset_and_deleted():
+    """
+    Every posting feature in this bot guards itself: get_channel() returns
+    None, a warning goes to the log, the function returns. That is correct
+    and it is also why a deleted channel is invisible - no error, no alert,
+    the feature just stops. Strike candidates stop appearing and nobody
+    knows until a strike was never raised.
+
+    Two distinctions this has to get right:
+
+    - An id of 0 is a CHOICE (nothing configured), an id that resolves to
+      nothing is a FAULT (it pointed at something that got deleted). Lumping
+      them together means either nagging about features nobody wanted or
+      staying quiet about a broken one.
+    - When everything resolves it must build NO embed at all. A config check
+      that posts "all fine" on every restart is one more thing nobody reads.
+    """
+    from features.config_check import audit, build_embed
+
+    rows = [
+        ('GOOD_CHANNEL', 'channel', 111, 'alerts', True),
+        ('DELETED_CHANNEL', 'channel', 222, 'strike candidates', True),
+        ('UNSET_REQUIRED', 'channel', 0, 'the war board', True),
+        ('UNSET_OPTIONAL', 'channel', 0, 'event posts', False),
+        ('GOOD_ROLE', 'role', 333, 'the management ping', True),
+        ('DELETED_ROLE', 'role', 444, 'who counts as management', True),
+    ]
+    live = {('channel', 111), ('role', 333)}
+
+    def resolve(kind, value):
+        return object() if (kind, value) in live else None
+
+    broken, unset = audit(rows, resolve)
+    assert [b[0] for b in broken] == ['DELETED_CHANNEL', 'DELETED_ROLE'], broken
+    assert [u[0] for u in unset] == ['UNSET_REQUIRED'], (
+        'an optional id left at 0 is a choice, not a problem: ' + str(unset))
+
+    e = build_embed(broken, unset)
+    assert e is not None
+    assert 'strike candidates' in e.description, (
+        'the report has to say what stops working, not just the var name')
+    assert 'DELETED_ROLE' in e.description
+    assert 'UNSET_OPTIONAL' not in e.description
+
+    # --- everything healthy: nothing to say ---
+    ok_broken, ok_unset = audit(
+        [('GOOD_CHANNEL', 'channel', 111, 'alerts', True)], resolve)
+    assert (ok_broken, ok_unset) == ([], [])
+    assert build_embed(ok_broken, ok_unset) is None, (
+        'a clean check must post nothing at all'
+    )
+
+    # --- a non-numeric id is a fault, not a crash ---
+    junk, _ = audit([('TYPO', 'channel', 'not-a-number', 'alerts', True)],
+                    lambda k, v: None)
+    assert [j[0] for j in junk] == ['TYPO']
+
+    # --- the real config is wired up, not an empty list ---
+    from features.config_check import entries
+    real = entries()
+    names = {r[0] for r in real}
+    assert 'STRIKES_CHANNEL_ID' in names and 'AVAILABILITY_CHANNEL_ID' in names
+    assert all(len(r) == 5 for r in real), 'every row needs a purpose and a flag'
+
+
+def test_rolesync_never_hands_out_administrator_by_torn_position():
+    """
+    /rolesync setrole is one line away from a disaster: map a Torn position
+    to an Administrator role and whoever holds that position in Torn - now or
+    after any future promotion - can delete the server. Map it to a
+    management role and a whole squad can issue and dismiss strikes.
+
+    Administrator is refused outright because no Torn position should ever
+    confer it. Management is allowed but has to be asked for twice.
+    """
+    from features.roles import privilege_level
+
+    ADMIN = 1 << 3
+    MGMT_IDS = [111, 222]
+
+    # Administrator is the refusal, whatever the id is
+    assert privilege_level(ADMIN, 999, MGMT_IDS) == 'admin'
+    assert privilege_level(ADMIN | (1 << 11), 111, MGMT_IDS) == 'admin', (
+        'admin outranks the management check')
+
+    # a management role by id, without admin
+    assert privilege_level(1 << 11, 111, MGMT_IDS) == 'management'
+    assert privilege_level(0, '222', MGMT_IDS) == 'management', (
+        'ids arrive as strings from config and must still match')
+
+    # an ordinary team role is free to map - this is the normal case
+    assert privilege_level(1 << 11, 777, MGMT_IDS) is None
+    assert privilege_level(0, 777, []) is None
+    assert privilege_level(0, 777, None) is None
+
+    # junk permissions must not crash or silently read as safe-by-accident
+    assert privilege_level(None, 111, MGMT_IDS) == 'management'
+    assert privilege_level('not-a-number', 777, MGMT_IDS) is None
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -4418,4 +4518,6 @@ if __name__ == '__main__':
     test_member_command_board_lists_only_member_actions()
     test_member_command_board_renders_without_unset_channels()
     test_prune_refuses_to_act_on_a_roster_it_could_not_read()
+    test_config_check_tells_the_difference_between_unset_and_deleted()
+    test_rolesync_never_hands_out_administrator_by_torn_position()
     print('All smoke tests passed.')

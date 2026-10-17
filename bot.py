@@ -353,6 +353,17 @@ async def on_ready():
         # AND every background loop is running; 503 otherwise.
         await _start_healthcheck_server()
 
+        # Does every configured id still point at something real? Posted to
+        # management rather than logged, because the failure it catches is
+        # one that produces no error anywhere a human looks.
+        try:
+            from features.config_check import report as config_report
+            outcome = await config_report(bot, bot.get_guild(GUILD_ID))
+            if outcome and outcome != 'ok':
+                logger.info(f'Config check: {outcome}')
+        except Exception as e:
+            logger.error(f'Config check failed: {e}')
+
         # Refresh the member command board. Runs last because it is the one
         # piece of startup that is purely cosmetic - it must never be the
         # reason the bot fails to come up, so it is both wrapped and silent
@@ -393,6 +404,15 @@ async def daily_inactivity_check():
                 INACTIVITY_ALERTS_CHANNEL_ID, ROSTER_CHECK_WEEKDAY)
         except Exception as e:
             logger.error(f'Weekly roster check failed: {e}')
+
+        # Re-post the member command board if somebody deleted it. Cheap:
+        # refresh() reads the channel and returns 'unchanged' unless the
+        # board is actually missing or out of date.
+        try:
+            from features.member_commands import refresh as refresh_commands
+            await refresh_commands(bot)
+        except Exception as e:
+            logger.error(f'Member command board refresh failed: {e}')
 
         # Channel cleanup. Rides the daily loop but sweeps WEEKLY - it
         # checks the weekday itself, so there is no second loop to keep

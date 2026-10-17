@@ -830,7 +830,8 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
         end_date='[Setup] End date if multi-day (DD-MM-YYYY) · leave empty for same day',
         block_length='[Setup] Hours per time block (1-6, default: 2)',
         poll_duration='[Setup] Hours until poll closes (default: 24)',
-        member='[Activity] Check one member instead of the whole roster'
+        member='[Activity] Check one member instead of the whole roster',
+        confirm='[Delete] Required to delete a poll that already has answers'
     )
     @app_commands.choices(action=[
         app_commands.Choice(name='Setup - Create availability poll (Management)', value='setup'),
@@ -850,7 +851,8 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
         end_date: Optional[str] = None,
         block_length: int = 2,
         poll_duration: int = 24,
-        member: Optional[discord.Member] = None
+        member: Optional[discord.Member] = None,
+        confirm: bool = False
     ):
         """Unified availability command"""
         action_value = action.value
@@ -1196,6 +1198,27 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
                 return
 
             poll = manager.polls[poll_id]
+            # Answers are the evidence that exempts a member from the war
+            # absence strike, and deleting the poll destroys every one of
+            # them with no undo. A poll nobody answered is free to delete; a
+            # poll with answers has to be asked for twice.
+            answered = sum(len(users) for users
+                           in (manager.data.get(poll_id) or {}).values())
+            if answered and not confirm:
+                await interaction.response.send_message(
+                    embed=create_embed(
+                        title='Not deleted',
+                        description=(
+                            f"The poll for **{poll['start_date']}** holds "
+                            f'**{answered}** answer(s). Those are what exempt '
+                            f'people from the absence strike, and deleting '
+                            f'the poll deletes them permanently.\n\n'
+                            f'-# Run it again with `confirm:True` if you '
+                            f'really want it gone.'),
+                        color=EMBED_COLOR_WARNING),
+                    ephemeral=True)
+                return
+
             del manager.polls[poll_id]
             if poll_id in manager.data:
                 del manager.data[poll_id]

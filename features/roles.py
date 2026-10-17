@@ -19,6 +19,35 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def privilege_level(role_permissions, role_id, management_role_ids=None):
+    """
+    How dangerous is it to hand this role out by Torn position?
+
+    Returns 'admin', 'management', or None.
+
+    This exists because /rolesync setrole is a one-line way to give a whole
+    squad real power: map a position to @Management and every member holding
+    that position in Torn can issue and dismiss strikes, with no human step
+    in Discord. Map one to an Administrator role and they can delete the
+    server. Both are typos away from the harmless case, and the command gives
+    no hint which one you just did.
+
+    Taking the permission integer rather than a discord.Role keeps this
+    testable without a guild.
+    """
+    ADMINISTRATOR = 1 << 3
+    try:
+        perms = int(role_permissions)
+    except (TypeError, ValueError):
+        perms = 0
+    if perms & ADMINISTRATOR:
+        return 'admin'
+    ids = {str(x) for x in (management_role_ids or [])}
+    if str(role_id) in ids:
+        return 'management'
+    return None
+
+
 
 class RoleSyncManager:
     """Manages automatic role sync between Torn and Discord"""
@@ -211,7 +240,8 @@ async def setup_rolesync_commands(bot, role_sync_manager: RoleSyncManager):
     from discord import app_commands
     from utils.helpers import create_embed, load_json, is_management
     from utils.torn_api import fetch_faction_members
-    from config import EMBED_COLOR_SUCCESS, EMBED_COLOR_INFO, EMBED_COLOR_CRITICAL
+    from config import (EMBED_COLOR_SUCCESS, EMBED_COLOR_INFO,
+                        EMBED_COLOR_CRITICAL, EMBED_COLOR_WARNING)
 
     @bot.tree.command(
         name='rolesync',
@@ -220,7 +250,8 @@ async def setup_rolesync_commands(bot, role_sync_manager: RoleSyncManager):
     @app_commands.describe(
         action='Action to perform',
         position='Torn faction position name (e.g., Leader, Management)',
-        role='Discord role to assign for this position'
+        role='Discord role to assign for this position',
+        confirm='[setrole] Required when the role hands out management powers'
     )
     @app_commands.choices(action=[
         app_commands.Choice(name='status - View current role mappings', value='status'),
@@ -233,7 +264,8 @@ async def setup_rolesync_commands(bot, role_sync_manager: RoleSyncManager):
         interaction: discord.Interaction,
         action: str,
         position: str = None,
-        role: discord.Role = None
+        role: discord.Role = None,
+        confirm: bool = False
     ):
         """Role sync management command"""
         if not is_management(interaction):
@@ -272,6 +304,39 @@ async def setup_rolesync_commands(bot, role_sync_manager: RoleSyncManager):
         elif action == 'setrole':
             if not position or not role:
                 await interaction.followup.send('Please provide both position name and role.', ephemeral=True)
+                return
+
+            from config import MANAGEMENT_ROLE_IDS
+            level = privilege_level(role.permissions.value, role.id,
+                                    MANAGEMENT_ROLE_IDS)
+            if level == 'admin':
+                # Never, with or without a confirm. A Torn position is not a
+                # safe source of truth for Administrator.
+                await interaction.followup.send(embed=create_embed(
+                    title='Refused',
+                    description=(
+                        f'{role.mention} has **Administrator**, so mapping it '
+                        f'to a Torn position would hand full control of this '
+                        f'server to whoever holds that position in Torn - '
+                        f'including anybody promoted there later.\n\n'
+                        f'-# Assign a role like this by hand.'),
+                    color=EMBED_COLOR_CRITICAL), ephemeral=True)
+                return
+            if level == 'management' and not confirm:
+                holders = role_sync_manager.get_roles_for_position(position)
+                await interaction.followup.send(embed=create_embed(
+                    title='This hands out management, not just a colour',
+                    description=(
+                        f'{role.mention} is a management role: anybody whose '
+                        f'Torn position is **{position}** would be able to '
+                        f'issue and dismiss strikes, and would get it '
+                        f'automatically the moment they are promoted in '
+                        f'Torn.\n\n'
+                        f'-# Currently mapped: '
+                        + (', '.join(f'<@&{r}>' for r in holders) or 'nothing')
+                        + '. Run it again with `confirm:True` if that is what '
+                          'you want.'),
+                    color=EMBED_COLOR_WARNING), ephemeral=True)
                 return
 
             role_sync_manager.set_position_role(position, role.id)

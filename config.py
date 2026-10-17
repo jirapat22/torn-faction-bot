@@ -98,6 +98,11 @@ WAR_GUIDE_CHANNEL_ID = int(os.getenv("WAR_GUIDE_CHANNEL_ID", "0"))
 # channel only ever holds the current one.
 MEMBER_COMMANDS_CHANNEL_ID = int(os.getenv("MEMBER_COMMANDS_CHANNEL_ID", "0"))
 
+# Where the bot reports its own operational problems (#management). A config
+# id pointing at a deleted channel otherwise fails in total silence, because
+# every posting feature guards itself and logs a warning nobody reads.
+MANAGEMENT_CHANNEL_ID = int(os.getenv("MANAGEMENT_CHANNEL_ID", "0"))
+
 # Weekday to post the strike digest, 0 = Monday. Weekly rather than daily:
 # strikes expire at 60 days and move slowly, so a daily post would mostly
 # repeat itself and become wallpaper.
