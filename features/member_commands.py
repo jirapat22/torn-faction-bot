@@ -25,7 +25,6 @@ from utils.helpers import create_embed
 from config import (
     EMBED_COLOR_INFO,
     WAR_CHANNEL_ID,
-    WAR_MANAGEMENT_CHANNEL_ID,
     CHAINING_CHANNEL_ID,
     GENERAL_CHANNEL_ID,
     AVAILABILITY_CHANNEL_ID,
@@ -55,10 +54,10 @@ SECTIONS = [
     ('⚔️ War', [
         ('/war view:Status',
          'Current war: score, enemy, and how long is left.',
-         [WAR_CHANNEL_ID, WAR_MANAGEMENT_CHANNEL_ID]),
+         [WAR_CHANNEL_ID]),
         ('/war view:FlyStatus',
          'Who is in the air or abroad right now, ours and theirs.',
-         [WAR_CHANNEL_ID, WAR_MANAGEMENT_CHANNEL_ID]),
+         [WAR_CHANNEL_ID]),
     ]),
     ('⛓️ Chains', [
         ('/chain view:Status',
@@ -71,13 +70,13 @@ SECTIONS = [
     ('\U0001f5d3️ Availability', [
         ('/avail action:Mine date:DD-MM-YYYY',
          'The blocks you picked on that poll.',
-         [AVAILABILITY_CHANNEL_ID, GENERAL_CHANNEL_ID]),
+         [GENERAL_CHANNEL_ID, AVAILABILITY_CHANNEL_ID]),
         ('/avail action:Summary date:DD-MM-YYYY',
          'Everyone\'s answers for that poll.',
-         [AVAILABILITY_CHANNEL_ID, GENERAL_CHANNEL_ID]),
+         [GENERAL_CHANNEL_ID, AVAILABILITY_CHANNEL_ID]),
         ('/avail action:List',
          'Which polls are open.',
-         [AVAILABILITY_CHANNEL_ID, GENERAL_CHANNEL_ID]),
+         [GENERAL_CHANNEL_ID, AVAILABILITY_CHANNEL_ID]),
     ]),
     ('\U0001f916 Bot and time', [
         ('/tct_now', 'Torn City Time right now, which is what every faction '

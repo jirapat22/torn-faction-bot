@@ -4231,6 +4231,22 @@ def test_member_command_board_lists_only_member_actions():
                  'createevent', 'test'):
         assert name not in listed, f'/{name} is management-only but listed'
 
+    # --- and it never sends a member to a channel they cannot see ---
+    # Naming a management channel is worse than naming none: the member
+    # cannot even open it to find out why the command failed.
+    from config import (WAR_MANAGEMENT_CHANNEL_ID, STRIKES_CHANNEL_ID,
+                        INACTIVITY_ALERTS_CHANNEL_ID,
+                        CLEANUP_REPORT_CHANNEL_ID)
+    named = set()
+    for _title, rows in mc.SECTIONS:
+        for _cmd, _what, chans in rows:
+            named.update(c for c in chans if c)
+    for hidden in (WAR_MANAGEMENT_CHANNEL_ID, STRIKES_CHANNEL_ID,
+                   INACTIVITY_ALERTS_CHANNEL_ID, CLEANUP_REPORT_CHANNEL_ID):
+        if hidden:
+            assert hidden not in named, (
+                f'{hidden} is management-only - members cannot open it')
+
     # --- every listed command still exists somewhere in the codebase ---
     feature_dir = os.path.dirname(cmds.__file__)
     blob = ''
