@@ -241,13 +241,17 @@ class StrikeManager:
         await self.save()
 
         prior = len(self.active(torn_id))
+        # Only worth saying when there IS a record. "0 active strike(s)
+        # already" is noise on what is usually a first offence, and it buries
+        # the line that matters when somebody genuinely is a repeat.
+        history = (f'{prior} active strike(s) already. ' if prior else '')
         embed = create_embed(
             title=f'⚖️ {STRIKE_TYPES.get(stype, stype)}',
             description=(f'**{torn_name}** '
                          f'[profile](<https://www.torn.com/profiles.php?XID={torn_id}>)\n\n'
                          f'{reason}\n\n'
-                         f'-# {prior} active strike(s) already. Pick one: '
-                         f'nothing is recorded until you do.'),
+                         f'-# {history}Pick one: nothing is recorded '
+                         f'until you do.'),
             color=EMBED_COLOR_WARNING,
         )
         try:
@@ -338,9 +342,14 @@ class StrikeManager:
                          f'{wait} strike(s) nobody has told the member about.')
             colour = EMBED_COLOR_WARNING
         else:
-            desc = (f'Nobody holds an active strike. Strikes expire after '
-                    f'{STRIKE_EXPIRY_DAYS} days.')
-            colour = EMBED_COLOR_SUCCESS
+            # Nothing to report, so report nothing. A weekly "nobody has a
+            # strike" post is a message that is never worth opening, and the
+            # week is still stamped so this does not retry all day.
+            self.dismissed['_digest'] = stamp
+            await self.save()
+            logger.info(f'Weekly strike digest {stamp}: nothing active, '
+                        f'staying quiet')
+            return False
 
         try:
             await channel.send(embed=create_embed(

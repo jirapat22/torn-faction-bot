@@ -3980,6 +3980,69 @@ def test_the_bot_never_ticks_its_own_alerts():
     assert asyncio.run(mgr._send_handled(Dead(), object())) is None
 
 
+def test_strikes_never_announce_that_there_are_none():
+    """
+    A clean record is not news. Two places used to say so anyway: a candidate
+    opened with "0 active strike(s) already", which is noise on what is
+    usually a first offence and buries the line when somebody genuinely IS a
+    repeat; and the weekly digest posted "nobody holds an active strike",
+    which is a message never worth opening.
+
+    Answering a direct question is different - /strikes member on someone
+    clean still says so, because somebody asked.
+    """
+    import asyncio
+    from features.strikes import StrikeManager
+
+    sent = []
+
+    class Chan:
+        async def send(self, **kw):
+            sent.append(kw.get('embed'))
+
+    class FakeBot:
+        def get_channel(self, _):
+            return Chan()
+
+    mgr = StrikeManager(bot=FakeBot())
+    saved = []
+    async def fake_save():
+        saved.append(1)
+    mgr.save = fake_save
+
+    # --- first offence: no history line at all ---
+    asyncio.run(mgr.post_candidate('1', 'Clean', 'oc', 'no OC this week'))
+    assert len(sent) == 1
+    body = sent[0].description
+    assert 'active strike' not in body, (
+        f'a clean member must not be told they have 0 strikes: {body}')
+    assert 'Pick one' in body, 'the actual instruction survives'
+
+    # --- a repeat offender DOES get the count ---
+    mgr.add('2', 'Repeat', 'bonus', 'earlier')
+    sent.clear()
+    asyncio.run(mgr.post_candidate('2', 'Repeat', 'oc', 'again'))
+    assert '1 active strike(s) already' in sent[0].description, sent[0].description
+
+    # --- an empty week posts nothing, but is still stamped ---
+    quiet = StrikeManager(bot=FakeBot())
+    quiet.save = fake_save
+    sent.clear()
+    posted = asyncio.run(quiet.post_weekly_digest(force=True))
+    assert posted is False and sent == [], (
+        f'an empty digest must stay silent: {sent}')
+    assert '_digest' in quiet.dismissed, (
+        'the week is still stamped, or it retries all day')
+
+    # --- a week with strikes still posts ---
+    busy = StrikeManager(bot=FakeBot())
+    busy.save = fake_save
+    busy.add('3', 'Somebody', 'oc', 'missed')
+    sent.clear()
+    assert asyncio.run(busy.post_weekly_digest(force=True)) is True
+    assert len(sent) == 1 and 'Somebody' in sent[0].description
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -4034,6 +4097,7 @@ if __name__ == '__main__':
     test_discord_roster_classifies_every_way_the_two_lists_drift()
     test_role_sync_only_touches_roles_it_manages()
     test_the_bot_never_ticks_its_own_alerts()
+    test_strikes_never_announce_that_there_are_none()
     test_revive_scan_never_turns_a_failed_lookup_into_an_accusation()
     test_revive_check_posts_once_per_checkpoint_and_retries_on_failure()
     test_war_report_counts_hits_taken_from_attack_log()
