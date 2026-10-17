@@ -3943,6 +3943,43 @@ def test_role_sync_only_touches_roles_it_manages():
         f'unmanaged roles survive an unknown position: {m3.roles}')
 
 
+def test_the_bot_never_ticks_its_own_alerts():
+    """
+    The bot used to pre-add the tick to nudge alerts, as a one-click
+    affordance. It was wrong: the count read "1" before anybody had touched
+    it, so every alert looked already handled, and a real tick made it 2.
+
+    A reaction is only worth anything if every one of them came from a
+    person, so the bot adds none and the message says what the tick is for.
+    """
+    import asyncio
+    from features.inactivity import InactivityTracker
+
+    class Msg:
+        def __init__(self):
+            self.reactions = []
+        async def add_reaction(self, emoji):
+            self.reactions.append(emoji)
+
+    sent = Msg()
+
+    class Chan:
+        async def send(self, **kw):
+            return sent
+
+    mgr = InactivityTracker(bot=None)
+    out = asyncio.run(mgr._send_handled(Chan(), object()))
+    assert out is sent
+    assert sent.reactions == [], (
+        f'the bot must not tick its own alert: {sent.reactions}')
+
+    # a send failure returns None rather than raising into the daily check
+    class Dead:
+        async def send(self, **kw):
+            raise RuntimeError('channel gone')
+    assert asyncio.run(mgr._send_handled(Dead(), object())) is None
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -3996,6 +4033,7 @@ if __name__ == '__main__':
     test_cleanup_sweeps_once_a_week_and_reports_what_it_took()
     test_discord_roster_classifies_every_way_the_two_lists_drift()
     test_role_sync_only_touches_roles_it_manages()
+    test_the_bot_never_ticks_its_own_alerts()
     test_revive_scan_never_turns_a_failed_lookup_into_an_accusation()
     test_revive_check_posts_once_per_checkpoint_and_retries_on_failure()
     test_war_report_counts_hits_taken_from_attack_log()

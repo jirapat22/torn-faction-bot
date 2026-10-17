@@ -835,25 +835,19 @@ class InactivityTracker:
 
     async def _send_handled(self, channel, embed):
         """
-        Post an alert and pre-add a tick to it.
+        Post an alert that management ticks off when they have dealt with it.
 
-        These tiers are nudges, not strike candidates, so they have no buttons
-        and nothing records what was done about them. A reaction is the
-        cheapest shared memory available: one click marks it handled, and the
-        next person scrolling can see somebody already dealt with it instead
-        of chasing the same member twice.
+        The bot deliberately does NOT add the tick itself. It used to, as a
+        one-click affordance, and that was wrong: the count showed as 1 before
+        anybody had touched it, so every alert looked already handled and a
+        real tick made it 2. A reaction only means something if every one of
+        them came from a person.
         """
         try:
-            msg = await channel.send(embed=embed)
+            return await channel.send(embed=embed)
         except Exception as e:
             logger.error(f'Alert send failed: {e}')
             return None
-        try:
-            await msg.add_reaction('✅')
-        except Exception as e:
-            # A missing Add Reactions permission must not lose the alert.
-            logger.info(f'Could not pre-add the tick: {e}')
-        return msg
 
     async def _send_inactivity_alert(self, channel, warning_members, critical_members, total_faction_members, oc_warning=None, oc_critical=None, left_faction=None, oc_no_slots=False):
         """
@@ -927,7 +921,7 @@ class InactivityTracker:
                 )
 
             # Chunk into multiple embeds if needed (4096 char description limit)
-            header = f'**{len(critical_members)} faction member(s)** have been inactive on Torn for {INACTIVITY_CRITICAL_DAYS}+ days:\n\n'
+            header = f'**{len(critical_members)} faction member(s)** have been inactive on Torn for {INACTIVITY_CRITICAL_DAYS}+ days:\n-# React \u2705 once you have dealt with it, so nobody chases them twice.\n\n'
             chunks = []
             current = header
             for line in lines:
@@ -960,7 +954,7 @@ class InactivityTracker:
                     f'  {days} days inactive · Last action: {format_timestamp(last_seen, "R")}'
                 )
 
-            header = f'**{len(warning_members)} faction member(s)** have been inactive on Torn for {INACTIVITY_WARNING_DAYS}+ days:\n\n'
+            header = f'**{len(warning_members)} faction member(s)** have been inactive on Torn for {INACTIVITY_WARNING_DAYS}+ days:\n-# React \u2705 once you have dealt with it, so nobody chases them twice.\n\n'
             chunks = []
             current = header
             for line in lines:
