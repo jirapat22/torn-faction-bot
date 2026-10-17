@@ -62,15 +62,36 @@ STRIKE_TYPES = {
 }
 
 
-def dm_text(stype, reason):
+# What #faction-edicts promises a struck member, word for word: strike 1 is a
+# warning, 2 is the final warning, 3 puts removal to a management vote. The DM
+# used to say none of that, so somebody on their second strike had no way to
+# tell they were one away from a vote - which is the whole point of writing a
+# ladder down.
+STRIKE_LADDER = {
+    1: 'This is **strike 1 of 3** - a warning.',
+    2: 'This is **strike 2 of 3** - your final warning.',
+}
+STRIKE_LADDER_LAST = ('This is **strike 3**. Management now votes on whether '
+                      'you stay in the faction.')
+
+
+def dm_text(stype, reason, total=None):
     """
     The message a struck member receives. Built in one place because the
     channel echoes it verbatim - management should see exactly what was sent,
     not a paraphrase that could drift from it.
+
+    total is how many strikes they hold INCLUDING this one. Left as None the
+    ladder line is omitted rather than guessed: a wrong position here is worse
+    than no position, because the member would plan around it.
     """
+    ladder = ''
+    if total:
+        ladder = (STRIKE_LADDER.get(total) or STRIKE_LADDER_LAST) + '\n\n'
     return (f'**{STRIKE_TYPES.get(stype, stype)}**\n\n{reason}\n\n'
-            f'Strikes expire after {STRIKE_EXPIRY_DAYS} days. If you think '
-            f'this is wrong, say so to management in the server.')
+            f'{ladder}'
+            f'Strikes expire after {STRIKE_EXPIRY_DAYS} days with no new '
+            f'strikes. Think this one is unfair? Appeal to the leader.')
 
 
 class StrikeManager:
@@ -270,7 +291,9 @@ class StrikeManager:
         A failed DM is ordinary - plenty of people block DMs from servers - so
         it is reported to the channel and never raised.
         """
-        text = dm_text(stype, reason)
+        # Counted here, not passed in: the caller records the strike before
+        # sending, so this read already includes the new one.
+        text = dm_text(stype, reason, total=len(self.active(torn_id)))
         discord_id = self.discord_id_for(torn_id)
         if not discord_id:
             return False, text

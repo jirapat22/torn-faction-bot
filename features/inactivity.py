@@ -686,8 +686,11 @@ class InactivityTracker:
                          'unreachable after retries) · OC section will be skipped')
 
         # Track inactive members
-        warning_members = []  # 3+ days inactive
-        critical_members = []  # 5+ days inactive
+        # Both thresholds are env-driven, so no number is written here: live
+        # critical is 7 days to match the rule in #faction-edicts, and a
+        # hardcoded comment would quietly go stale the next time it moves.
+        warning_members = []   # INACTIVITY_WARNING_DAYS+ inactive
+        critical_members = []  # INACTIVITY_CRITICAL_DAYS+ inactive, strike-able
 
         # Check ALL faction members from Torn API
         logger.info(f'Checking {len(torn_members)} faction members...')

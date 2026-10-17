@@ -4043,6 +4043,64 @@ def test_strikes_never_announce_that_there_are_none():
     assert len(sent) == 1 and 'Somebody' in sent[0].description
 
 
+def test_strike_dm_states_the_published_ladder():
+    """
+    #faction-edicts publishes a three-step ladder: strike 1 is a warning,
+    2 is the final warning, 3 goes to a removal vote. The DM has to say which
+    step the member is on, or the ladder only exists for management.
+
+    Two things are guarded here:
+
+    - The position comes from the ledger AFTER the strike is recorded, so a
+      first offence reads 1 and not 0. Off by one here tells somebody they
+      are on a final warning when they are not.
+    - Past 3 it must not fall off the end into silence. A fourth strike is
+      still at the removal-vote step, not an unlabelled one.
+    """
+    from features.strikes import (StrikeManager, dm_text, STRIKE_TYPES,
+                                  STRIKE_LADDER_LAST)
+
+    sm = StrikeManager(bot=None)
+
+    # First offence, through the real send path. send_dm returns the text it
+    # built even when there is nobody to send it to, which is what makes the
+    # count testable without a Discord connection.
+    import asyncio
+    sm.add('7', 'Seven', 'oc', 'no OC', issued_by='Mgr')
+    sent, t1 = asyncio.run(sm.send_dm('7', 'oc', 'no OC'))
+    assert sent is False, 'unregistered member: nothing to send to'
+    assert 'strike 1 of 3' in t1, t1
+    assert 'final warning' not in t1, 'a first offence is not a final warning'
+
+    sm.add('7', 'Seven', 'chain', 'missed the minimum', issued_by='Mgr')
+    t2 = dm_text('chain', 'missed the minimum', total=len(sm.active('7')))
+    assert 'strike 2 of 3' in t2 and 'final warning' in t2, t2
+
+    sm.add('7', 'Seven', 'bonus', 'bonus on a random', issued_by='Mgr')
+    t3 = dm_text('bonus', 'bonus on a random', total=len(sm.active('7')))
+    assert STRIKE_LADDER_LAST in t3, t3
+
+    # a fourth still names the step rather than going quiet
+    sm.add('7', 'Seven', 'conduct', 'again', issued_by='Mgr')
+    t4 = dm_text('conduct', 'again', total=len(sm.active('7')))
+    assert STRIKE_LADDER_LAST in t4, t4
+
+    # an expired strike must not inflate the position of a later one
+    import time
+    from config import STRIKE_EXPIRY_DAYS
+    sm2 = StrikeManager(bot=None)
+    old = sm2.add('8', 'Eight', 'oc', 'long ago')
+    old['issued_at'] = time.time() - (STRIKE_EXPIRY_DAYS + 1) * 86400
+    sm2.add('8', 'Eight', 'oc', 'now')
+    t = dm_text('oc', 'now', total=len(sm2.active('8')))
+    assert 'strike 1 of 3' in t, (
+        'a strike that aged out cannot push somebody up the ladder: ' + t)
+
+    # the appeal route matches the rules, which say to appeal to the leader
+    assert 'leader' in t.lower(), t
+    assert STRIKE_TYPES['oc'] in t
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -4120,4 +4178,5 @@ if __name__ == '__main__':
     test_follow_warning_not_triggered_by_weak_enemies_alone()
     test_follow_warning_silent_when_own_roster_unavailable()
     test_fly_status_shows_destination_hotspots()
+    test_strike_dm_states_the_published_ladder()
     print('All smoke tests passed.')
