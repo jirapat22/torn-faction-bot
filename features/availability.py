@@ -41,6 +41,28 @@ WAR_POLL_SPAN_HOURS = 24            # cover the first day of the war
 WAR_POLL_BLOCK_HOURS = 4            # -> 6 blocks, one message, readable on mobile
 WAR_POLL_CLOSE_LEAD_SECONDS = 3600  # close this long BEFORE the war starts
 
+
+def poll_post_target(client, fallback_channel):
+    """
+    Where a manually created availability poll should be posted.
+
+    Discord will not let the bot grant itself command permissions, and /avail
+    is blocked in the availability channel, so the command is run from a
+    management channel. It used to post the poll right there - while the
+    chaser message, which always goes to the availability channel, told
+    everybody to answer "the poll above". The poll and its chaser have to
+    live in the same place or the chase makes no sense.
+
+    Falls back to the invoking channel when the availability channel is unset
+    or unreachable: a poll in the wrong channel is recoverable, a poll that
+    was never posted is not.
+    """
+    if AVAILABILITY_CHANNEL_ID and client is not None:
+        channel = client.get_channel(AVAILABILITY_CHANNEL_ID)
+        if channel is not None:
+            return channel
+    return fallback_channel
+
 BLOCK_LABELS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L',
                 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X']
 
@@ -911,10 +933,12 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
 
             await interaction.response.defer()
 
+            poll_target = poll_post_target(interaction.client, interaction.channel)
+
             poll_id, blocks = manager.create_poll(
                 start_date=start_date,
                 end_date=actual_end_date,
-                channel_id=interaction.channel.id,
+                channel_id=poll_target.id,
                 message_id=0,
                 start_time=start_time,
                 end_time=end_time,
@@ -974,11 +998,23 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
             embed.set_footer(text=f"Block size: {block_length}h | Only {verified_role_name} members can vote")
 
             view = AvailabilityView(manager, poll_id, blocks, verified_role_name)
-            message = await interaction.followup.send(embed=embed, view=view)
+            if poll_target.id == interaction.channel.id:
+                message = await interaction.followup.send(embed=embed, view=view)
+            else:
+                message = await poll_target.send(embed=embed, view=view)
+                await interaction.followup.send(
+                    embed=create_embed(
+                        title='Poll posted',
+                        description=(f'Availability poll for **{start_date}** is '
+                                     f'up in {poll_target.mention}.\n'
+                                     f'[Jump to it]({message.jump_url})'),
+                        color=EMBED_COLOR_SUCCESS),
+                    ephemeral=True)
 
             manager.polls[poll_id]['message_id'] = message.id
             await manager.save_polls()
-            logger.info(f'Availability poll created: {poll_id} with {len(blocks)} blocks')
+            logger.info(f'Availability poll created: {poll_id} with {len(blocks)} '
+                        f'blocks in #{getattr(poll_target, "name", poll_target.id)}')
 
         # ── Summary ──
         elif action_value == 'summary':

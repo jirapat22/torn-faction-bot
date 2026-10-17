@@ -4101,6 +4101,54 @@ def test_strike_dm_states_the_published_ladder():
     assert STRIKE_TYPES['oc'] in t
 
 
+def test_manual_poll_posts_where_the_chaser_looks_for_it():
+    """
+    A manual /avail setup used to post the poll in whatever channel it was
+    typed in. Discord blocks /avail in the availability channel, so that was
+    never the availability channel - while post_poll_chasers always posts
+    there, saying "X of Y have not answered the poll above". The poll and the
+    chase have to be in the same channel or the chase points at nothing.
+
+    The fallback is the part worth guarding: if the availability channel is
+    unset or unreachable the poll must still go somewhere. A poll in the
+    wrong channel can be deleted and redone; a poll that was never posted
+    loses the war's availability entirely.
+    """
+    import features.availability as av
+
+    class Channel:
+        def __init__(self, cid, name):
+            self.id, self.name = cid, name
+
+    AVAIL = Channel(999, 'war-availability')
+    TYPED_IN = Channel(111, 'management')
+
+    class Client:
+        def __init__(self, found):
+            self.found = found
+        def get_channel(self, cid):
+            return self.found if cid == av.AVAILABILITY_CHANNEL_ID else None
+
+    original = av.AVAILABILITY_CHANNEL_ID
+    try:
+        # --- configured and reachable: the poll goes to the poll channel ---
+        av.AVAILABILITY_CHANNEL_ID = 999
+        assert av.poll_post_target(Client(AVAIL), TYPED_IN) is AVAIL
+
+        # --- configured but the bot cannot see it: post it anyway ---
+        assert av.poll_post_target(Client(None), TYPED_IN) is TYPED_IN, (
+            'an unreachable channel must not swallow the poll')
+
+        # --- not configured at all: post where it was asked for ---
+        av.AVAILABILITY_CHANNEL_ID = 0
+        assert av.poll_post_target(Client(AVAIL), TYPED_IN) is TYPED_IN
+
+        # --- no client at all cannot raise ---
+        assert av.poll_post_target(None, TYPED_IN) is TYPED_IN
+    finally:
+        av.AVAILABILITY_CHANNEL_ID = original
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -4179,4 +4227,5 @@ if __name__ == '__main__':
     test_follow_warning_silent_when_own_roster_unavailable()
     test_fly_status_shows_destination_hotspots()
     test_strike_dm_states_the_published_ladder()
+    test_manual_poll_posts_where_the_chaser_looks_for_it()
     print('All smoke tests passed.')
