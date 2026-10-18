@@ -440,6 +440,15 @@ async def daily_inactivity_check():
                                 f"({sync_result['checked']} checked, "
                                 f"{sync_result['unlinked']} not linked to Discord)")
 
+                # Anyone still unregistered after auto-verify has not linked
+                # their Torn account either, so the bot cannot find them on
+                # its own - it has to ask them.
+                try:
+                    from features.lobby import run as lobby_run
+                    await lobby_run(bot, guild, verification_system)
+                except Exception as e:
+                    logger.error(f'Lobby check failed: {e}')
+
                 role_result = await verification_system.fixrole_members(guild)
                 if role_result:
                     logger.info(f"Daily auto-verify: {role_result['fixed']} role(s) fixed, "
@@ -668,11 +677,25 @@ async def on_member_join(member):
     from config import WELCOME_CHANNEL_ID
 
     # Use plain text channel names (not <#ID> mentions) so unverified users can read them
+    # Plain channel names, not <#ID> mentions: an unverified member cannot
+    # see those channels, and Discord renders a mention they cannot resolve
+    # as a dead "#unknown-channel".
+    #
+    # Step 1 leads with the Torn link rather than /register because it is the
+    # one that cannot go wrong - no ID to mistype, no impersonating somebody
+    # else, and it proves ownership from Torn's side. /register stays as the
+    # fallback for anyone who has not linked.
     welcome_message = (
         f"🎉 Welcome to Ascended Punks, {member.mention}!\n\n"
-        f"1️⃣ Run `/register` with your Torn ID in **#welcome-pit**.\n"
+        f"1️⃣ **Get verified** in **#welcome-pit**, either way:\n"
+        f" • Link your Torn account to Discord in Torn, and the bot "
+        f"picks you up automatically overnight.\n"
+        f" • Or run `/register` with your Torn ID (the number in your "
+        f"Torn profile URL).\n"
         f"2️⃣ Head to **#faction-edicts** and read the rules.\n"
         f"3️⃣ Once you're Verified, jump into **#punk-plaza** and say hi.\n\n"
+        f"⚠️ Never paste an API key in Discord, here or anywhere else. "
+        f"The bot never asks for one.\n"
         f"Please contact Ikaros22[3571142] if there is any issue with register process."
     )
 

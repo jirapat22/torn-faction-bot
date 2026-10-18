@@ -4436,6 +4436,91 @@ def test_rolesync_never_hands_out_administrator_by_torn_position():
     assert privilege_level('not-a-number', 777, MGMT_IDS) is None
 
 
+def test_lobby_nag_waits_a_day_paces_itself_and_gives_up():
+    """
+    This feature pings real people in the one channel they can see, so every
+    guard here is about NOT being a machine gun.
+
+    - Nothing on day one. Somebody who joined an hour ago is reading the
+      welcome message; a bot interrupting them is worse than useless.
+    - Then once every two days, never on consecutive runs. The daily loop
+      calls this every single day, so without the cadence check a member
+      would be pinged every 24h until they gave up on the server.
+    - It stops after MAX_NAGS. If three reminders did not work, a human has
+      to ask them in Torn, and the bot pestering forever only trains people
+      to mute the channel.
+    - Registering or leaving removes them from the state file, so nothing
+      accumulates and a rejoin does not resume mid-nag.
+    """
+    from features.lobby import (classify_lobby, NAG_AFTER_HOURS,
+                                NAG_EVERY_HOURS, MAX_NAGS,
+                                ESCALATE_AFTER_DAYS)
+
+    HOUR, DAY = 3600, 86400
+    now = 1_000_000_000
+
+    def member(mid, hours_ago):
+        return {'id': mid, 'name': f'M{mid}', 'joined_at': now - hours_ago * HOUR}
+
+    fresh = member('1', 2)                       # joined 2 hours ago
+    day_old = member('2', NAG_AFTER_HOURS + 1)   # just past the quiet period
+    stubborn = member('3', ESCALATE_AFTER_DAYS * 24 + 5)
+
+    # --- day one is quiet ---
+    nag, esc, state = classify_lobby([fresh], set(), now=now, state={})
+    assert nag == [] and esc == [], 'a brand new member must not be pinged'
+    assert state == {}, 'and must not even be tracked yet'
+
+    # --- past a day: one nag, recorded ---
+    nag, esc, state = classify_lobby([day_old], set(), now=now, state={})
+    assert [m['id'] for m in nag] == ['2'], nag
+    assert state['2']['nags'] == 1 and state['2']['last'] == now
+
+    # --- the very next day: silence, because the loop runs daily ---
+    nag2, _esc, state2 = classify_lobby([day_old], set(), now=now + DAY,
+                                        state=state)
+    assert nag2 == [], 'nagging every single day is how a channel gets muted'
+    assert state2['2']['nags'] == 1, 'and the count must not creep up'
+
+    # --- two days later: nagged again ---
+    nag3, _esc, state3 = classify_lobby([day_old], set(),
+                                        now=now + NAG_EVERY_HOURS * HOUR,
+                                        state=state)
+    assert [m['id'] for m in nag3] == ['2']
+    assert state3['2']['nags'] == 2
+
+    # --- it gives up after MAX_NAGS ---
+    spent = {'2': {'nags': MAX_NAGS, 'last': 0}}
+    nag4, _esc, _s = classify_lobby([day_old], set(), now=now, state=spent)
+    assert nag4 == [], f'must stop after {MAX_NAGS} attempts'
+
+    # --- escalation kicks in at three days, and keeps reporting ---
+    _nag, esc5, _s = classify_lobby([stubborn], set(), now=now, state=spent)
+    assert [m['id'] for m in esc5] == ['3'], esc5
+
+    # --- registering removes them entirely ---
+    nag6, esc6, state6 = classify_lobby([day_old, stubborn], {'2', '3'},
+                                        now=now, state=state3)
+    assert nag6 == [] and esc6 == [], 'a registered member is not in the lobby'
+    assert state6 == {}, 'and is dropped from the state file'
+
+    # --- leaving the server drops them too ---
+    _n, _e, state7 = classify_lobby([], set(), now=now, state=state3)
+    assert state7 == {}, 'state must not grow forever'
+
+    # --- no join date: tracked by nobody, pestered by nobody ---
+    nodate = {'id': '9', 'name': 'M9', 'joined_at': 0}
+    nag8, esc8, state8 = classify_lobby([nodate], set(), now=now, state={})
+    assert nag8 == [] and esc8 == [] and state8 == {}
+
+    # --- the message names them and offers both routes ---
+    from features.lobby import nag_text
+    t = nag_text(['2', '3'])
+    assert '<@2>' in t and '<@3>' in t, 'the nag has to actually ping them'
+    assert '/register' in t and 'link' in t.lower()
+    assert 'API key' in t, 'welcome-pit is where people paste keys'
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -4520,4 +4605,5 @@ if __name__ == '__main__':
     test_prune_refuses_to_act_on_a_roster_it_could_not_read()
     test_config_check_tells_the_difference_between_unset_and_deleted()
     test_rolesync_never_hands_out_administrator_by_torn_position()
+    test_lobby_nag_waits_a_day_paces_itself_and_gives_up()
     print('All smoke tests passed.')
