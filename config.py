@@ -140,6 +140,12 @@ CLEANUP_REPORT_CHANNEL_ID = int(os.getenv("CLEANUP_REPORT_CHANNEL_ID", "0"))
 # so this fires BEFORE the war instead of reporting it afterwards.
 PREWAR_OFFLINE_HOURS = int(os.getenv("PREWAR_OFFLINE_HOURS", "24"))
 
+# Weekday for the pre-enlist activity report, 0 = Monday. It runs on a FIXED
+# day rather than counting back from the war, because the point of it is to
+# let the leader clear out the quiet ones BEFORE enlisting - by the time a
+# war is on the calendar it is already too late to act on.
+PREWAR_REPORT_WEEKDAY = int(os.getenv("PREWAR_REPORT_WEEKDAY", "0"))
+
 # Left-faction alert threshold (days before alerting about a verified member not in faction)
 # Grace period for someone who leaves the faction: they keep their verified
 # role (and so their channel access) this many days before it is revoked, and

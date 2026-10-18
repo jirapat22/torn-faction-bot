@@ -4720,6 +4720,114 @@ def test_xan_report_marks_who_actually_qualifies():
     assert qualifies(3, 3, 3) is False
 
 
+def test_poll_closes_at_the_deadline_the_rules_actually_state():
+    """
+    #faction-edicts says answer at least 24 hours before the war. The poll
+    used to stay open until an hour before, which made the written deadline
+    fiction - somebody could answer 17 hours late, still count as answered,
+    and answering is exactly what exempts them from the absence strike.
+
+    The ordering is the real guard: the chase has to land while the poll is
+    still OPEN. Chase after the close and it is pure noise, telling people to
+    click something that no longer takes clicks.
+    """
+    from features.availability import (WAR_POLL_CLOSE_LEAD_SECONDS,
+                                       WAR_POLL_LEAD_SECONDS)
+    from features.wars import POLL_CHASE_CHECKPOINTS, REVIVE_CHECK_CHECKPOINTS
+
+    assert WAR_POLL_CLOSE_LEAD_SECONDS == 24 * 3600, (
+        'the rules say 24 hours, so the poll closes at 24 hours')
+
+    chase = min(POLL_CHASE_CHECKPOINTS)
+    assert chase > WAR_POLL_CLOSE_LEAD_SECONDS, (
+        f'the chase ({chase}s before) must come BEFORE the poll closes '
+        f'({WAR_POLL_CLOSE_LEAD_SECONDS}s before), or it chases a closed poll')
+
+    assert WAR_POLL_LEAD_SECONDS > chase, (
+        'the poll has to exist before anybody is chased about it')
+
+    # revives stay late on purpose: it is a thing to do just before fighting,
+    # not something to action a day out and forget
+    assert min(REVIVE_CHECK_CHECKPOINTS) < WAR_POLL_CLOSE_LEAD_SECONDS
+
+    # and the window to answer is a real one, not minutes
+    window = (WAR_POLL_LEAD_SECONDS - WAR_POLL_CLOSE_LEAD_SECONDS) / 3600
+    assert window >= 12, f'only {window}h to answer is not a poll'
+
+
+def test_weekly_activity_check_runs_on_its_day_and_only_once():
+    """
+    The quiet-member list moved off the war countdown. Six hours before a war
+    it was interesting and useless - you cannot act on it without pulling
+    somebody out of a war already enlisted for. On a Monday it is actionable.
+
+    Same week-stamp guard as the other weekly jobs: a restart must not post
+    it twice, and a week the bot was down is skipped rather than arriving
+    late on a Thursday.
+    """
+    import asyncio
+    import datetime as dt
+    import features.wars as wars_mod
+    from features.wars import WarTracker
+
+    saved = {}
+    orig_load, orig_save = wars_mod.load_json, wars_mod.save_json
+
+    calls = []
+
+    class FakeChannel:
+        async def send(self, *a, **k):
+            calls.append('sent')
+
+    tracker = WarTracker(bot=None)
+    tracker.bot = type('B', (), {'get_channel': lambda self, cid: FakeChannel()})()
+
+    async def fake_prewar(channel, label):
+        calls.append(f'posted:{label}')
+        return True
+    tracker.post_prewar_offline = fake_prewar
+
+    import utils.helpers as helpers_mod
+    real_load, real_save = helpers_mod.load_json, helpers_mod.save_json
+    helpers_mod.load_json = lambda path, default=None: dict(saved) or (default or {})
+    helpers_mod.save_json = lambda path, data: saved.update(data)
+    try:
+        today = dt.datetime.now(dt.timezone.utc).isocalendar()[2] - 1
+
+        # --- not its day: silent ---
+        from config import PREWAR_REPORT_WEEKDAY
+        import config as config_mod
+        config_mod.PREWAR_REPORT_WEEKDAY = (today + 3) % 7
+        assert asyncio.run(tracker.post_weekly_activity_check()) is False
+        assert calls == [], 'must not post on the wrong day'
+
+        # --- its day: posts once ---
+        config_mod.PREWAR_REPORT_WEEKDAY = today
+        assert asyncio.run(tracker.post_weekly_activity_check()) is True
+        assert any(c.startswith('posted:') for c in calls)
+        assert 'last_week' in saved
+
+        # --- same week again (a restart): silent ---
+        before = len(calls)
+        assert asyncio.run(tracker.post_weekly_activity_check()) is False
+        assert len(calls) == before, 'a restart must not post it twice'
+
+        # --- force ignores both guards, for testing ---
+        assert asyncio.run(tracker.post_weekly_activity_check(force=True)) is True
+
+        # --- an unreadable roster leaves the week open to retry ---
+        saved.clear()
+        async def failing(channel, label):
+            return False
+        tracker.post_prewar_offline = failing
+        assert asyncio.run(tracker.post_weekly_activity_check(force=True)) is False
+        assert 'last_week' not in saved, (
+            'a failed read must not stamp the week as done')
+    finally:
+        helpers_mod.load_json, helpers_mod.save_json = real_load, real_save
+        config_mod.PREWAR_REPORT_WEEKDAY = PREWAR_REPORT_WEEKDAY
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -4808,4 +4916,6 @@ if __name__ == '__main__':
     test_welcome_board_stays_pinned_and_avoids_dead_channel_links()
     test_stakeout_suggestions_rank_by_danger_to_us_not_in_the_abstract()
     test_xan_report_marks_who_actually_qualifies()
+    test_poll_closes_at_the_deadline_the_rules_actually_state()
+    test_weekly_activity_check_runs_on_its_day_and_only_once()
     print('All smoke tests passed.')

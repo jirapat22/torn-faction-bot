@@ -402,6 +402,14 @@ async def daily_inactivity_check():
         if strike_manager:
             await strike_manager.post_weekly_digest()
 
+        # The Monday "who is quiet before we enlist" report. Rides the daily
+        # loop and picks its own day, like the other weekly jobs.
+        try:
+            if war_tracker:
+                await war_tracker.post_weekly_activity_check()
+        except Exception as e:
+            logger.error(f'Weekly activity check failed: {e}')
+
         # Torn-vs-Discord roster drift, weekly. Decides its own day, so
         # there is no extra loop to keep alive.
         try:

@@ -39,7 +39,12 @@ logger = logging.getLogger(__name__)
 WAR_POLL_LEAD_SECONDS = 48 * 3600   # post once the war is this close
 WAR_POLL_SPAN_HOURS = 24            # cover the first day of the war
 WAR_POLL_BLOCK_HOURS = 4            # -> 6 blocks, one message, readable on mobile
-WAR_POLL_CLOSE_LEAD_SECONDS = 3600  # close this long BEFORE the war starts
+# The rules say answer at least 24 hours before the war, so the poll
+# closes there. It used to stay open until an hour before, which made
+# the written deadline fiction: a member could answer 17 hours late and
+# still count as answered, and answering is what exempts them from the
+# absence strike.
+WAR_POLL_CLOSE_LEAD_SECONDS = 24 * 3600  # close this long BEFORE the war
 
 
 def poll_post_target(client, fallback_channel):

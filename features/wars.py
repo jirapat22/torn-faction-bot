@@ -100,6 +100,11 @@ XAN_REIMBURSE_MIN_HITS = 10
 # single pass and never a loop.
 REVIVE_CHECK_CHECKPOINTS = (6 * 3600,)
 
+# Chasing non-voters has to happen while the poll is still OPEN, and it now
+# closes 24h out - so the chase sits a couple of hours before that, not at
+# the 6h revive checkpoint where it would arrive after the door shut.
+POLL_CHASE_CHECKPOINTS = (26 * 3600,)
+
 TURTLE_WINDOW_SECONDS = _TURTLE_WINDOW_MINUTES * 60
 TURTLE_HIT_THRESHOLD = _TURTLE_HIT_THRESHOLD
 TURTLE_COOLDOWN_SECONDS = 3600
@@ -2484,9 +2489,10 @@ class WarTracker:
 
         if not quiet:
             await channel.send(embed=create_embed(
-                title=f'✅ Pre-war activity check · {when_label}',
+                title=f'✅ Activity check · {when_label}',
                 description=(f'Everyone has been active in the last '
-                             f'{PREWAR_OFFLINE_HOURS}h.'),
+                             f'{PREWAR_OFFLINE_HOURS}h. Nobody to clear out '
+                             f'before we enlist.'),
                 color=EMBED_COLOR_SUCCESS))
             return True
 
@@ -2502,14 +2508,63 @@ class WarTracker:
             used += len(line) + 1
 
         await channel.send(embed=create_embed(
-            title=f'⚠️ Offline before the war · {when_label}',
+            title=f'⚠️ Quiet members · {when_label}',
             description=(f'**{len(quiet)} of {len(roster)}** members have not '
                          f'acted in {PREWAR_OFFLINE_HOURS}h.\n\n'
                          + '\n'.join(lines)
-                         + '\n\n-# The rule is removal, not a strike, so these '
-                           'do not go to the ledger. Check for a notice first: '
-                           'someone can be offline and still have said so.'),
+                         + '\n\n-# This is the list to work through BEFORE '
+                           'enlisting, while there is still time to chase or '
+                           'remove somebody. Inactive members still count '
+                           'toward our war size.\n'
+                           '-# Nothing here goes to the strike ledger - the '
+                           'rule is removal, not a strike. Check for a notice '
+                           'first: someone can be offline and have said so.'),
             color=EMBED_COLOR_WARNING))
+        return True
+
+    async def post_weekly_activity_check(self, force=False,
+                                         state_file='data/prewar_report.json'):
+        """
+        The Monday "who is quiet before we enlist" report.
+
+        Moved off the war countdown on purpose. Six hours before a war the
+        list is interesting and useless - the leader cannot act on it without
+        pulling someone out of a war we have already enlisted for. On a
+        Monday it is actionable: chase them, or remove them, and enlist with
+        a roster that will actually fight.
+
+        Guarded by the ISO week stamp like the other weekly jobs, so a
+        restart cannot post it twice and a week the bot was down is skipped
+        rather than arriving late.
+
+        Returns True if something was posted.
+        """
+        import datetime as _dt
+        from utils.helpers import load_json, save_json
+        from config import PREWAR_REPORT_WEEKDAY
+
+        now = _dt.datetime.now(_dt.timezone.utc)
+        year, week, weekday = now.isocalendar()
+        stamp = f'{year}-W{week:02d}'
+        if not force:
+            if weekday - 1 != PREWAR_REPORT_WEEKDAY:
+                return False
+            state = load_json(state_file, default={}) or {}
+            if state.get('last_week') == stamp:
+                return False
+
+        channel = (self.bot.get_channel(INACTIVITY_ALERTS_CHANNEL_ID)
+                   if self.bot else None)
+        if not channel:
+            logger.warning('Weekly activity check: channel not found')
+            return False
+
+        posted = await self.post_prewar_offline(channel, 'before enlisting')
+        if not posted:
+            return False      # unreadable roster: leave the week open
+
+        save_json(state_file, {'last_week': stamp})
+        logger.info(f'Posted weekly pre-enlist activity check {stamp}')
         return True
 
     async def post_poll_chasers(self, war_id, when_label):
@@ -2570,8 +2625,9 @@ class WarTracker:
                          f'the poll above.\n\n' + '\n'.join(lines)
                          + '\n\n-# Answering is what exempts you from the '
                            'absence strike. Say so even if the answer is '
-                           '"barely on". The poll closes an hour before the '
-                           'war starts.'),
+                           '"barely on". The poll closes **24 hours before '
+                           'the war starts**, as the rules say - after that '
+                           'it is a no-answer.'),
             color=EMBED_COLOR_WARNING))
         return True
 
@@ -2597,6 +2653,23 @@ class WarTracker:
             return  # already started; telling people to prepare is too late
 
         war_id = str(upcoming['war_id'])
+
+        # The poll chase runs on its own, earlier checkpoint, because the
+        # poll closes 24h out and a chase after that is just noise. Stored
+        # under its own key so neither check can mark the other as done.
+        chase_key = f'chase:{war_id}'
+        chase_done = set(self.revive_checks.get(chase_key, []))
+        chase_passed = [c for c in POLL_CHASE_CHECKPOINTS
+                        if remaining <= c and c not in chase_done]
+        if chase_passed:
+            hours = min(chase_passed) // 3600
+            try:
+                await self.post_poll_chasers(war_id, f'{hours}h before the war')
+                self.revive_checks[chase_key] = sorted(chase_done | set(chase_passed))
+                await self.save_revive_checks()
+            except Exception as e:
+                logger.error(f'Poll chase failed for war {war_id}: {e}')
+
         done = set(self.revive_checks.get(war_id, []))
         passed = [c for c in REVIVE_CHECK_CHECKPOINTS
                   if remaining <= c and c not in done]
@@ -2615,18 +2688,10 @@ class WarTracker:
         except Exception as e:
             logger.error(f'Revive check failed for war {war_id}: {e}')
             return
-        # Same checkpoint, same roster-sized cost, different question: who has
-        # gone quiet. Failing this must not hold back the revive result, which
-        # already went out.
-        try:
-            await self.post_prewar_offline(channel, label)
-        except Exception as e:
-            logger.error(f'Pre-war offline check failed for war {war_id}: {e}')
-        # Same pass again: who still has not said whether they will be around.
-        try:
-            await self.post_poll_chasers(war_id, label)
-        except Exception as e:
-            logger.error(f'Poll chase failed for war {war_id}: {e}')
+        # The offline list used to ride this checkpoint too. It does not any
+        # more: by six hours out it is far too late to act on, and the point
+        # of it is for the leader to clear the quiet ones BEFORE enlisting.
+        # It runs on Monday instead - see post_weekly_activity_check.
         if not sent:
             return  # unreadable roster: leave the checkpoint open to retry
 
