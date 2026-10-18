@@ -373,8 +373,16 @@ async def on_ready():
             result = await refresh_commands(bot)
             if result:
                 logger.info(f'Member command board: {result}')
+
+            # The pinned "how to get verified" post. Same pattern, different
+            # audience: this one is the only instruction an UNVERIFIED member
+            # can read, since the welcome pit is the only channel they see.
+            from features.welcome_board import refresh as refresh_welcome
+            result = await refresh_welcome(bot)
+            if result:
+                logger.info(f'Welcome board: {result}')
         except Exception as e:
-            logger.error(f'Member command board failed: {e}')
+            logger.error(f'Startup boards failed: {e}')
 
         logger.info('Bot is ready!')
 
@@ -411,8 +419,10 @@ async def daily_inactivity_check():
         try:
             from features.member_commands import refresh as refresh_commands
             await refresh_commands(bot)
+            from features.welcome_board import refresh as refresh_welcome
+            await refresh_welcome(bot)
         except Exception as e:
-            logger.error(f'Member command board refresh failed: {e}')
+            logger.error(f'Board refresh failed: {e}')
 
         # Channel cleanup. Rides the daily loop but sweeps WEEKLY - it
         # checks the weekday itself, so there is no second loop to keep

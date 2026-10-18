@@ -4521,6 +4521,108 @@ def test_lobby_nag_waits_a_day_paces_itself_and_gives_up():
     assert 'API key' in t, 'welcome-pit is where people paste keys'
 
 
+def test_welcome_board_stays_pinned_and_avoids_dead_channel_links():
+    """
+    This post is the only instruction an UNVERIFIED member can read, so two
+    things have to hold.
+
+    The pin, because the welcome pit is swept weekly INCLUDING members' own
+    messages - and pinned is the only exemption. An unpinned board is a board
+    that gets deleted in thirty days, leaving newcomers with nothing.
+
+    And no <#id> channel mentions. An unverified member cannot see any of
+    those channels, so a mention renders as a dead link for exactly the
+    audience this post exists for - plain text names instead.
+    """
+    import asyncio
+    from features.welcome_board import build_embed, refresh
+
+    e = build_embed()
+    assert '<#' not in e.description, (
+        'channel mentions are dead links for unverified members: '
+        + e.description)
+    assert '/register' in e.description, 'the fallback route has to be there'
+    assert 'API key' in e.description
+    assert len(e.description) <= 4096
+
+    class Msg:
+        def __init__(self, author_id, embeds=(), pinned=False):
+            self.author = type('U', (), {'id': author_id})()
+            self.embeds = list(embeds)
+            self.pinned = pinned
+            self.deleted = False
+        async def pin(self):
+            self.pinned = True
+        async def unpin(self):
+            self.pinned = False
+        async def delete(self):
+            self.deleted = True
+
+    class Channel:
+        def __init__(self, msgs=None):
+            self.msgs = list(msgs or [])
+            self.sent = []
+        def history(self, limit=100):
+            msgs = self.msgs
+            class It:
+                def __aiter__(self_):
+                    self_._i = iter(msgs)
+                    return self_
+                async def __anext__(self_):
+                    try:
+                        return next(self_._i)
+                    except StopIteration:
+                        raise StopAsyncIteration
+            return It()
+        async def send(self, embed=None):
+            m = Msg(7, [embed])
+            self.sent.append(m)
+            self.msgs.insert(0, m)
+            return m
+
+    class Bot:
+        user = type('U', (), {'id': 7})()
+        def __init__(self, channel):
+            self._c = channel
+        def get_channel(self, cid):
+            return self._c
+
+    # --- empty channel: posts AND pins ---
+    ch = Channel()
+    assert asyncio.run(refresh(Bot(ch), channel_id=1)) == 'posted'
+    assert len(ch.sent) == 1
+    assert ch.sent[0].pinned is True, (
+        'an unpinned board is deleted by the weekly sweep')
+
+    # --- already correct: no repost, no duplicate ---
+    ch2 = Channel([Msg(7, [build_embed()], pinned=True)])
+    assert asyncio.run(refresh(Bot(ch2), channel_id=1)) == 'unchanged'
+    assert ch2.sent == [], 'must not post a second copy'
+
+    # --- correct text but somebody unpinned it: re-pin, still no repost ---
+    unpinned = Msg(7, [build_embed()], pinned=False)
+    ch3 = Channel([unpinned])
+    assert asyncio.run(refresh(Bot(ch3), channel_id=1)) == 'unchanged'
+    assert unpinned.pinned is True, 'an unpinned board must be re-pinned'
+    assert ch3.sent == []
+
+    # --- stale text: new one posted and pinned, old one removed ---
+    stale_embed = build_embed()
+    stale_embed.description = 'old wording'
+    stale = Msg(7, [stale_embed], pinned=True)
+    ch4 = Channel([stale])
+    assert asyncio.run(refresh(Bot(ch4), channel_id=1)) == 'posted'
+    assert ch4.sent[0].pinned is True
+    assert stale.deleted is True and stale.pinned is False
+
+    # --- no channel configured: does nothing rather than crashing ---
+    class NoChannel(Bot):
+        def get_channel(self, cid):
+            return None
+    assert asyncio.run(refresh(NoChannel(None), channel_id=1)) is None
+    assert asyncio.run(refresh(None, channel_id=1)) is None
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -4606,4 +4708,5 @@ if __name__ == '__main__':
     test_config_check_tells_the_difference_between_unset_and_deleted()
     test_rolesync_never_hands_out_administrator_by_torn_position()
     test_lobby_nag_waits_a_day_paces_itself_and_gives_up()
+    test_welcome_board_stays_pinned_and_avoids_dead_channel_links()
     print('All smoke tests passed.')
