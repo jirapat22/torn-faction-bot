@@ -4623,6 +4623,103 @@ def test_welcome_board_stays_pinned_and_avoids_dead_channel_links():
     assert asyncio.run(refresh(None, channel_id=1)) is None
 
 
+def test_stakeout_suggestions_rank_by_danger_to_us_not_in_the_abstract():
+    """
+    "Strong" has no absolute meaning - measured on a live war, an enemy at
+    817k was a real threat to one of ours at 516k and irrelevant to another
+    at 7.5m standing in the same country. So the suggestions are banded
+    against OUR roster, and the bands come from the same threat_bands() the
+    war board uses, because a watch list and a board that disagree about the
+    same enemy is worse than either being wrong alone.
+
+    Two things must hold:
+    - soft targets are never suggested. Knowing when somebody you can already
+      beat wakes up is not worth an API call on a timer.
+    - no enemy roster means no suggestions, rather than an empty list read as
+      "nobody here is dangerous".
+    """
+    from features.stakeout_suggest import pick_targets, build_embed
+
+    own = {f'o{i}': {'name': f'Ours{i}', 'level': 30} for i in range(5)}
+    ff = {f'o{i}': {'bs_estimate': v} for i, v in
+          enumerate([1_000_000, 900_000, 800_000, 200_000, 100_000])}
+    # our avg 600k, top-3 avg 900k
+
+    enemy = {
+        '1': {'name': 'Monster', 'level': 60},
+        '2': {'name': 'Solid', 'level': 50},
+        '3': {'name': 'Weakling', 'level': 10},
+        '4': {'name': 'Biggest', 'level': 55},
+    }
+    ff.update({
+        '1': {'bs_estimate': 950_000},    # above top-3 -> AVOID
+        '2': {'bs_estimate': 700_000},    # above avg   -> CAUTION
+        '3': {'bs_estimate': 50_000},     # below avg   -> soft, skipped
+        '4': {'bs_estimate': 2_000_000},  # way above   -> AVOID, worst
+    })
+
+    picks = pick_targets(enemy, own, ff, has_ff=True)
+    names = [p[1] for p in picks]
+    assert 'Weakling' not in names, f'soft targets must not be watched: {names}'
+    assert names[0] == 'Biggest', f'worst first: {names}'
+    assert set(names) == {'Biggest', 'Monster', 'Solid'}, names
+    assert picks[0][4] == 'AVOID' and picks[-1][4] == 'CAUTION'
+
+    # --- the limit is respected, keeping the worst ---
+    many = {str(i): {'name': f'E{i}', 'level': 99} for i in range(20)}
+    ffm = {str(i): {'bs_estimate': 1_000_000 + i} for i in range(20)}
+    ffm.update({f'o{i}': ff[f'o{i}'] for i in range(5)})
+    capped = pick_targets(many, own, ffm, has_ff=True, limit=3)
+    assert len(capped) == 3
+    assert [p[1] for p in capped] == ['E19', 'E18', 'E17'], capped
+
+    # --- no enemy roster: say nothing ---
+    assert pick_targets({}, own, ff, has_ff=True) == []
+    assert pick_targets(None, own, ff, has_ff=True) == []
+
+    # --- no FFScouter: falls back to level rather than giving up ---
+    own_lvl = {f'o{i}': {'name': f'Ours{i}', 'level': lv}
+               for i, lv in enumerate([80, 70, 60, 20, 10])}
+    picks_lvl = pick_targets(enemy, own_lvl, {}, has_ff=False)
+    assert picks_lvl, 'a missing stat source must not empty the list'
+    assert 'Weakling' not in [p[1] for p in picks_lvl], (
+        'the level fallback still has to exclude the obviously weak')
+
+    # --- the embed hands over runnable commands, and is silent when empty ---
+    e = build_embed(picks, 'Enemy Faction', has_ff=True)
+    assert '/enemy stakeout add torn_id:4' in e.description, e.description
+    assert 'Biggest' in e.description
+    assert build_embed([], 'Enemy Faction', has_ff=True) is None
+
+    # --- and says so when it is guessing from levels ---
+    e2 = build_embed(picks_lvl, 'Enemy Faction', has_ff=False)
+    assert 'level' in e2.description.lower()
+
+
+def test_xan_report_marks_who_actually_qualifies():
+    """
+    The rules reimburse Xanax at ten hits, friendly hosps counting toward the
+    ten. The report printed totals and left the counting to the reader, which
+    is how somebody gets told they missed it by one when they did not.
+
+    The boundary is the test: exactly ten qualifies, nine does not.
+    """
+    from features.wars import XAN_REIMBURSE_MIN_HITS
+
+    assert XAN_REIMBURSE_MIN_HITS == 10, 'the rules say ten'
+
+    def qualifies(war, chain, hosp):
+        return (war + chain + hosp) >= XAN_REIMBURSE_MIN_HITS
+
+    assert qualifies(10, 0, 0) is True, 'exactly ten is in'
+    assert qualifies(9, 0, 0) is False
+    assert qualifies(5, 0, 5) is True, (
+        'friendly hosps count toward the ten - they cost the same energy and '
+        'were thrown on instruction')
+    assert qualifies(0, 10, 0) is True, 'chain hits count too'
+    assert qualifies(3, 3, 3) is False
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -4709,4 +4806,6 @@ if __name__ == '__main__':
     test_rolesync_never_hands_out_administrator_by_torn_position()
     test_lobby_nag_waits_a_day_paces_itself_and_gives_up()
     test_welcome_board_stays_pinned_and_avoids_dead_channel_links()
+    test_stakeout_suggestions_rank_by_danger_to_us_not_in_the_abstract()
+    test_xan_report_marks_who_actually_qualifies()
     print('All smoke tests passed.')

@@ -72,6 +72,12 @@ CHAIN_BONUS_MILESTONES = frozenset({
 # 40 and 80 (positions 10/25/50/100). Nothing landed between 2 and 10.
 CHAIN_BONUS_MODIFIER_FLOOR = 2
 
+# The rules pay Xanax back at ten hits in that war or chain, friendly hosps
+# counting toward the ten. The report used to print totals and leave the
+# counting to whoever read it, which is a job a computer should do: miscount
+# by one and somebody is told they did not qualify when they did.
+XAN_REIMBURSE_MIN_HITS = 10
+
 # ===== Pre-war revive check =====
 # The war guide tells everyone to set revives to "nobody" for the whole war.
 # A revivable member who gets hospitalised is pulled straight back out and
@@ -1455,9 +1461,13 @@ class WarTracker:
         )
 
         embeds = []
+        qualified = [m for m in member_list
+                     if m['total'] >= XAN_REIMBURSE_MIN_HITS]
         legend = (
             '\n\n**War** = Hits on war opponent | **Chn** = Outside hits during chain\n'
-            '**Hsp** = Friendly hosps (teammate put safe) | **Tot** = all three combined'
+            '**Hsp** = Friendly hosps (teammate put safe) | **Tot** = all three combined\n'
+            f'**\\*** = reached {XAN_REIMBURSE_MIN_HITS} hits, so Xanax is '
+            f'reimbursed — **{len(qualified)} of {len(member_list)}** did'
         )
         if not xan_log_ok:
             description = f'{description}\n\n{WAR_LOG_INCOMPLETE_NOTE}'
@@ -1484,7 +1494,10 @@ class WarTracker:
 
         for i, m in enumerate(sorted_members):
             name = m['name'][:max_name]
-            line = (f'{i+1:>2}  {name:<{max_name}}  {m["war_hits"]:>3}  '
+            # A tick beats a number nobody reads: the whole question anyone
+            # asks of this report is "who gets paid back".
+            ok = '*' if m['total'] >= XAN_REIMBURSE_MIN_HITS else ' '
+            line = (f'{i+1:>2} {ok} {name:<{max_name}}  {m["war_hits"]:>3}  '
                     f'{m["chain_outside"]:>3}  {m["friendly_hosps"]:>3}  {m["total"]:>3}')
             table_lines.append(line)
 
@@ -2655,9 +2668,11 @@ class WarTracker:
 
             factions = war_data.get('factions', {})
             enemy_name = 'Unknown'
+            enemy_fid = None
             for fid, fdata in factions.items():
                 if str(fid) != str(TORN_FACTION_ID):
                     enemy_name = fdata.get('name', 'Unknown')
+                    enemy_fid = fid
 
             channel = self.bot.get_channel(WAR_CHANNEL_ID)
             if channel:
@@ -2673,6 +2688,22 @@ class WarTracker:
                 logger.info(f'Posted pending-war notice for war {war_id}')
             else:
                 logger.warning(f'Could not post pending-war notice — war channel not found (ID: {WAR_CHANNEL_ID})')
+
+            # Name who is worth watching while there is still time to set
+            # it up. Suggestions only: a stakeout spends API calls on a
+            # timer, so a human decides which ones are worth it.
+            try:
+                from features.stakeout_suggest import post_suggestions
+                from config import STAKEOUT_CHANNEL_ID
+                # Falls back to the war reports channel: management reads
+                # that one anyway, and a suggestion posted nowhere is the
+                # same as not making it.
+                where = STAKEOUT_CHANNEL_ID or WAR_MANAGEMENT_CHANNEL_ID
+                if enemy_fid and where:
+                    await post_suggestions(
+                        self.bot, where, enemy_fid, enemy_name)
+            except Exception as e:
+                logger.error(f'Stakeout suggestions failed: {e}')
 
             self.announced_pending_wars.add(war_id_str)
             updated = True

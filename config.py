@@ -103,6 +103,12 @@ MEMBER_COMMANDS_CHANNEL_ID = int(os.getenv("MEMBER_COMMANDS_CHANNEL_ID", "0"))
 # every posting feature guards itself and logs a warning nobody reads.
 MANAGEMENT_CHANNEL_ID = int(os.getenv("MANAGEMENT_CHANNEL_ID", "0"))
 
+# Where the bot suggests who to stake out when a war is declared
+# (#enemy-stakeout). Stakeouts themselves stay silent and are read on demand;
+# this is the one thing that gets posted, because it is only useful before
+# the war starts.
+STAKEOUT_CHANNEL_ID = int(os.getenv("STAKEOUT_CHANNEL_ID", "0"))
+
 # Weekday to post the strike digest, 0 = Monday. Weekly rather than daily:
 # strikes expire at 60 days and move slowly, so a daily post would mostly
 # repeat itself and become wallpaper.

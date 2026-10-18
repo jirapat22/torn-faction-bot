@@ -205,6 +205,66 @@ def _record_line(results: list) -> str:
     return f'{" ".join(results)}  ({wins}W {losses}L {draws}D)'
 
 
+def threat_bands(own_members, ff_data, has_ff):
+    """
+    Work out what counts as dangerous, measured against OUR OWN faction.
+
+    "Strong" has no absolute meaning - the same enemy is a real threat to one
+    member and irrelevant to another - so every band is relative to our
+    roster:
+
+      AVOID   : above our top-3 average   (they beat our best)
+      CAUTION : above our faction average
+      ''      : below it, we likely win
+
+    Returns (label, is_soft, benchmarks). label(bs, lvl) -> 'AVOID'|'CAUTION'|''.
+    Falls back to LEVEL when FFScouter data is missing, because a wrong band
+    is better than no list at all - level correlates loosely with stats and
+    the alternative is management picking names blind.
+    """
+    own_stats = []
+    for tid, _m in (own_members or {}).items():
+        p = (ff_data or {}).get(str(tid))
+        if p and p.get('bs_estimate'):
+            own_stats.append(int(p['bs_estimate']))
+
+    ranked = sorted(own_stats, reverse=True)
+    own_avg_bs = sum(own_stats) / len(own_stats) if own_stats else 0
+    own_top3_avg = (sum(ranked[:3]) / min(3, len(ranked))) if ranked else 0
+
+    own_levels = [m.get('level', 0) for m in (own_members or {}).values()
+                  if isinstance(m, dict)]
+    own_avg_lvl = sum(own_levels) / len(own_levels) if own_levels else 0
+    own_top3_lvl = (sum(sorted(own_levels, reverse=True)[:3])
+                    / min(3, len(own_levels))) if own_levels else 0
+
+    use_bs = bool(has_ff and own_avg_bs > 0)
+
+    def label(bs, lvl):
+        if use_bs:
+            if bs >= own_top3_avg:
+                return 'AVOID'
+            if bs >= own_avg_bs:
+                return 'CAUTION'
+            return ''
+        if lvl >= own_top3_lvl:
+            return 'AVOID'
+        if lvl >= own_avg_lvl:
+            return 'CAUTION'
+        return ''
+
+    def is_soft(bs, lvl):
+        return (bs < own_avg_bs) if use_bs else (lvl < own_avg_lvl)
+
+    return label, is_soft, {
+        'use_bs': use_bs,
+        'own_avg_bs': own_avg_bs,
+        'own_top3_avg': own_top3_avg,
+        'own_avg_lvl': own_avg_lvl,
+        'own_top3_lvl': own_top3_lvl,
+    }
+
+
 def _build_threat_embed(enemy_members, own_members, ff_data, has_ff,
                          enemy_name, enemy_tag, faction_id):
     """
@@ -220,40 +280,21 @@ def _build_threat_embed(enemy_members, own_members, ff_data, has_ff,
     enemy_label = f'[{enemy_tag}] {enemy_name}' if enemy_tag else enemy_name
 
     # ── Compute OUR benchmarks ──
-    own_stats = []
-    for tid, mdata in own_members.items():
-        p = ff_data.get(str(tid))
-        if p and p.get('bs_estimate'):
-            own_stats.append(int(p['bs_estimate']))
+    # Benchmarks come from threat_bands so the legend can never describe
+    # thresholds different from the ones actually applied.
 
-    own_stats_sorted = sorted(own_stats, reverse=True)
-    own_avg_bs   = sum(own_stats) / len(own_stats) if own_stats else 0
-    own_top3_avg = sum(own_stats_sorted[:3]) / min(3, len(own_stats_sorted)) if own_stats_sorted else 0
-
-    # Level benchmarks (fallback when no FF data)
-    own_levels = [m.get('level', 0) for m in own_members.values() if isinstance(m, dict)]
-    own_avg_lvl  = sum(own_levels) / len(own_levels) if own_levels else 0
-    own_top3_lvl = sum(sorted(own_levels, reverse=True)[:3]) / min(3, len(own_levels)) if own_levels else 0
-
-    use_relative_bs = has_ff and own_avg_bs > 0
+    # Shared with the stakeout suggestions, so the watch list and this board
+    # can never disagree about the same enemy.
+    _label, is_soft_target, _bench = threat_bands(own_members, ff_data, has_ff)
+    use_relative_bs = _bench['use_bs']
+    own_avg_bs = _bench['own_avg_bs']
+    own_top3_avg = _bench['own_top3_avg']
+    own_avg_lvl = _bench['own_avg_lvl']
+    own_top3_lvl = _bench['own_top3_lvl']
 
     def danger_label(bs, lvl):
-        if use_relative_bs:
-            if bs >= own_top3_avg:
-                return ' ◀ AVOID'
-            if bs >= own_avg_bs:
-                return ' ◀ CAUTION'
-        else:
-            if lvl >= own_top3_lvl:
-                return ' ◀ AVOID'
-            if lvl >= own_avg_lvl:
-                return ' ◀ CAUTION'
-        return ''
-
-    def is_soft_target(bs, lvl):
-        if use_relative_bs:
-            return bs < own_avg_bs
-        return lvl < own_avg_lvl
+        band = _label(bs, lvl)
+        return f' ◀ {band}' if band else ''
 
     # ── Classify enemy members ──
     known   = []  # (tid, name, lvl, bs)
