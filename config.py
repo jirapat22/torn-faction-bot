@@ -109,6 +109,11 @@ MANAGEMENT_CHANNEL_ID = int(os.getenv("MANAGEMENT_CHANNEL_ID", "0"))
 # the war starts.
 STAKEOUT_CHANNEL_ID = int(os.getenv("STAKEOUT_CHANNEL_ID", "0"))
 
+# The timezone board channel. Members pick a region from a dropdown there and
+# the board shows what time it is for everyone, so chains and wars get called
+# at hours people are actually awake.
+TIMEZONE_CHANNEL_ID = int(os.getenv("TIMEZONE_CHANNEL_ID", "0"))
+
 # Weekday to post the strike digest, 0 = Monday. Weekly rather than daily:
 # strikes expire at 60 days and move slowly, so a daily post would mostly
 # repeat itself and become wallpaper.

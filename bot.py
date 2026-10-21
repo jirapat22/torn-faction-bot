@@ -171,6 +171,11 @@ async def on_ready():
         from features.event_ui import CreateEventPromptView
         bot.add_view(CreateEventPromptView())
 
+        # The timezone picker's two dropdowns. Fixed custom_ids, so one
+        # registration here keeps every previously posted menu working.
+        from features.timezones import TimezonePicker
+        bot.add_view(TimezonePicker())
+
         # Verify Torn API key
         logger.info('Verifying Torn API key...')
         api_valid = await verify_api_key()
@@ -381,6 +386,14 @@ async def on_ready():
             result = await refresh_welcome(bot)
             if result:
                 logger.info(f'Welcome board: {result}')
+
+            from features.timezones import post_picker, refresh_board
+            result = await post_picker(bot)
+            if result:
+                logger.info(f'Timezone picker: {result}')
+            result = await refresh_board(bot, profile=activity_profile_manager)
+            if result:
+                logger.info(f'Timezone board: {result}')
         except Exception as e:
             logger.error(f'Startup boards failed: {e}')
 
@@ -562,6 +575,15 @@ async def role_sync_check():
             await role_sync_manager.sync_all_members(faction_members=faction_members)
         if activity_profile_manager and faction_members:
             await activity_profile_manager.record_snapshot(faction_members)
+        # The timezone board rides this tick too: the roster it needs for
+        # "who is awake right now" was just fetched, so keeping the clocks
+        # current costs no extra API call. Editing one embed, not posting.
+        try:
+            from features.timezones import refresh_board
+            await refresh_board(bot, roster=faction_members,
+                                profile=activity_profile_manager)
+        except Exception as e:
+            logger.error(f'Timezone board refresh failed: {e}')
     except Exception as e:
         logger.error(f'Error in role sync check: {e}')
 

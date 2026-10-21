@@ -4948,6 +4948,95 @@ def test_roster_check_does_not_print_a_mention_it_knows_is_dead():
     assert present['not_in_discord'] == []
 
 
+def test_timezone_board_survives_daylight_saving():
+    """
+    The reason the store holds an IANA zone and not a UTC offset.
+
+    An offset is right for about five months at a time. The moment NZ or the
+    UK moves its clocks, a stored "+13" is an hour wrong, the board says
+    somebody is asleep when they are up, and nobody notices until a chain is
+    called at the wrong hour. zoneinfo recomputes it from the zone, so the
+    same stored value is correct in both halves of the year.
+
+    Checked at two real instants six months apart - NZ and the UK are in
+    opposite daylight-saving states, which is the case most likely to be got
+    wrong.
+    """
+    from datetime import datetime, timezone
+    from features.timezones import group_by_region, local_now, friendly_time
+
+    store = {
+        '1': {'zone': 'Pacific/Auckland', 'name': 'Ikaros22'},
+        '2': {'zone': 'Europe/London', 'name': 'GDawng'},
+    }
+
+    # --- January: NZ on summer time (+13), UK on GMT (+0) ---
+    jan = datetime(2027, 1, 15, 12, 0, tzinfo=timezone.utc)
+    by_zone = {g['zone']: g for g in group_by_region(store, now=jan)}
+    assert by_zone['Pacific/Auckland']['offset_hours'] == 13, by_zone
+    assert by_zone['Europe/London']['offset_hours'] == 0, by_zone
+
+    # --- July: NZ back to +12, UK on BST (+1) ---
+    jul = datetime(2027, 7, 15, 12, 0, tzinfo=timezone.utc)
+    by_zone = {g['zone']: g for g in group_by_region(store, now=jul)}
+    assert by_zone['Pacific/Auckland']['offset_hours'] == 12, (
+        'NZ left daylight saving and the board must follow')
+    assert by_zone['Europe/London']['offset_hours'] == 1, (
+        'the UK entered BST and the board must follow')
+
+    # --- east to west, so the board reads like the sun moving ---
+    order = [g['zone'] for g in group_by_region(store, now=jan)]
+    assert order == ['Pacific/Auckland', 'Europe/London'], order
+
+    # --- a junk zone is dropped, not crashed on ---
+    assert local_now('Mars/Olympus') is None
+    assert group_by_region({'9': {'zone': 'Mars/Olympus'}}, now=jan) == []
+
+    # --- and nobody set: empty, not an error ---
+    assert group_by_region({}, now=jan) == []
+    assert group_by_region(None, now=jan) == []
+
+    # --- 12-hour clock, written by hand because strftime for it is
+    #     platform-specific ---
+    assert friendly_time(datetime(2027, 1, 1, 0, 5)) == '12:05 am'
+    assert friendly_time(datetime(2027, 1, 1, 12, 0)) == '12:00 pm'
+    assert friendly_time(datetime(2027, 1, 1, 13, 7)) == '1:07 pm'
+
+
+def test_timezone_picker_fits_discord_and_the_clocks_match():
+    """
+    Two menus because Discord allows 25 options in one, and the world does
+    not fit. Every option's value has to be a zone the library can actually
+    resolve, or picking it saves something the board then silently drops.
+    """
+    from zoneinfo import ZoneInfo
+    from features.timezones import (REGIONS_WEST, REGIONS_EAST, ALL_REGIONS,
+                                    clock_emoji, sparkline)
+
+    assert len(REGIONS_WEST) <= 25 and len(REGIONS_EAST) <= 25, 'Discord cap'
+    assert len(ALL_REGIONS) > 25, 'one menu would not have been enough'
+
+    zones = [z for _e, _l, z in ALL_REGIONS]
+    assert len(zones) == len(set(zones)), 'a duplicate zone means two rows'
+    for zone in zones:
+        ZoneInfo(zone)      # raises if the zone is not real
+
+    # the clock face has to match the hour, or the board lies in a way that
+    # looks deliberate
+    assert clock_emoji(3, 0) == '\U0001f552', 'three o clock'
+    assert clock_emoji(15, 0) == '\U0001f552', '3pm is the same face'
+    assert clock_emoji(12, 0) == '\U0001f55b', 'twelve'
+    assert clock_emoji(3, 30) == '\U0001f55e', 'half past three'
+    assert clock_emoji(3, 50) == '\U0001f553', 'ten to four rounds to four'
+
+    # sparkline is relative to the busiest hour, so the day has a shape
+    flat = sparkline({h: 0.5 for h in range(24)})
+    assert len(flat) == 24 and len(set(flat)) == 1
+    peaked = sparkline({h: (1.0 if h == 14 else 0.1) for h in range(24)})
+    assert peaked[14] == '█' and peaked[0] == '▁', peaked
+    assert sparkline({}) == '' and sparkline(None) == ''
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -5040,4 +5129,6 @@ if __name__ == '__main__':
     test_weekly_activity_check_runs_on_its_day_and_only_once()
     test_management_is_never_pinged_into_a_channel_with_nothing_in_it()
     test_roster_check_does_not_print_a_mention_it_knows_is_dead()
+    test_timezone_board_survives_daylight_saving()
+    test_timezone_picker_fits_discord_and_the_clocks_match()
     print('All smoke tests passed.')

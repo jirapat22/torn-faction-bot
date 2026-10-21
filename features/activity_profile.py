@@ -299,6 +299,25 @@ class ActivityProfileManager:
         ready.sort(key=lambda r: r[2][0])
         return ready, warming_up
 
+    def hourly_curve(self):
+        """
+        {hour: 0..1} averaged over every member with enough data, or None.
+
+        Pulled out of get_coverage so the timezone board can draw the shape
+        of the day without re-implementing the aggregation and drifting from
+        the windows get_coverage reports.
+        """
+        ready = []
+        for torn_id in self.profiles:
+            if not self.has_enough_data(torn_id):
+                continue
+            probs = _hour_probabilities(self.profiles[torn_id])
+            if probs is not None:
+                ready.append(probs)
+        if not ready:
+            return None
+        return {h: sum(p[h] for p in ready) / len(ready) for h in range(24)}
+
     def get_coverage(self):
         """
         Faction-wide (best_window, quiet_window, member_count) using every
@@ -316,9 +335,7 @@ class ActivityProfileManager:
         if not ready_probs:
             return None
 
-        agg = {}
-        for h in range(24):
-            agg[h] = sum(p[h] for p in ready_probs) / len(ready_probs)
-
+        agg = {h: sum(p[h] for p in ready_probs) / len(ready_probs)
+               for h in range(24)}
         best, quiet = best_and_quiet_windows(agg)
         return best, quiet, len(ready_probs)
