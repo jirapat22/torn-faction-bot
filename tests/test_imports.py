@@ -4828,6 +4828,126 @@ def test_weekly_activity_check_runs_on_its_day_and_only_once():
         config_mod.PREWAR_REPORT_WEEKDAY = PREWAR_REPORT_WEEKDAY
 
 
+def test_management_is_never_pinged_into_a_channel_with_nothing_in_it():
+    """
+    Seen in production on 21/10/2026: @Management was pinged in the strikes
+    channel and nothing followed it.
+
+    The cause is the gap between "somebody is OC-critical" and "something
+    gets posted about it". The content is a strike CANDIDATE, and
+    post_candidate deliberately posts nothing for a member who already has an
+    open candidate or a live strike for the same thing - which is correct,
+    re-raising them every morning would bury the ones needing a decision. But
+    the ping fired on the critical list being non-empty, so two already-struck
+    members produced a ping and no message.
+
+    A ping with nothing under it is worse than no ping: it trains people to
+    ignore the mention that exists to make them look.
+    """
+    import asyncio
+    import features.inactivity as inactivity_mod
+    from features.inactivity import InactivityTracker
+
+    # Pings are off in the test environment (no role id configured), which
+    # would make every assertion below pass for the wrong reason.
+    real_ping = inactivity_mod.MANAGEMENT_PING_ROLE_ID
+    inactivity_mod.MANAGEMENT_PING_ROLE_ID = 424242
+
+    sends = {'alerts': [], 'strikes': []}
+
+    class FakeChannel:
+        def __init__(self, bucket, cid):
+            self.bucket, self.id = bucket, cid
+        async def send(self, content=None, embed=None):
+            sends[self.bucket].append(content if content else
+                                      f'EMBED:{embed.title}')
+            return None
+
+    alerts = FakeChannel('alerts', 1)
+    strikes = FakeChannel('strikes', 2)
+
+    class FakeStrikes:
+        """Nobody is raisable: everyone already holds a strike."""
+        def __init__(self, open_ids=()):
+            self.open_ids = set(open_ids)
+            self.posted = []
+        def is_open(self, stype, torn_id, context=''):
+            return str(torn_id) in self.open_ids
+        async def post_candidate(self, torn_id, name, stype, reason,
+                                 context='', channel=None):
+            self.posted.append(str(torn_id))
+            return True
+
+    tracker = InactivityTracker(bot=None)
+    tracker.bot = type('B', (), {'get_channel': lambda self, cid: strikes})()
+
+    oc_critical = [
+        {'torn_id': '111', 'torn_name': 'AlreadyStruck', 'torn_level': 20,
+         'days': 6.0, 'last_oc_ts': None, 'never_joined': False},
+        {'torn_id': '222', 'torn_name': 'AlsoStruck', 'torn_level': 30,
+         'days': 20.0, 'last_oc_ts': None, 'never_joined': False},
+    ]
+
+    # --- nobody raisable: no ping anywhere, nothing posted ---
+    tracker.strike_manager = FakeStrikes(open_ids=())
+    asyncio.run(tracker._send_inactivity_alert(
+        alerts, [], [], 35, oc_warning=[], oc_critical=oc_critical,
+        left_faction=[]))
+    pings = [m for m in sends['strikes'] if m and '<@&' in str(m)]
+    assert pings == [], (
+        f'pinged with nothing to show: {sends["strikes"]}')
+    assert tracker.strike_manager.posted == []
+
+    # --- one of them IS raisable: ping, and only that one is raised ---
+    sends['alerts'].clear(); sends['strikes'].clear()
+    tracker.strike_manager = FakeStrikes(open_ids={'222'})
+    asyncio.run(tracker._send_inactivity_alert(
+        alerts, [], [], 35, oc_warning=[], oc_critical=oc_critical,
+        left_faction=[]))
+    assert tracker.strike_manager.posted == ['222'], (
+        f'only the raisable one: {tracker.strike_manager.posted}')
+
+    # --- and an ordinary inactivity alert still pings, because it always
+    #     posts its embed ---
+    sends['alerts'].clear(); sends['strikes'].clear()
+    tracker.strike_manager = FakeStrikes(open_ids=())
+    warning = [{'torn_name': 'Quiet', 'torn_id': '333', 'torn_level': 10,
+                'days': 4, 'last_seen': 1700000000, 'discord_member': None}]
+    asyncio.run(tracker._send_inactivity_alert(
+        alerts, warning, [], 35, oc_warning=[], oc_critical=[],
+        left_faction=[]))
+    try:
+        assert any('<@&' in str(m) for m in sends['alerts']), (
+            'a real alert must still ping')
+        assert any(str(m).startswith('EMBED:') for m in sends['alerts']), (
+            'and the content has to follow it')
+    finally:
+        inactivity_mod.MANAGEMENT_PING_ROLE_ID = real_ping
+
+
+def test_roster_check_does_not_print_a_mention_it_knows_is_dead():
+    """
+    The roster check reports accounts that have LEFT the server. Rendering
+    those as <@id> mentions means Discord cannot resolve them, so the line
+    reads "registered as <@764919505817436200>, but that account has left" -
+    raw text in the middle of the sentence, in the one line whose whole point
+    is that the account is gone.
+    """
+    from features.discord_roster import classify
+
+    roster = {'1': {'name': 'Gone'}}
+    verified = {'999': {'torn_id': '1', 'torn_name': 'Gone'}}
+    result = classify(roster, verified, guild_member_ids=set())
+
+    detail = result['not_in_discord'][0][1]
+    assert '<@' not in detail, f'dead mention rendered raw: {detail}'
+    assert '999' in detail, 'the id is still worth showing, as plain text'
+
+    # the still-here case is unaffected: that mention resolves fine
+    present = classify(roster, verified, guild_member_ids={'999'})
+    assert present['not_in_discord'] == []
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -4918,4 +5038,6 @@ if __name__ == '__main__':
     test_xan_report_marks_who_actually_qualifies()
     test_poll_closes_at_the_deadline_the_rules_actually_state()
     test_weekly_activity_check_runs_on_its_day_and_only_once()
+    test_management_is_never_pinged_into_a_channel_with_nothing_in_it()
+    test_roster_check_does_not_print_a_mention_it_knows_is_dead()
     print('All smoke tests passed.')

@@ -883,12 +883,27 @@ class InactivityTracker:
         oc_channel = (self.bot.get_channel(STRIKES_CHANNEL_ID) or channel) \
             if self.bot else channel
 
-        # The ping has to land where the content lands. Routing OC criticals to
-        # the strikes channel while the ping stayed here produced a bare
-        # @Management mention with nothing under it (seen 15/10/2026): everyone
-        # got pinged into an empty channel while the actual alert sat elsewhere.
+        # The ping has to land where the content lands, and only when there IS
+        # content. Two ways this went wrong before:
+        #
+        # 15/10/2026 - OC criticals were routed to the strikes channel while
+        # the ping stayed here, so everyone got pinged into an empty channel.
+        #
+        # 21/10/2026 - the ping fired on oc_critical being non-empty, but the
+        # content is a strike CANDIDATE, and post_candidate deliberately posts
+        # nothing for somebody who already has an open candidate or an active
+        # strike for the same thing. Two members who were already struck were
+        # still OC-critical, so the bot pinged Management and then said
+        # nothing at all.
+        #
+        # So ask the ledger what it would actually raise before pinging about
+        # it, rather than assuming every critical member produces a message.
+        sm = getattr(self, 'strike_manager', None)
+        oc_to_raise = [d for d in oc_critical
+                       if not sm or sm.is_open('oc', d['torn_id'], '')]
+
         here = bool(has_inactivity or has_left or oc_warning)
-        there = bool(oc_critical)
+        there = bool(oc_to_raise)
         if MANAGEMENT_PING_ROLE_ID:
             if here:
                 await channel.send(f'<@&{MANAGEMENT_PING_ROLE_ID}>')
@@ -1019,10 +1034,12 @@ class InactivityTracker:
             # Issue/Dismiss buttons rather than a line in a list, because each
             # needs its own decision - and a dismissal has to be remembered or
             # this re-raises every single morning.
-            sm = getattr(self, 'strike_manager', None)
             posted = 0
             if sm:
-                for data in oc_critical:
+                # oc_to_raise, not oc_critical: the rest already have an open
+                # candidate or a live strike, and re-posting them would bury
+                # the ones that need a decision.
+                for data in oc_to_raise:
                     reason = (f"{data['days']:.0f} days without joining an OC "
                               f"(strike territory at {OC_CRITICAL_DAYS} days). "
                               f"They were nudged at {OC_WARNING_DAYS} days.")
@@ -1038,7 +1055,8 @@ class InactivityTracker:
                     title = '🔴 OC Participation Critical' if i == 0 else '🔴 OC Critical (continued)'
                     embed = create_embed(title=title, description=chunk.strip(), color=EMBED_COLOR_CRITICAL)
                     await oc_channel.send(embed=embed)
-            logger.info(f'OC critical: {len(oc_critical)} member(s), {posted} new candidate(s)')
+            logger.info(f'OC critical: {len(oc_critical)} member(s), '
+                        f'{len(oc_to_raise)} raisable, {posted} new candidate(s)')
 
         if oc_warning:
             lines = []

@@ -56,8 +56,12 @@ def classify(roster, verified_users, guild_member_ids, bot_ids=()):
         if linked:
             # They registered once, but that Discord account is gone from the
             # server. Worth separating: they know the bot exists.
-            not_in_discord.append((name, f'registered as <@{linked[0]}>, '
-                                         f'but that account has left the server'))
+            # Plain id, not a mention: the whole point of this line is that
+            # the account is gone, and Discord renders a mention it cannot
+            # resolve as raw <@123...> text in the middle of the sentence.
+            not_in_discord.append((name, f'registered to Discord id '
+                                         f'`{linked[0]}`, which has left '
+                                         f'the server'))
         else:
             not_in_discord.append((name, 'never registered, not in the server'))
 
