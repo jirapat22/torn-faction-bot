@@ -114,6 +114,11 @@ STAKEOUT_CHANNEL_ID = int(os.getenv("STAKEOUT_CHANNEL_ID", "0"))
 # at hours people are actually awake.
 TIMEZONE_CHANNEL_ID = int(os.getenv("TIMEZONE_CHANNEL_ID", "0"))
 
+# #leave-notices. Read, never posted to: three strike rules say "without a
+# notice", and until the bot could see this channel management checked it by
+# hand every single time.
+LEAVE_NOTICES_CHANNEL_ID = int(os.getenv("LEAVE_NOTICES_CHANNEL_ID", "1464252444363063349"))
+
 # Weekday to post the strike digest, 0 = Monday. Weekly rather than daily:
 # strikes expire at 60 days and move slowly, so a daily post would mostly
 # repeat itself and become wallpaper.

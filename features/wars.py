@@ -1998,6 +1998,16 @@ class WarTracker:
 
         return embed
 
+    def _discord_id_for(self, torn_id):
+        """The Discord id behind a Torn id, or None if they never registered."""
+        vs = self.verification_system
+        if not vs:
+            return None
+        for discord_id, rec in (getattr(vs, 'verified_users', None) or {}).items():
+            if str((rec or {}).get('torn_id')) == str(torn_id):
+                return str(discord_id)
+        return None
+
     def _mention_for(self, torn_id):
         """Discord mention for a Torn id, or None if they never registered."""
         vs = self.verification_system
@@ -2470,6 +2480,16 @@ class WarTracker:
             logger.warning('Pre-war offline: roster unreadable, skipping')
             return False
 
+        # This list told management to "check for a notice first" and left
+        # them to do it. One channel read answers it for every name at once.
+        notices = None
+        try:
+            from features.notices import fetch as fetch_notices
+            from config import LEAVE_NOTICES_CHANNEL_ID
+            notices = await fetch_notices(self.bot, LEAVE_NOTICES_CHANNEL_ID)
+        except Exception as e:
+            logger.error(f'Pre-war notice lookup failed: {e}')
+
         # Who has gone quiet is an activity question, so it reads alongside the
         # daily inactivity checks rather than in the war room, where it would
         # compete with the calls people actually need to act on.
@@ -2497,10 +2517,14 @@ class WarTracker:
             return True
 
         quiet.sort(key=lambda x: -x[2])
-        lines, used = [], 0
+        from features.notices import note_for
+        lines, used, covered = [], 0, 0
         for name, tid, hrs in quiet:
             who = self._mention_for(tid) or f'**{name}**'
-            line = f'- {who} ({name}) {hrs:.0f}h'
+            note = note_for(self._discord_id_for(tid), notices)
+            if note:
+                covered += 1
+            line = f'- {who} ({name}) {hrs:.0f}h' + (f'\n  -# {note}' if note else '')
             if used + len(line) + 1 > 3400:
                 lines.append(f'- ...and {len(quiet) - len(lines)} more')
                 break
@@ -2516,9 +2540,15 @@ class WarTracker:
                            'enlisting, while there is still time to chase or '
                            'remove somebody. Inactive members still count '
                            'toward our war size.\n'
-                           '-# Nothing here goes to the strike ledger - the '
-                           'rule is removal, not a strike. Check for a notice '
-                           'first: someone can be offline and have said so.'),
+                         + (f'-# {covered} of them posted in leave-notices, '
+                            f'shown above - those are covered.\n'
+                            if covered else
+                            '-# None of them posted in leave-notices.\n'
+                            if notices is not None else
+                            '-# Leave-notices could not be read, so check it '
+                            'by hand before acting.\n')
+                         + '-# Nothing here goes to the strike ledger - the '
+                           'rule is removal, not a strike.'),
             color=EMBED_COLOR_WARNING))
         return True
 

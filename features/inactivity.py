@@ -774,7 +774,17 @@ class InactivityTracker:
                     f'{len(trial_failed)} failed, {len(trial_passed)} passed')
 
         logger.info(f'Inactivity check: {total_inactive} inactive out of {total_checked} total')
-        await self._send_inactivity_alert(channel, warning_members, critical_members, total_checked, oc_warning, oc_critical, left_alerts, oc_no_slots)
+        # Who said they would be away. Read once per run and passed down, so
+        # a 35-member alert is one channel read rather than one per name.
+        notices = None
+        try:
+            from features.notices import fetch as fetch_notices
+            from config import LEAVE_NOTICES_CHANNEL_ID
+            notices = await fetch_notices(self.bot, LEAVE_NOTICES_CHANNEL_ID)
+        except Exception as e:
+            logger.error(f'Notice lookup failed: {e}')
+
+        await self._send_inactivity_alert(channel, warning_members, critical_members, total_checked, oc_warning, oc_critical, left_alerts, oc_no_slots, notices=notices)
         try:
             await self.post_trial_alerts(channel, trial_warn, trial_failed, trial_passed)
         except Exception as e:
@@ -852,7 +862,7 @@ class InactivityTracker:
             logger.error(f'Alert send failed: {e}')
             return None
 
-    async def _send_inactivity_alert(self, channel, warning_members, critical_members, total_faction_members, oc_warning=None, oc_critical=None, left_faction=None, oc_no_slots=False):
+    async def _send_inactivity_alert(self, channel, warning_members, critical_members, total_faction_members, oc_warning=None, oc_critical=None, left_faction=None, oc_no_slots=False, notices=None):
         """
         Send inactivity alert embed to the channel
         ALWAYS posts to inactivity-alerts channel
@@ -933,9 +943,15 @@ class InactivityTracker:
                 days = data['days']
                 last_seen = data['last_seen']
                 discord_note = f' (Discord: {discord_member.display_name})' if discord_member else ''
+                # A notice is the difference between an absence and an
+                # offence, so it belongs on the same line as the accusation
+                # rather than in a channel somebody has to go and check.
+                from features.notices import note_for
+                note = note_for(getattr(discord_member, 'id', None), notices)
                 lines.append(
                     f'**{torn_name}** [Lvl {torn_level}]{discord_note}\n'
                     f'  {days} days inactive · Last action: {format_timestamp(last_seen, "R")}'
+                    + (f'\n  {note}' if note else '')
                 )
 
             # Chunk into multiple embeds if needed (4096 char description limit)
@@ -967,9 +983,15 @@ class InactivityTracker:
                 days = data['days']
                 last_seen = data['last_seen']
                 discord_note = f' (Discord: {discord_member.display_name})' if discord_member else ''
+                # A notice is the difference between an absence and an
+                # offence, so it belongs on the same line as the accusation
+                # rather than in a channel somebody has to go and check.
+                from features.notices import note_for
+                note = note_for(getattr(discord_member, 'id', None), notices)
                 lines.append(
                     f'**{torn_name}** [Lvl {torn_level}]{discord_note}\n'
                     f'  {days} days inactive · Last action: {format_timestamp(last_seen, "R")}'
+                    + (f'\n  {note}' if note else '')
                 )
 
             header = f'**{len(warning_members)} faction member(s)** have been inactive on Torn for {INACTIVITY_WARNING_DAYS}+ days:\n-# React \u2705 once you have dealt with it, so nobody chases them twice.\n\n'

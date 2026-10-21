@@ -5037,6 +5037,116 @@ def test_timezone_picker_fits_discord_and_the_clocks_match():
     assert sparkline({}) == '' and sparkline(None) == ''
 
 
+def test_notices_never_turn_an_unreadable_channel_into_an_accusation():
+    """
+    Three faction rules say "without a notice", so this decides whether an
+    absence is an offence. The dangerous failure is not missing a notice -
+    it is the bot implying somebody never posted one.
+
+    So an unreadable channel returns None, which renders no line at all,
+    rather than {} which would read as "checked, nobody gave notice". Same
+    None-vs-empty contract as the rest of this repo, in the one place where
+    getting it wrong gets a member struck for something they did correctly.
+
+    It is also deliberately not a date parser. Real notices read "I'm away
+    29th Sept to 3rd Oct" and "holiday 29jul-29aug"; a parser that is wrong
+    one time in ten would clear someone who never posted, or flag someone who
+    did. It only answers who posted, when, and what they said.
+    """
+    from features.notices import summarise, note_for, NOTICE_WINDOW_DAYS
+
+    DAY = 86400
+    now = 1_800_000_000
+
+    msgs = [
+        # Older one FIRST on purpose: if this test fed them newest-first,
+        # "keep the latest" and "keep the first seen" would be the same
+        # answer and the comparison would never be exercised.
+        {'author_id': '1', 'timestamp': now - 9 * DAY,
+         'content': 'older notice from the same person'},
+        {'author_id': '1', 'timestamp': now - 2 * DAY,
+         'content': "I'm away 29th Sept to 3rd Oct, may have no signal"},
+        {'author_id': '2', 'timestamp': now - 40 * DAY,
+         'content': 'On summer leave from 14-30 of August'},
+        {'author_id': '3', 'timestamp': now - (NOTICE_WINDOW_DAYS + 5) * DAY,
+         'content': 'ancient, outside the window'},
+        {'author_id': '4', 'timestamp': now - DAY, 'content': '   '},
+    ]
+
+    out = summarise(msgs, now=now)
+
+    assert out['1']['text'].startswith("I'm away 29th"), (
+        f'the LATEST notice wins, not the first seen: {out["1"]}')
+    assert '2' in out, 'a month-old notice still counts - people go away for months'
+    assert '3' not in out, 'past the window it stops counting'
+    assert '4' not in out, (
+        'an empty message is not evidence of anything, so it must not '
+        'produce a "posted a notice" line')
+
+    # --- the line that hangs off an alert ---
+    line = note_for('1', out, now=now)
+    assert 'notice 2 days ago' in line and '29th Sept' in line, line
+    assert note_for('99', out, now=now) is None, 'no notice, no line'
+
+    # --- THE guard: an unreadable channel reports None, never {} ---
+    # {} would read as "checked, nobody gave notice", and the Monday list
+    # words itself differently for the two cases - "none of them posted"
+    # versus "could not be read, check by hand". Getting this backwards
+    # strikes somebody for an absence they declared properly.
+    import asyncio
+    from features.notices import fetch
+
+    class NoChannelBot:
+        user = None
+        def get_channel(self, cid):
+            return None
+
+    assert asyncio.run(fetch(NoChannelBot(), 123)) is None, (
+        'a missing channel must be None, not an empty dict')
+    assert asyncio.run(fetch(None, 123)) is None
+    assert asyncio.run(fetch(NoChannelBot(), 0)) is None
+
+    class ExplodingChannel:
+        def history(self, limit=100):
+            class It:
+                def __aiter__(self_):
+                    return self_
+                async def __anext__(self_):
+                    raise RuntimeError('discord said no')
+            return It()
+
+    class BrokenBot:
+        user = None
+        def get_channel(self, cid):
+            return ExplodingChannel()
+
+    assert asyncio.run(fetch(BrokenBot(), 123)) is None, (
+        'a channel that fails mid-read is unreadable, not empty')
+
+    assert note_for('1', None, now=now) is None
+
+    # --- today and yesterday read as words, because the question is
+    #     "recent enough to explain this?" ---
+    fresh = summarise([{'author_id': '7', 'timestamp': now - 3600,
+                        'content': 'off for a bit'}], now=now)
+    assert 'today' in note_for('7', fresh, now=now)
+
+    # --- a long notice is cut, not dumped into the embed whole ---
+    long_msg = summarise([{'author_id': '8', 'timestamp': now,
+                           'content': 'x' * 400}], now=now)
+    assert len(long_msg['8']['text']) < 120, 'must be a snippet'
+
+    # --- only the first line, so a rambling notice stays one line ---
+    multi = summarise([{'author_id': '9', 'timestamp': now,
+                        'content': 'Away next week\nsecond line\nthird'}],
+                      now=now)
+    assert multi['9']['text'] == 'Away next week', multi
+
+    # --- nothing at all, rather than an exception ---
+    assert summarise([], now=now) == {}
+    assert summarise(None, now=now) == {}
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -5131,4 +5241,5 @@ if __name__ == '__main__':
     test_roster_check_does_not_print_a_mention_it_knows_is_dead()
     test_timezone_board_survives_daylight_saving()
     test_timezone_picker_fits_discord_and_the_clocks_match()
+    test_notices_never_turn_an_unreadable_channel_into_an_accusation()
     print('All smoke tests passed.')
