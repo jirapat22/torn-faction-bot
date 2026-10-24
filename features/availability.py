@@ -755,13 +755,13 @@ def block_list_lines(blocks, use_buttons=False):
                 f'only {MAX_POLL_BUTTONS} per message. Use a bigger block '
                 f'size, a shorter window, or drop the old_buttons option.')
     else:
-        extra_days = [d for d, _ in _day_groups(blocks)[MAX_POLL_DAYS:]]
+        extra_days = [d for d, _ in _menu_groups(blocks)[MAX_POLL_DAYS:]]
         if extra_days:
             lines.append('')
             lines.append(
                 f'⚠️ **{", ".join(extra_days)}** have no menu – '
-                f'Discord fits only {MAX_POLL_DAYS} on a message. Split the '
-                f'poll into two.')
+                f'Discord fits only {MAX_POLL_DAYS} on a message. Use a bigger '
+                f'block size or split the poll into two.')
     return lines
 
 
@@ -770,8 +770,11 @@ def block_list_lines(blocks, use_buttons=False):
 MAX_POLL_DAYS = 5
 
 
+MAX_MENU_OPTIONS = 25
+
+
 def _day_groups(blocks):
-    """Blocks grouped by date, in order. Used to build one menu per day."""
+    """Blocks grouped by date, in order."""
     days, order = {}, []
     for b in blocks:
         if b['date'] not in days:
@@ -779,6 +782,42 @@ def _day_groups(blocks):
             order.append(b['date'])
         days[b['date']].append(b)
     return [(d, days[d]) for d in order]
+
+
+def _menu_groups(blocks, max_menus=None, max_options=MAX_MENU_OPTIONS):
+    """
+    Blocks split into at most `max_menus` menus of at most `max_options`.
+
+    One menu per day is the readable shape, but a week-long poll is seven
+    days against five action rows - so adjacent days are merged, smallest
+    pair first, until they fit. Merging keeps days whole and in order, which
+    a flat chunk-every-25 split would not.
+
+    Returns [(label, blocks)]. A label spanning days reads "25-10 to 26-10".
+    If it still cannot fit, the leftovers are returned beyond `max_menus` for
+    the caller to warn about rather than silently dropped here.
+    """
+    max_menus = MAX_POLL_DAYS if max_menus is None else max_menus
+    groups = []
+    for date, day_blocks in _day_groups(blocks):
+        # A single day bigger than one menu has to be split regardless.
+        for i in range(0, len(day_blocks), max_options):
+            groups.append([date, date, day_blocks[i:i + max_options]])
+
+    while len(groups) > max_menus:
+        best_size, best_i = None, None
+        for i in range(len(groups) - 1):
+            size = len(groups[i][2]) + len(groups[i + 1][2])
+            if size <= max_options and (best_size is None or size < best_size):
+                best_size, best_i = size, i
+        if best_i is None:
+            break  # nothing else can merge; the caller reports the overflow
+        a = groups[best_i]
+        b = groups.pop(best_i + 1)
+        groups[best_i] = [a[0], b[1], a[2] + b[2]]
+
+    return [(first if first == last else f'{first} to {last}', bs)
+            for first, last, bs in groups]
 
 
 class DaySelect(discord.ui.Select):
@@ -888,14 +927,14 @@ class AvailabilityDropdownView(discord.ui.View):
 
     def __init__(self, manager, poll_id, blocks, verified_role_name):
         super().__init__(timeout=None)
-        groups = _day_groups(blocks)
+        groups = _menu_groups(blocks)
         if len(groups) > MAX_POLL_DAYS:
             logger.error(
-                f'Availability: poll {poll_id} spans {len(groups)} days but '
-                f'only {MAX_POLL_DAYS} menus fit on a message - '
+                f'Availability: poll {poll_id} needs {len(groups)} menus but '
+                f'only {MAX_POLL_DAYS} fit on a message - '
                 f'{", ".join(d for d, _ in groups[MAX_POLL_DAYS:])} unvotable')
-        for date, day_blocks in groups[:MAX_POLL_DAYS]:
-            self.add_item(DaySelect(manager, poll_id, date, day_blocks,
+        for label, day_blocks in groups[:MAX_POLL_DAYS]:
+            self.add_item(DaySelect(manager, poll_id, label, day_blocks,
                                     verified_role_name))
 
 
@@ -1650,7 +1689,12 @@ async def restore_availability_views(bot, manager: AvailabilityManager, verified
             # already carries its components; handing it the other style
             # after a restart would leave every control dead, because the
             # custom_ids would no longer match what is on the message.
-            use_buttons = poll.get('style') == 'buttons'
+            # Default to BUTTONS when the key is absent. Polls created before
+            # day menus existed have no style and were posted with buttons;
+            # defaulting the other way registers select handlers against a
+            # message full of buttons, and every click answers "interaction
+            # failed" on a poll that is already live.
+            use_buttons = poll.get('style', 'buttons') == 'buttons'
             view = (AvailabilityView if use_buttons else AvailabilityDropdownView)(
                 manager, poll_id, blocks, verified_role_name)
             bot.add_view(view, message_id=message_id)

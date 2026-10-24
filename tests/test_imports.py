@@ -5402,6 +5402,28 @@ def test_poll_day_menu_replaces_only_its_own_day():
     assert [d for d, _ in groups] == ['28-10-2026', '29-10-2026']
     assert [len(b) for _, b in groups] == [2, 1]
 
+    # --- a week-long poll still has to fit on one message ---
+    # Five action rows, so seven days cannot each have their own menu.
+    # Adjacent days merge rather than days 6 and 7 falling off the end.
+    from features.availability import _menu_groups, MAX_POLL_DAYS, MAX_MENU_OPTIONS
+    week = [{'id': d * 10 + i, 'date': f'{25 + d}-10-2026', 'label': chr(65 + i)}
+            for d in range(7) for i in range(6)]
+    menus = _menu_groups(week)
+    assert len(menus) <= MAX_POLL_DAYS, f'{len(menus)} menus will not fit'
+    kept = sum(len(b) for _, b in menus)
+    assert kept == len(week), (
+        f'merging must not drop blocks: kept {kept} of {len(week)}')
+    assert all(len(b) <= MAX_MENU_OPTIONS for _, b in menus)
+    # Days stay whole and in order, and a merged menu says which days it covers.
+    assert ' to ' in menus[0][0], f'a merged menu names its range: {menus[0][0]}'
+    ids = [b['id'] for _, bs in menus for b in bs]
+    assert ids == sorted(ids), 'blocks must stay in chronological order'
+
+    # A single day is labelled by its own date, not a range.
+    one_day = [{'id': i, 'date': '25-10-2026', 'label': chr(65 + i)}
+               for i in range(6)]
+    assert _menu_groups(one_day)[0][0] == '25-10-2026'
+
 
 def test_guides_restore_skips_the_retired_ones():
     """
@@ -5436,6 +5458,27 @@ def test_guides_restore_skips_the_retired_ones():
     assert should_restore('', True) is True
     assert should_restore(None, True) is True
     assert RETIRED_PREFIX == '[OLD]'
+
+
+def test_poll_restore_defaults_to_the_layout_it_was_posted_with():
+    """
+    A poll message already carries its components. Restoring it with the
+    other layout registers handlers whose custom_ids do not match what is on
+    the message, and every click answers "interaction failed" on a poll that
+    is already live and collecting answers.
+
+    Polls created before day menus existed carry no style key at all, so the
+    ABSENT case must mean buttons. This was a real regression: a live 7-day
+    poll came back after a deploy with select handlers over its buttons.
+    """
+    def restores_buttons(poll):
+        # Mirrors the branch in restore_availability_views.
+        return poll.get('style', 'buttons') == 'buttons'
+
+    assert restores_buttons({}) is True, (
+        'a poll from before day menus was posted with buttons')
+    assert restores_buttons({'style': 'buttons'}) is True
+    assert restores_buttons({'style': 'menus'}) is False
 
 
 if __name__ == '__main__':
@@ -5538,4 +5581,5 @@ if __name__ == '__main__':
     test_lobby_claim_stops_nagging_but_never_stops_escalation()
     test_poll_day_menu_replaces_only_its_own_day()
     test_guides_restore_skips_the_retired_ones()
+    test_poll_restore_defaults_to_the_layout_it_was_posted_with()
     print('All smoke tests passed.')
