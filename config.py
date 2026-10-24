@@ -93,6 +93,11 @@ LEADER_USER_ID = int(os.getenv("LEADER_USER_ID", "0"))
 # message carries the fix and not just the accusation.
 WAR_GUIDE_CHANNEL_ID = int(os.getenv("WAR_GUIDE_CHANNEL_ID", "0"))
 
+# The guides forum. Read and un-archived on a schedule: an archived forum
+# post renders as "# unknown" wherever the index links to it, and a forum
+# allows only one pinned post, so pinning cannot hold them open.
+GUIDES_HUB_CHANNEL_ID = int(os.getenv("GUIDES_HUB_CHANNEL_ID", "1465646171069349972"))
+
 # Read-only board listing the commands a MEMBER can use (#commands-the-punk).
 # The bot replaces its own previous board rather than appending, so the
 # channel only ever holds the current one.

@@ -5403,6 +5403,41 @@ def test_poll_day_menu_replaces_only_its_own_day():
     assert [len(b) for _, b in groups] == [2, 1]
 
 
+def test_guides_restore_skips_the_retired_ones():
+    """
+    Forum posts archive themselves after a week, and an archived guide shows
+    as "# unknown" everywhere the reading order links to it - fourteen dead
+    lines in "Start here Punks!". Pinning cannot hold them open: Discord
+    allows one pinned post per forum and answers code 30047 for the rest.
+
+    So they get un-archived on a schedule, EXCEPT the superseded ones.
+    Dragging "[OLD] Flying Guide (replaced by Flying Guide)" back into the
+    hub every hour would undo somebody's deliberate tidying, and the hub
+    would end up showing two of everything.
+    """
+    from features.guides import should_restore, RETIRED_PREFIX
+
+    assert should_restore('🔋 Energy Stacking Guide', True) is True
+    assert should_restore('⛓️Chain guide', True) is True
+
+    # Already open: nothing to do.
+    assert should_restore('🔋 Energy Stacking Guide', False) is False
+
+    # Retired ones stay where they were put.
+    assert should_restore('[OLD] Flying Guide (replaced by Flying Guide)', True) is False
+    assert should_restore('[old] new player guide', True) is False, (
+        'the marker is matched case-insensitively')
+    assert should_restore('  [OLD] Ranked War Guide', True) is False, (
+        'leading whitespace must not sneak a retired guide back in')
+
+    # A guide that merely mentions the word is not retired.
+    assert should_restore('Old money guide for new players', True) is True
+
+    assert should_restore('', True) is True
+    assert should_restore(None, True) is True
+    assert RETIRED_PREFIX == '[OLD]'
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -5502,4 +5537,5 @@ if __name__ == '__main__':
     test_chain_event_never_calls_an_unreadable_log_a_no_show()
     test_lobby_claim_stops_nagging_but_never_stops_escalation()
     test_poll_day_menu_replaces_only_its_own_day()
+    test_guides_restore_skips_the_retired_ones()
     print('All smoke tests passed.')

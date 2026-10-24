@@ -493,6 +493,19 @@ async def daily_inactivity_check():
                 except Exception as e:
                     logger.error(f'Lobby check failed: {e}')
 
+                # Forum posts archive themselves after a week of quiet, and
+                # an archived guide renders as "# unknown" everywhere the
+                # index links to it. Pinning cannot hold them open: a forum
+                # allows exactly one pinned post.
+                try:
+                    from features.guides import keep_unarchived
+                    from config import GUIDES_HUB_CHANNEL_ID
+                    n = await keep_unarchived(bot, GUIDES_HUB_CHANNEL_ID)
+                    if n:
+                        logger.info(f'Guides: un-archived {n} guide(s)')
+                except Exception as e:
+                    logger.error(f'Guides check failed: {e}')
+
                 role_result = await verification_system.fixrole_members(guild)
                 if role_result:
                     logger.info(f"Daily auto-verify: {role_result['fixed']} role(s) fixed, "
