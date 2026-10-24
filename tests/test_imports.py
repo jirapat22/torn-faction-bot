@@ -5147,6 +5147,68 @@ def test_notices_never_turn_an_unreadable_channel_into_an_accusation():
     assert summarise(None, now=now) == {}
 
 
+def test_timezone_board_awake_means_their_clock_not_their_last_click():
+    """
+    The board's whole purpose is "call chains when people are awake", so the
+    awake count has to come from the clock where they are.
+
+    It used to mean "acted on Torn in the last 15 minutes", which read
+    "0 of 5 awake" live while three of those five were mid-afternoon. With a
+    small faction and a 15-minute window that number is almost always zero,
+    so the headline looked broken and told nobody anything.
+
+    Active-on-Torn is still worth showing - it is just a different question,
+    and these two must not be allowed to collapse back into one number.
+    """
+    from features.timezones import (group_by_region, build_embed, is_waking,
+                                    WAKING_START_HOUR, WAKING_END_HOUR)
+    from datetime import datetime, timezone
+
+    # 04:00 UTC. Auckland +13 = 17:00 (awake), Los Angeles -7 = 21:00 (awake),
+    # Manila +8 = 12:00 (awake), London +1 = 05:00 (asleep).
+    now = datetime(2026, 10, 24, 4, 0, tzinfo=timezone.utc)
+    store = {
+        '1': {'zone': 'Pacific/Auckland', 'name': 'Ikaros22'},
+        '2': {'zone': 'America/Los_Angeles', 'name': 'EyeUhhn'},
+        '3': {'zone': 'Asia/Manila', 'name': 'dakkkz'},
+        '4': {'zone': 'Europe/London', 'name': 'NightOwl'},
+    }
+
+    # Nobody has touched Torn recently - the exact case that read 0 of 5.
+    groups = group_by_region(store, active_ids=(), now=now)
+    awake = sum(g['awake'] for g in groups)
+    assert awake == 3, (
+        f'3 of these 4 are at a civil hour, got {awake}. An empty '
+        f'active list must not drag the awake count to zero.')
+
+    by_label = {g['label']: g for g in groups}
+    london = [g for g in groups if g['zone'] == 'Europe/London'][0]
+    assert london['awake'] == 0, '05:00 is not a waking hour'
+
+    # Active is counted separately and does NOT change awake.
+    groups2 = group_by_region(store, active_ids=['4'], now=now)
+    assert sum(g['awake'] for g in groups2) == 3, (
+        'someone being on Torn at 5am does not make the other zones awake')
+    london2 = [g for g in groups2 if g['zone'] == 'Europe/London'][0]
+    assert london2['active'] == 1 and london2['awake'] == 0, (
+        'awake and active are different questions and must stay separate')
+
+    # The headline must not say "awake" about the Torn-activity number.
+    embed = build_embed(groups2, active_names=['NightOwl'])
+    text = embed.description or ''
+    assert '3' in text.split('of')[0], f'awake total missing from: {text!r}'
+    assert 'waking hours' in text, (
+        f'the headline must say what it measures: {text!r}')
+
+    # Boundaries, so a tweak to the window cannot silently invert them.
+    class _L:
+        def __init__(self, h): self.hour = h
+    assert is_waking(_L(WAKING_START_HOUR)) is True
+    assert is_waking(_L(WAKING_START_HOUR - 1)) is False
+    assert is_waking(_L(WAKING_END_HOUR - 1)) is True
+    assert is_waking(_L(WAKING_END_HOUR)) is False
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -5242,4 +5304,5 @@ if __name__ == '__main__':
     test_timezone_board_survives_daylight_saving()
     test_timezone_picker_fits_discord_and_the_clocks_match()
     test_notices_never_turn_an_unreadable_channel_into_an_accusation()
+    test_timezone_board_awake_means_their_clock_not_their_last_click()
     print('All smoke tests passed.')

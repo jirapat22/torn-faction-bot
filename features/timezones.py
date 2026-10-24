@@ -146,16 +146,36 @@ def local_now(zone, now=None):
         return None
 
 
-def group_by_region(store, awake_ids=(), now=None):
+# Waking hours by the clock on their own wall. Generous at both ends on
+# purpose: this answers "is it rude to ping them", not "are they at a desk".
+WAKING_START_HOUR = 8
+WAKING_END_HOUR = 23
+
+
+def is_waking(local):
+    """
+    Is it a civil hour where this person is?
+
+    The board exists so chains get called at hours people are awake, so awake
+    has to mean their wall clock - not whether they happened to click Torn in
+    the last quarter of an hour. Measured on five registered members, the old
+    definition read "0 of 5 awake" while three of them were plainly mid
+    afternoon, which makes the headline look broken rather than informative.
+    """
+    return WAKING_START_HOUR <= local.hour < WAKING_END_HOUR
+
+
+def group_by_region(store, active_ids=(), now=None):
     """
     Turn {discord_id: {...}} into one row per region, east to west.
 
     Pure, so the board can be tested without Discord or a clock. Returns a
     list of dicts: zone, emoji, label, local (datetime), offset_hours,
-    members [(discord_id, name)], awake (int).
+    members [(discord_id, name)], awake (int, from the local clock), active
+    (int, acted on Torn in the last 15 minutes).
     """
     now = now or datetime.now(timezone.utc)
-    awake = {str(a) for a in (awake_ids or ())}
+    active = {str(a) for a in (active_ids or ())}
     rows = {}
     for did, rec in (store or {}).items():
         if str(did).startswith('_'):
@@ -170,16 +190,20 @@ def group_by_region(store, awake_ids=(), now=None):
         row = rows.setdefault(zone, {
             'zone': zone, 'emoji': emoji, 'label': label, 'local': local,
             'offset_hours': local.utcoffset().total_seconds() / 3600,
-            'members': [], 'awake': 0,
+            'members': [], 'awake': 0, 'active': 0,
         })
         row['members'].append((str(did), (rec or {}).get('name', str(did))))
-        if str(did) in awake:
-            row['awake'] += 1
+        if str(did) in active:
+            row['active'] += 1
+    # Awake is a property of the zone's clock rather than of the individual,
+    # so it is filled once per row instead of counted per member.
+    for row in rows.values():
+        row['awake'] = len(row['members']) if is_waking(row['local']) else 0
     # East first: the day starts there, so the board reads like the sun moving
     return sorted(rows.values(), key=lambda r: -r['offset_hours'])
 
 
-def build_embed(groups, awake_names=(), total_members=0, curve=None,
+def build_embed(groups, active_names=(), total_members=0, curve=None,
                 best=None, quiet=None, unset=0):
     """
     Render the board. Pure. Returns one embed.
@@ -192,11 +216,15 @@ def build_embed(groups, awake_names=(), total_members=0, curve=None,
     known = sum(len(g['members']) for g in groups)
     awake_total = sum(g['awake'] for g in groups)
 
-    desc = [f'**{awake_total}** of **{known}** awake right now.']
-    if awake_names:
-        shown = ' · '.join(awake_names[:12])
-        more = len(awake_names) - 12
-        desc.append(f'\U0001f7e2 {shown}' + (f' **+{more}**' if more > 0 else ''))
+    desc = [f'**{awake_total}** of **{known}** in waking hours '
+            f'({WAKING_START_HOUR:02d}:00–{WAKING_END_HOUR:02d}:00 '
+            f'their time).']
+    if active_names:
+        shown = ' · '.join(active_names[:12])
+        more = len(active_names) - 12
+        desc.append(f'\U0001f7e2 **{len(active_names)}** on Torn in the last '
+                    f'15 min: {shown}'
+                    + (f' **+{more}**' if more > 0 else ''))
     if curve:
         line = sparkline(curve)
         desc.append(f'```\n{line}\n00    06    12    18   23  (TCT)\n```')
@@ -355,9 +383,11 @@ async def refresh_board(bot, channel_id=None, roster=None, profile=None):
 
     store = load_json(STORE, default={}) or {}
 
-    # Awake = acted on Torn in the last 15 minutes. Discord presence would be
-    # easier but means nothing here: plenty of people idle in Discord all day
-    # and never open Torn.
+    # Active = acted on Torn in the last 15 minutes, which is a different
+    # question from awake (see is_waking) and must not be confused with it:
+    # reporting "0 of 5 awake" at 4pm is how this went wrong once already.
+    # Discord presence would be easier but means nothing here - plenty of
+    # people idle in Discord all day and never open Torn.
     awake_ids, roster_size = set(), 0
     if roster is None:
         from utils.torn_api import fetch_faction_members
@@ -376,8 +406,8 @@ async def refresh_board(bot, channel_id=None, roster=None, profile=None):
                 if did:
                     awake_ids.add(did)
 
-    groups = group_by_region(store, awake_ids=awake_ids)
-    awake_names = [n for g in groups for d, n in g['members'] if d in awake_ids]
+    groups = group_by_region(store, active_ids=awake_ids)
+    active_names = [n for g in groups for d, n in g['members'] if d in awake_ids]
 
     curve, best, quiet = None, None, None
     if profile is not None:
@@ -392,7 +422,7 @@ async def refresh_board(bot, channel_id=None, roster=None, profile=None):
             logger.debug(f'Timezones: no activity curve: {e}')
 
     known = sum(len(g['members']) for g in groups)
-    embed = build_embed(groups, awake_names=awake_names,
+    embed = build_embed(groups, active_names=active_names,
                         total_members=roster_size, curve=curve,
                         best=best, quiet=quiet,
                         unset=max(0, roster_size - known))
