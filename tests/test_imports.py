@@ -5650,10 +5650,34 @@ def test_chain_event_member_view_and_late_joiner_exemption():
     assert '/10' not in text, (
         f'the x/minimum format belongs to the management board only: {text}')
 
-    # The chase line names the NEAREST person ahead, not the leader.
-    assert 'dakkkz' in text.split('treat roll')[1], (
-        f'should chase the nearest above (dakkkz 31), not the leader: {text}')
-    assert 'only 19 ahead' in text, text
+    # The chase line is measured against the NEAREST person ahead, not the
+    # leader, and is phrased as what it takes to overtake them. dakkkz has 31
+    # and this member has 12, so 20 hits passes them, not 19 which only draws.
+    assert '20 more hits' in text and 'reach rank 2' in text, text
+
+    # --- the two faction numbers are different questions ---
+    # "Reach 500" is one chain getting that long. The total is everyone's
+    # hits added up, and must always be the larger of the two, because every
+    # hit inside a chain is also one of those hits.
+    from features.chain_events import faction_lines
+    ev2 = dict(ev, longest=287)
+    fl = ' | '.join(faction_lines(ev2, {'1': 400, '2': 300}))
+    assert 'Longest chain: 287' in fl and '500' in fl, fl
+    assert 'Total chain hits: 700' in fl, fl
+    assert int(ev2['longest']) <= 700, 'longest can never exceed the total'
+
+    # longest_in keeps the same None-vs-empty contract as everything else
+    # here. 0 would read as "no chain got anywhere", which is a claim, while
+    # None is the absence of one.
+    from features.chain_events import longest_in
+    assert longest_in(None, '45635') is None, (
+        'an unreadable log must not report a chain of 0')
+    assert longest_in({}, '45635') == 0, 'a genuinely empty log is 0'
+    assert longest_in({'a': {'attacker_faction': '45635', 'chain': 287},
+                       'b': {'attacker_faction': '45635', 'chain': 12}},
+                      '45635') == 287
+    assert longest_in({'a': {'attacker_faction': '99999', 'chain': 900}},
+                      '45635') == 0, "the enemy's chain is not ours"
 
     # Somebody short is told exactly what is left.
     short_text = member_embed(ev, totals, roster, True, '3', now=now).description
@@ -5665,7 +5689,13 @@ def test_chain_event_member_view_and_late_joiner_exemption():
 
     # --- the management board keeps the shortfall list ---
     board = progress_embed(ev, totals, roster, True, now=now).description
-    assert 'Lagger' in board and 'Top hitters' in board
+    # Two blocks: who cleared it, then who has not. No tick column, because a
+    # minimum of 10 is low and the people who cleared it are not the story.
+    assert 'CLEARED 10+' in board and 'UNDER 10' in board, board
+    assert 'Lagger' in board.split('UNDER 10')[1], (
+        'somebody short belongs in the UNDER block')
+    assert 'Ikaros22' in board.split('UNDER 10')[0], (
+        'somebody who cleared it belongs in the CLEARED block')
     assert 'joined after this event started' in board
     assert '1 member joined' in board, f'singular grammar: {board}'
 

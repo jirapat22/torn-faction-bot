@@ -91,6 +91,31 @@ def chain_hits_by_member(attacks, our_faction_id):
     return out
 
 
+def longest_in(attacks, our_faction_id):
+    """
+    The highest chain position reached in this slice of the log, or None when
+    the log could not be read.
+
+    "Reach a chain of 500" is about ONE chain getting that long, which is a
+    different thing from the faction's total hits over a week. Every attack
+    carries its position in the chain it belonged to, so the longest chain is
+    just the biggest of those, and it costs no extra API call.
+
+    It is always <= the total hits counted, because every hit in a chain is
+    also one of those hits.
+    """
+    if attacks is None:
+        return None
+    best = 0
+    for _attack_id, a in attacks.items():
+        if not isinstance(a, dict):
+            continue
+        if str(a.get('attacker_faction') or 0) != str(our_faction_id):
+            continue
+        best = max(best, int(a.get('chain') or 0))
+    return best
+
+
 def merge_totals(base, addition):
     """
     Add a newly counted slice onto the running totals.
@@ -290,6 +315,8 @@ class ChainEventManager:
             # the bot sleeps through still counts from its own start time.
             'status': 'scheduled' if start > now else 'running',
             'totals': {},
+            # Highest chain position reached so far during the window.
+            'longest': 0,
             # Nothing counted yet, so the cursor sits at the window's start.
             'cursor': start,
             'created': int(now),
@@ -340,6 +367,10 @@ class ChainEventManager:
                              f'failed, attacks log unreadable')
                 return event.get('totals', {}), False
             event['totals'] = counted
+            # Recomputed, not merged: a full recount exists so nothing rests
+            # on accumulated state, and a stale high-water mark would survive
+            # a correction that should have lowered it.
+            event['longest'] = longest_in(attacks, self.faction_id) or 0
             event['cursor'] = until
             self.save()
             return counted, True
@@ -357,6 +388,9 @@ class ChainEventManager:
                            f'cursor left at {cursor}')
             return event.get('totals', {}), False
         event['totals'] = merged
+        slice_best = longest_in(attacks, self.faction_id)
+        if slice_best is not None:
+            event['longest'] = max(int(event.get('longest', 0)), slice_best)
         event['cursor'] = until
         self.save()
         return merged, True
@@ -391,6 +425,28 @@ PRESETS = [
 ]
 
 
+def faction_lines(event, totals):
+    """
+    The two faction numbers, which answer different questions.
+
+    "Reach 500" means ONE chain getting that long, so the target hangs off
+    the longest chain. The total is every member's chain hits added up across
+    the window, and is always the bigger of the two, because every hit inside
+    a chain is also one of those hits.
+    """
+    hits = sum((totals or {}).values())
+    best = int(event.get('longest', 0) or 0)
+    out = []
+    if event.get('target'):
+        out.append(f"⛓️ **Longest chain: {best}** of "
+                   f"**{event['target']}** target")
+    elif best:
+        out.append(f"⛓️ **Longest chain: {best}**")
+    out.append(f"📊 **Total chain hits: {hits}** "
+               f"(everyone added up)")
+    return out
+
+
 def progress_embed(event, totals, roster, ok, now=None):
     """
     Where the event stands. Used mid-event and at the end.
@@ -414,12 +470,7 @@ def progress_embed(event, totals, roster, ok, now=None):
     hits = sum((totals or {}).values())
 
     lines = [f"**Day {day} of {days}** · minimum **{minimum}** hits each"]
-    if event.get('target'):
-        pct = int(100 * hits / event['target']) if event['target'] else 0
-        lines.append(f"Chain hits so far: **{hits}** of **{event['target']}** "
-                     f"({pct}%)")
-    else:
-        lines.append(f"Chain hits so far: **{hits}**")
+    lines.extend(faction_lines(event, totals))
 
     if not ok:
         lines.append('\n⚠️ **The attacks log could not be read.** '
@@ -429,21 +480,29 @@ def progress_embed(event, totals, roster, ok, now=None):
         lines.append('\n⚠️ **The roster could not be read**, so who '
                      'is short cannot be worked out right now.')
     else:
-        top = leaderboard(totals, roster, limit=5)
-        if top:
-            medal = {1: '\U0001f947', 2: '\U0001f948', 3: '\U0001f949'}
-            lines.append('\n\U0001f525 **Top hitters**')
-            lines.append('\n'.join(
-                f"{medal.get(i, f'`{i}.`')} **{r['name']}** {r['hits']}"
-                for i, r in enumerate(top, start=1)))
-        lines.append(f'\n✅ **{met}** met the minimum · '
-                     f'⚠️ **{len(short)}** short')
+        # Two blocks rather than a tick column. A minimum of 10 is low, so
+        # the people who cleared it are not the story and should not be
+        # cluttered with marks against their names. The story is who has not.
+        ranked = leaderboard(totals, roster, limit=0)
+        short_ids = {m['torn_id'] for m in short}
+        cleared = [r for r in ranked if str(r['torn_id']) not in short_ids]
+        width = max([len(r['name']) for r in ranked]
+                    + [len(m['name']) for m in short] + [4])
+
+        if cleared:
+            rows = '\n'.join(f"{i:>2}  {r['name']:<{width}}  {r['hits']:>4}"
+                             for i, r in enumerate(cleared, start=1))
+            lines.append(f'\n```\nCLEARED {minimum}+\n'
+                         f'{"#":>2}  {"Name":<{width}}  Hits\n{rows}\n```')
         if short:
-            rows = [f"• **{m['name']}** {m['hits']}/{minimum}"
-                    for m in short[:20]]
-            if len(short) > 20:
-                rows.append(f'-# +{len(short) - 20} more')
-            lines.append('\n'.join(rows))
+            rows = '\n'.join(f"    {m['name']:<{width}}  {m['hits']:>4}"
+                             for m in short)
+            lines.append(f'```\nUNDER {minimum}\n'
+                         f'    {"Name":<{width}}  Hits\n{rows}\n```')
+            lines.append(f'⚠️ **{len(short)}** under the minimum · '
+                         f'✅ {met} cleared it')
+        else:
+            lines.append(f'✅ **Everyone has cleared {minimum}.**')
         if excused:
             lines.append(
                 f'-# {excused} member{"s" if excused != 1 else ""} joined '
@@ -721,12 +780,7 @@ def member_embed(event, totals, roster, ok, torn_id, now=None):
     mn = event['minimum']
     hits_total = sum((totals or {}).values())
     lines = [f'**Day {day} of {days}**']
-    if event.get('target'):
-        pct = int(100 * hits_total / event['target']) if event['target'] else 0
-        lines.append(f"Faction: **{hits_total}** of **{event['target']}** "
-                     f"({pct}%)")
-    else:
-        lines.append(f'Faction: **{hits_total}** chain hits')
+    lines.extend(faction_lines(event, totals))
 
     if not ok:
         lines.append('\n⚠️ The attacks log could not be read, so '
@@ -774,8 +828,11 @@ def member_embed(event, totals, roster, ok, torn_id, now=None):
     chase = ''
     if above and rank and rank > 1:
         nearest = min(above, key=lambda r: r['hits'])
-        chase = (f" **{nearest['name']}** is only "
-                 f"{nearest['hits'] - mine} ahead.")
+        # One more hit than the person above, because matching their total
+        # does not overtake them.
+        need = nearest['hits'] - mine + 1
+        chase = (f" **{need} more hit{'s' if need != 1 else ''}** to reach "
+                 f"rank {rank - 1}.")
     lines.append(f'-# Every hit from here is another treat roll.{chase}')
 
     return create_embed(title=f"⛓️ {event['name']}",
