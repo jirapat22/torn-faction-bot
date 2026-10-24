@@ -221,6 +221,18 @@ async def on_ready():
         await war_tracker.load_war_member_stats()
         await war_tracker.load_pending_wars()
 
+        # Chain events: a named window that many chains fall inside, so a
+        # 5-day Halloween event is one per-member total instead of a dozen
+        # separate chains nobody can add up. Takes war_tracker for its
+        # hardened attacks paginator rather than growing a second one.
+        from features.chain_events import ChainEventManager
+        from config import TORN_FACTION_ID
+        chain_event_manager = ChainEventManager(bot, war_tracker,
+                                                TORN_FACTION_ID)
+        # The shortfall list files candidates through the ledger; without it
+        # the button says so rather than silently doing nothing.
+        chain_event_manager.strike_manager = strike_manager
+
         # Initialize verification system
         verification_system = VerificationSystem(bot)
         verification_system.inactivity_tracker = inactivity_tracker  # Sync both databases
@@ -302,7 +314,8 @@ async def on_ready():
             enemy_watchlist=enemy_watchlist,
             stakeout_manager=stakeout_manager,
             fly_tracker=fly_tracker,
-            strike_manager=strike_manager
+            strike_manager=strike_manager,
+            chain_event_manager=chain_event_manager
         )
 
         # Sync slash commands with Discord (guild-specific for instant updates)

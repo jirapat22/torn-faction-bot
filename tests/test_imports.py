@@ -5209,6 +5209,82 @@ def test_timezone_board_awake_means_their_clock_not_their_last_click():
     assert is_waking(_L(WAKING_END_HOUR)) is False
 
 
+def test_chain_event_never_calls_an_unreadable_log_a_no_show():
+    """
+    This feature decides whether somebody turned up to a chain, and the
+    answer becomes a strike. So the failure that matters is not miscounting -
+    it is a partial or failed read of the attacks log looking like "they made
+    zero hits", which is indistinguishable from not turning up at all.
+
+    Same None-vs-empty contract as the rest of the repo, in the place where
+    getting it wrong punishes somebody who did nothing wrong.
+    """
+    from features.chain_events import (chain_hits_by_member, shortfall,
+                                       merge_totals, met_minimum, day_of,
+                                       clamp_window, MAX_EVENT_DAYS)
+
+    OURS, THEIRS = '45635', '99999'
+
+    # chain > 0 means the hit advanced a chain (verified in wars.py over
+    # 2,827 real attacks). chain 0 is a loss, an escape, or a hit outside any
+    # chain - none of which count toward a chain minimum.
+    attacks = {
+        '1': {'attacker_id': '100', 'attacker_faction': OURS, 'chain': 4},
+        '2': {'attacker_id': '100', 'attacker_faction': OURS, 'chain': 5},
+        '3': {'attacker_id': '200', 'attacker_faction': OURS, 'chain': 6},
+        '4': {'attacker_id': '200', 'attacker_faction': OURS, 'chain': 0},
+        '5': {'attacker_id': '300', 'attacker_faction': THEIRS, 'chain': 9},
+        '6': 'not a dict at all',
+    }
+    out = chain_hits_by_member(attacks, OURS)
+    assert out == {'100': 2, '200': 1}, out
+
+    # --- THE guard: unreadable log is None, never {} ---
+    assert chain_hits_by_member(None, OURS) is None, (
+        'an unreadable attacks log must be None, not an empty tally - {} '
+        'would put the whole faction on the shortfall list')
+    assert chain_hits_by_member({}, OURS) == {}, (
+        'a genuinely empty log is a real answer and stays empty')
+
+    # A failed top-up must not advance anything or wipe the running totals.
+    base = {'100': 7}
+    merged, ok = merge_totals(base, None)
+    assert merged == base and ok is False, (merged, ok)
+    merged, ok = merge_totals(base, {'100': 3, '200': 1})
+    assert merged == {'100': 10, '200': 1} and ok is True, merged
+
+    # --- shortfall ---
+    roster = {'100': 'Ikaros22', '200': 'dakkkz', '400': 'NeverShowed'}
+    short = shortfall({'100': 12, '200': 3}, roster, 10)
+    names = [m['name'] for m in short]
+    assert names == ['NeverShowed', 'dakkkz'], (
+        f'worst first, and somebody absent from the log is 0 not missing: {names}')
+    assert short[0]['hits'] == 0
+    assert met_minimum({'100': 12, '200': 3}, roster, 10) == 1
+
+    assert shortfall(None, roster, 10) is None, (
+        'unreadable totals must not produce a shortfall list at all')
+    assert met_minimum(None, roster, 10) is None
+
+    # --- day counting, 1-indexed and clamped ---
+    ev = {'start': 1_000_000, 'end': 1_000_000 + 5 * 86400}
+    assert day_of(ev, now=1_000_000 + 10) == (1, 5), 'first hour is day 1'
+    assert day_of(ev, now=1_000_000 + 2 * 86400 + 60) == (3, 5)
+    assert day_of(ev, now=1_000_000 + 99 * 86400) == (5, 5), 'clamped to the end'
+
+    # --- a duration typo must not create a two-month strike window ---
+    start, end, notes = clamp_window(5_000_000, 24 * 400, now=5_000_000)
+    assert (end - start) == MAX_EVENT_DAYS * 86400, (end - start)
+    assert notes, 'a capped duration must be reported, not applied silently'
+
+    # Backdating a few hours is normal; a week back is a typo.
+    now = 5_000_000
+    start, end, notes = clamp_window(now - 3 * 3600, 24, now=now)
+    assert start == now - 3 * 3600 and not notes, 'a 3h backdate is fine'
+    start, end, notes = clamp_window(now - 400 * 3600, 24, now=now)
+    assert start > now - 400 * 3600 and notes, 'a 400h backdate must be pulled in'
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -5305,4 +5381,5 @@ if __name__ == '__main__':
     test_timezone_picker_fits_discord_and_the_clocks_match()
     test_notices_never_turn_an_unreadable_channel_into_an_accusation()
     test_timezone_board_awake_means_their_clock_not_their_last_click()
+    test_chain_event_never_calls_an_unreadable_log_a_no_show()
     print('All smoke tests passed.')

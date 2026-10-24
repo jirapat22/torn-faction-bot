@@ -31,7 +31,8 @@ logger = logging.getLogger(__name__)
 async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracker=None, verification_system=None,
                          event_reminder_manager=None, role_sync_manager=None,
                          enemy_watchlist=None, stakeout_manager=None,
-                         fly_tracker=None, strike_manager=None):
+                         fly_tracker=None, strike_manager=None,
+                         chain_event_manager=None):
     """
     Register all slash commands with the bot
 
@@ -292,17 +293,142 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
 
     # ===== CHAIN COMMAND (Phase 3) =====
 
+    async def _chain_event(interaction, action, hours, minimum, target, name):
+        """
+        The /chain event actions. Split out because the four of them need the
+        event manager and the plain chain views do not.
+        """
+        from features.chain_events import (PresetView, ShortfallView,
+                                           progress_embed, shortfall,
+                                           DEFAULT_MINIMUM)
+        import time as _time
+
+        if not chain_event_manager:
+            await interaction.response.send_message(
+                'Chain events are not set up on this bot.', ephemeral=True)
+            return
+
+        mgmt_only = action in ('event_start', 'event_end', 'event_cancel')
+        if mgmt_only and not is_management(interaction):
+            await interaction.response.send_message(
+                embed=create_embed(title='Permission Denied',
+                                   description='Management only.',
+                                   color=EMBED_COLOR_CRITICAL),
+                ephemeral=True)
+            return
+
+        # ---- start ----
+        if action == 'event_start':
+            running = chain_event_manager.active()
+            if running:
+                await interaction.response.send_message(
+                    f'**{running["name"]}** is already running. End or cancel '
+                    f'it first with `/chain view:"Event end"`.', ephemeral=True)
+                return
+            label = name.strip() or _time.strftime('%d %b chain event')
+            mn = minimum or DEFAULT_MINIMUM
+            if hours:
+                ev, notes = chain_event_manager.start(
+                    label, _time.time(), hours, minimum=mn, target=target)
+                if not ev:
+                    await interaction.response.send_message(
+                        '⚠️ ' + ' '.join(notes), ephemeral=True)
+                    return
+                extra = ('\n-# ' + ' · '.join(notes)) if notes else ''
+                await interaction.response.send_message(
+                    f"⛓️ **{ev['name']}** started — running "
+                    f"**{hours}h**, minimum **{mn}** hits each.{extra}")
+                return
+            # No hours given: offer the presets so nothing has to be typed.
+            await interaction.response.send_message(
+                f'Starting **{label}** · minimum **{mn}** hits each.',
+                view=PresetView(chain_event_manager, label, mn, target),
+                ephemeral=True)
+            return
+
+        # Everything else needs an event to talk about. A just-ended one still
+        # counts, so `end` can be re-run after a restart.
+        event = chain_event_manager.active()
+        if not event:
+            ended = [e for e in chain_event_manager.events.values()
+                     if e.get('status') == 'ended']
+            event = max(ended, key=lambda e: e['end']) if ended else None
+        if not event:
+            await interaction.response.send_message(
+                'No chain event has been run yet. Start one with '
+                '`/chain view:"Event start"`.', ephemeral=True)
+            return
+
+        if action == 'event_cancel':
+            chain_event_manager.cancel(event)
+            await interaction.response.send_message(
+                f"⛓️ **{event['name']}** cancelled. No strikes, no "
+                f"shortfall list.")
+            return
+
+        await interaction.response.defer()
+        full = (action == 'event_end')
+        totals, ok = await chain_event_manager.tally(event, full=full)
+        roster = await chain_event_manager.roster_for(event)
+        embed = progress_embed(event, totals, roster, ok)
+
+        if action != 'event_end':
+            await interaction.followup.send(embed=embed)
+            return
+
+        # ---- end ----
+        short = shortfall(totals, roster, event['minimum'])
+        if not ok or short is None:
+            # Refuse to close on numbers we could not verify: ending stamps
+            # the totals the shortfall list is built from, and a strike filed
+            # off a partial read is the exact failure this guards against.
+            await interaction.followup.send(
+                embed=embed,
+                content='⚠️ **Not ending it.** The counts could not '
+                        'be verified, so nothing is final and no list is '
+                        'offered. Try again in a few minutes.')
+            return
+        chain_event_manager.finish(event)
+        if not short:
+            await interaction.followup.send(
+                embed=embed,
+                content='✅ **Everyone met the minimum.** Nothing to action.')
+            return
+        await interaction.followup.send(
+            embed=embed,
+            content=f'⛓️ **{event["name"]}** finished · '
+                    f'**{len(short)}** below the minimum. Nothing is struck '
+                    f'until somebody clicks.',
+            view=ShortfallView(chain_event_manager, event, short))
+
     if chain_tracker:
         @bot.tree.command(name='chain', description='Chain status, report, or participation board')
-        @app_commands.describe(view='What to show (default: current status)')
+        @app_commands.describe(
+            view='What to show (default: current status)',
+            hours='[Event start] Run for this many hours instead of picking a preset',
+            minimum='[Event start] Hits each member must make (default: 10)',
+            target='[Event start] Total chain hits you are aiming for',
+            name='[Event start] What to call it (default: today\'s date)')
         @app_commands.choices(view=[
             app_commands.Choice(name='Status - Current chain info', value='status'),
             app_commands.Choice(name='Report - Last chain top contributors', value='report'),
             app_commands.Choice(name='Board - Full participation board (Management)', value='board'),
+            app_commands.Choice(name='Event - Progress: who has hit what so far', value='event'),
+            app_commands.Choice(name='Event start - Begin a chain event (Management)', value='event_start'),
+            app_commands.Choice(name='Event end - Finish and show who fell short (Management)', value='event_end'),
+            app_commands.Choice(name='Event cancel - Stop it, no strikes (Management)', value='event_cancel'),
         ])
-        async def chain(interaction: discord.Interaction, view: app_commands.Choice[str] = None):
+        async def chain(interaction: discord.Interaction,
+                        view: app_commands.Choice[str] = None,
+                        hours: int = 0, minimum: int = 0, target: int = 0,
+                        name: str = ''):
             """Unified chain command with multiple views"""
             view_value = view.value if view else 'status'
+
+            if view_value.startswith('event'):
+                await _chain_event(interaction, view_value,
+                                   hours, minimum, target, name)
+                return
 
             # Board view requires management
             if view_value == 'board' and not is_management(interaction):
