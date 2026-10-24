@@ -542,25 +542,14 @@ class AvailabilityManager:
         self.polls[poll_id]['closed'] = False
         self.polls[poll_id]['war_id'] = war_id
 
-        block_list = []
-        current_date = None
-        for b in blocks:
-            if b['date'] != current_date:
-                if current_date is not None:
-                    block_list.append('')
-                block_list.append(f"**{b['date']}:**")
-                current_date = b['date']
-            block_list.append(
-                f"  **{b['label']}**: <t:{b['start_unix']}:t> \u2013 <t:{b['end_unix']}:t> "
-                f"({b['start_time']}\u2013{b['end_time']} TCT)"
-            )
+        block_list = block_list_lines(blocks)
 
         embed = create_embed(
             title=f'\u2694\ufe0f War Availability \u2013 war starts {start_date}',
             description=(
                 f'**War #{war_id} starts <t:{war_start}:R>** (<t:{war_start}:F>)\n\n'
                 f'**Select every block you expect to be online.** Click to toggle.\n'
-                f'Times show in **your** local time, with TCT in brackets.\n\n'
+                f'Times are **TCT** first, then what that is for **you**.\n\n'
                 f'Posting here is what exempts you. Being offline during a war '
                 f'without it is a strike. Say so even if the answer is "barely on".\n\n'
                 f'\U0001fa78 **Set your revives to "nobody"** before the war '
@@ -691,6 +680,52 @@ class AvailabilityManager:
                 logger.error(f'Availability: Error closing poll {poll_id}: {e}')
 
 
+# Discord allows 25 components per message (5 rows x 5). Blocks past that get
+# no button at all, which is worse than it sounds: the poll still LISTS them,
+# so members read an option they cannot vote for. The cap sat at 20 for no
+# recorded reason, which is how a 24-block poll silently lost U, V, W and X.
+MAX_POLL_BUTTONS = 25
+
+
+def block_times(b):
+    """
+    One block's times, TCT first.
+
+    TCT is what the faction actually coordinates in - every rule, war time and
+    chain call is written in it - so it leads, and it is monospaced to stand
+    out from the local render. The local time follows, explicitly labelled,
+    because an unlabelled second clock is the thing people misread.
+    """
+    return (f"  **{b['label']}** · `{b['start_time']}–{b['end_time']} TCT`"
+            f" · you: <t:{b['start_unix']}:t>–<t:{b['end_unix']}:t>")
+
+
+def block_list_lines(blocks):
+    """
+    The block list for a poll body, grouped by date.
+
+    Also names any block that will have no button. Listing an option nobody
+    can click is a worse failure than refusing to make the poll, because it
+    looks like the member chose not to answer.
+    """
+    lines, current_date = [], None
+    for b in blocks:
+        if b['date'] != current_date:
+            if current_date is not None:
+                lines.append('')
+            lines.append(f"**{b['date']}:**")
+            current_date = b['date']
+        lines.append(block_times(b))
+    unvotable = blocks[MAX_POLL_BUTTONS:]
+    if unvotable:
+        names = ', '.join(b['label'] for b in unvotable)
+        lines.append('')
+        lines.append(f'⚠️ **{names}** have no button – Discord allows only '
+                     f'{MAX_POLL_BUTTONS} per message. Use a bigger block size '
+                     f'or a shorter window.')
+    return lines
+
+
 class AvailabilityView(discord.ui.View):
     """Persistent view with buttons for availability selection"""
 
@@ -700,9 +735,16 @@ class AvailabilityView(discord.ui.View):
         self.poll_id = poll_id
         self.verified_role_name = verified_role_name
 
-        # Add buttons for each block (max 24, but Discord limits to 25 components / 5 rows)
-        # Use max 20 buttons (4 rows of 5)
-        for block in blocks[:20]:
+        # Discord's own ceiling, not an arbitrary one. A poll that needs more
+        # blocks than this says so in its body (see block_list_lines) rather
+        # than quietly offering fewer options than it advertises.
+        if len(blocks) > MAX_POLL_BUTTONS:
+            logger.error(
+                f'Availability: poll {poll_id} has {len(blocks)} blocks but '
+                f'only {MAX_POLL_BUTTONS} can have buttons - '
+                f'{", ".join(b["label"] for b in blocks[MAX_POLL_BUTTONS:])} '
+                f'are unvotable')
+        for block in blocks[:MAX_POLL_BUTTONS]:
             button = AvailabilityButton(
                 manager=manager,
                 poll_id=poll_id,
@@ -797,7 +839,11 @@ class AvailabilityButton(discord.ui.Button):
                 await interaction.response.edit_message(view=self.view)
 
             # Send ephemeral feedback with both local and TCT time
-            time_display = f"<t:{self.block['start_unix']}:t> ({self.block['start_time']}–{self.block['end_time']} TCT)"
+            # TCT first here too: the confirmation is the one message that
+            # tells a member what they just agreed to, so it must read the
+            # same way round as the poll they clicked.
+            time_display = (f"`{self.block['start_time']}–{self.block['end_time']} TCT`"
+                            f" (your <t:{self.block['start_unix']}:t>)")
             if is_now_available:
                 status = f"✅ You're now **available** for {time_display}"
             else:
@@ -968,18 +1014,7 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
             manager.polls[poll_id]['poll_end_unix'] = poll_end_unix
             manager.polls[poll_id]['closed'] = False
 
-            block_list = []
-            current_date_str = None
-            for block in blocks:
-                if block['date'] != current_date_str:
-                    if current_date_str is not None:
-                        block_list.append("")
-                    block_list.append(f"**{block['date']}:**")
-                    current_date_str = block['date']
-                block_list.append(
-                    f"  **{block['label']}**: <t:{block['start_unix']}:t> – <t:{block['end_unix']}:t> "
-                    f"({block['start_time']}–{block['end_time']} TCT)"
-                )
+            block_list = block_list_lines(blocks)
 
             if start_date == actual_end_date or (start_dt == end_dt - timedelta(days=1) and end_time == '00:00'):
                 title = f"🕒 Availability Poll – {start_date}"
