@@ -99,6 +99,51 @@ class VerificationSystem:
             'last_action': player_data.get('last_action', {}).get('timestamp', 0)
         }
 
+    async def _reapply(self, member, guild, torn_id):
+        """
+        Put back the nickname and role for somebody who is already on record.
+
+        Leaving a Discord server strips nickname and roles but not the bot's
+        record, and the hourly role sync restores roles while nothing restores
+        the nickname - so a rejoiner ends up verified, roled, and the only
+        person on the board with no Torn name against their face.
+
+        Returns True if anything actually changed, so the caller can tell the
+        member whether it repaired something or there was nothing to repair.
+        """
+        changed = False
+        player_info = await self.verify_torn_id(torn_id)
+        if player_info and self.config.get('change_name', True):
+            new_name = player_info['name']
+            if self.config.get('append_id', True):
+                new_name = f"{player_info['name']} [{torn_id}]"
+            if (self.config.get('append_faction_tag', False)
+                    and player_info['faction_tag']):
+                new_name = f"[{player_info['faction_tag']}] {new_name}"
+            new_name = new_name[:32]
+            if (member.nick or '') != new_name:
+                try:
+                    await member.edit(nick=new_name)
+                    changed = True
+                except discord.Forbidden:
+                    # Owner or a higher role - cannot be renamed from here, and
+                    # that is not a failure worth reporting as one.
+                    pass
+
+        verified_role_id = self.config.get('verified_role_id')
+        if verified_role_id and guild:
+            role = guild.get_role(verified_role_id)
+            if role and role not in member.roles:
+                try:
+                    await member.add_roles(role)
+                    changed = True
+                except discord.Forbidden:
+                    pass
+        if changed:
+            logger.info(f'Verification: repaired {member} '
+                        f'(Torn ID {torn_id}) on re-register')
+        return changed
+
     async def register_user(self, interaction: discord.Interaction, torn_id: int):
         """
         Register a Discord user with their Torn ID
@@ -117,7 +162,26 @@ class VerificationSystem:
         discord_id = str(member.id)
         if discord_id in self.verified_users:
             existing_torn_id = self.verified_users[discord_id].get('torn_id')
-            return False, f'You are already verified as Torn ID {existing_torn_id}. Contact an admin if you need to change this.'
+            # Someone who left Discord and came back keeps their record (it is
+            # keyed by Discord id) but loses their nickname and roles, and this
+            # is the ONLY command that sets a nickname. Refusing here left a
+            # real member sitting in the server with no Torn name and an error
+            # telling him to go find an admin. Re-apply instead: he is asking
+            # for exactly what the record already says.
+            if str(existing_torn_id) == str(torn_id):
+                healed = await self._reapply(member, guild, torn_id)
+                if healed:
+                    return True, ('You were already registered, so I just '
+                                  'refreshed your nickname and role. '
+                                  'Nothing else to do.')
+                return True, ('You are already registered as Torn ID '
+                              f'{existing_torn_id} and have your role. '
+                              'Nothing to do.')
+            # A DIFFERENT Torn id is a change of identity, not a repair, and
+            # that still needs a human.
+            return False, (f'You are already verified as Torn ID '
+                           f'{existing_torn_id}. Contact an admin if you need '
+                           f'to change this.')
 
         # Check if Torn ID is already registered to someone else
         for d_id, data in self.verified_users.items():
