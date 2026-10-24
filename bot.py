@@ -87,6 +87,7 @@ availability_manager = None
 event_reminder_manager = None
 stakeout_manager = None
 fly_tracker = None
+chain_event_manager = None
 _initialized = False  # Prevent re-initialization on reconnect
 
 
@@ -145,7 +146,7 @@ async def on_ready():
     global inactivity_tracker, chain_tracker, war_tracker, verification_system
     global role_sync_manager, activity_profile_manager, enemy_watchlist, availability_manager
     global event_reminder_manager, stakeout_manager, fly_tracker, _initialized
-    global strike_manager
+    global strike_manager, chain_event_manager
 
     try:
         logger.info(f'Bot logged in as {bot.user.name} (ID: {bot.user.id})')
@@ -538,6 +539,25 @@ async def chain_update_check():
             await chain_tracker.check_chain_update()
     except Exception as e:
         logger.error(f'Error in chain update check: {e}')
+
+    # A scheduled chain event begins here. Checked every minute so a 16:00
+    # start is announced at 16:00 and not up to an hour late. A start the bot
+    # slept through still fires, and still counts from its scheduled time -
+    # the totals are derived from the window, not from when we woke up.
+    try:
+        if chain_event_manager:
+            from features.chain_events import announce_text
+            from config import CHAINING_CHANNEL_ID
+            for ev in chain_event_manager.due():
+                chain_event_manager.begin(ev)
+                channel = bot.get_channel(CHAINING_CHANNEL_ID)
+                if channel:
+                    await channel.send(announce_text(ev))
+                else:
+                    logger.warning('Chain event: chaining channel not found, '
+                                   'started without announcing')
+    except Exception as e:
+        logger.error(f'Error starting scheduled chain event: {e}')
 
 
 @chain_update_check.before_loop

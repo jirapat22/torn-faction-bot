@@ -293,7 +293,8 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
 
     # ===== CHAIN COMMAND (Phase 3) =====
 
-    async def _chain_event(interaction, action, hours, minimum, target, name):
+    async def _chain_event(interaction, action, hours, minimum, target,
+                           name, start='', started_ago=0):
         """
         The /chain event actions. Split out because the four of them need the
         event manager and the plain chain views do not.
@@ -319,14 +320,60 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
 
         # ---- start ----
         if action == 'event_start':
-            running = chain_event_manager.active()
+            running = chain_event_manager.active() or chain_event_manager.pending()
             if running:
+                word = ('is already running' if running.get('status') == 'running'
+                        else 'is already scheduled')
                 await interaction.response.send_message(
-                    f'**{running["name"]}** is already running. End or cancel '
-                    f'it first with `/chain view:"Event end"`.', ephemeral=True)
+                    f'**{running["name"]}** {word}. End or cancel it first '
+                    f'with `/chain view:"Event end"`.', ephemeral=True)
                 return
             label = name.strip() or _time.strftime('%d %b chain event')
             mn = minimum or DEFAULT_MINIMUM
+
+            # An explicit start time, in the future or the recent past.
+            if start or started_ago:
+                from features.chain_events import (parse_tct,
+                                                   EVENT_EARLIEST_TCT_HOUR)
+                if start:
+                    when, err = parse_tct(start)
+                    if err:
+                        await interaction.response.send_message(
+                            f'⚠️ {err}', ephemeral=True)
+                        return
+                else:
+                    when = _time.time() - abs(int(started_ago)) * 3600
+                ev, notes = chain_event_manager.start(
+                    label, when, hours or 24, minimum=mn, target=target)
+                if not ev:
+                    await interaction.response.send_message(
+                        '⚠️ ' + ' '.join(notes), ephemeral=True)
+                    return
+                from datetime import datetime, timezone
+                s = datetime.fromtimestamp(int(ev['start']), timezone.utc)
+                e = datetime.fromtimestamp(int(ev['end']), timezone.utc)
+                when_word = ('Scheduled' if ev['status'] == 'scheduled'
+                             else 'Started')
+                msg = (f"⛓️ **{ev['name']}** {when_word.lower()}\n"
+                       f"Counting `{s:%d %b %H:%M}` → `{e:%d %b %H:%M} TCT`"
+                       f" · minimum **{mn}** each")
+                if ev['status'] == 'scheduled':
+                    msg += (f"\nI will announce it in the chain channel when "
+                            f"it begins.")
+                # The one mistake that quietly costs members their hits.
+                if s.hour > EVENT_EARLIEST_TCT_HOUR:
+                    msg += (f"\n\n⚠️ Halloween events can start from "
+                            f"**{EVENT_EARLIEST_TCT_HOUR:02d}:00 TCT**, and "
+                            f"this window opens at **{s:%H:%M}**. Anyone who "
+                            f"began earlier loses those hits off their total. "
+                            f"Cancel and restart at "
+                            f"`{s:%d-%m-%Y} {EVENT_EARLIEST_TCT_HOUR:02d}:00` "
+                            f"if you want everyone's counted.")
+                if notes:
+                    msg += '\n-# ' + ' · '.join(notes)
+                await interaction.response.send_message(msg, ephemeral=True)
+                return
+
             if hours:
                 ev, notes = chain_event_manager.start(
                     label, _time.time(), hours, minimum=mn, target=target)
@@ -408,7 +455,9 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
             hours='[Event start] Run for this many hours instead of picking a preset',
             minimum='[Event start] Hits each member must make (default: 10)',
             target='[Event start] Total chain hits you are aiming for',
-            name='[Event start] What to call it (default: today\'s date)')
+            name='[Event start] What to call it (default: today\'s date)',
+            start='[Event start] When it begins, TCT: DD-MM-YYYY HH:MM (e.g. 25-10-2026 10:00)',
+            started_ago='[Event start] It actually began this many hours ago')
         @app_commands.choices(view=[
             app_commands.Choice(name='Status - Current chain info', value='status'),
             app_commands.Choice(name='Report - Last chain top contributors', value='report'),
@@ -421,13 +470,15 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
         async def chain(interaction: discord.Interaction,
                         view: app_commands.Choice[str] = None,
                         hours: int = 0, minimum: int = 0, target: int = 0,
-                        name: str = ''):
+                        name: str = '', start: str = '',
+                        started_ago: int = 0):
             """Unified chain command with multiple views"""
             view_value = view.value if view else 'status'
 
             if view_value.startswith('event'):
                 await _chain_event(interaction, view_value,
-                                   hours, minimum, target, name)
+                                   hours, minimum, target, name,
+                                   start, started_ago)
                 return
 
             # Board view requires management

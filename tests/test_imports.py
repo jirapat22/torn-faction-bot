@@ -5481,6 +5481,96 @@ def test_poll_restore_defaults_to_the_layout_it_was_posted_with():
     assert restores_buttons({'style': 'menus'}) is False
 
 
+def test_chain_event_scheduling_counts_from_when_it_was_meant_to_start():
+    """
+    The leader cannot run a command at 4am, so an event is scheduled ahead.
+    Two things have to hold for that to be safe.
+
+    A start the bot slept through must still fire, and must still count from
+    its SCHEDULED time rather than from whenever the process came back -
+    otherwise an outage quietly shortens the window and members lose hits off
+    a total that can strike them.
+
+    And the announcement must not promise "every hit counts" on a window that
+    opens late. Members pick their own Halloween start anywhere from 10:00
+    TCT, so a window opening at 16:00 genuinely misses six hours of real
+    hits, and that is the one sentence somebody would rely on.
+    """
+    from features.chain_events import (parse_tct, announce_text, clamp_window,
+                                       MAX_SCHEDULE_DAYS, MAX_BACKDATE_HOURS,
+                                       EVENT_EARLIEST_TCT_HOUR)
+
+    # --- strict parsing: a misread date schedules the wrong day silently ---
+    ts, err = parse_tct('25-10-2026 16:00')
+    assert err is None and ts == 1792944000, (ts, err)
+    assert parse_tct('tomorrow 4pm')[0] is None
+    assert parse_tct('')[0] is None
+    assert parse_tct('2026-10-25 16:00')[0] is None, (
+        'ISO order must be rejected, not quietly read as day 2026')
+
+    # --- a future start is allowed; a mistyped year is pulled back ---
+    now = ts - 86400
+    start, end, notes = clamp_window(ts, 120, now=now)
+    assert start == ts and not notes, 'a day ahead is a normal schedule'
+
+    far = now + (MAX_SCHEDULE_DAYS + 300) * 86400
+    start, end, notes = clamp_window(far, 24, now=now)
+    assert start <= now + MAX_SCHEDULE_DAYS * 86400 and notes, (
+        'a start months out is a mistyped year and must be reported')
+
+    # --- backdating still capped ---
+    start, end, notes = clamp_window(now - 3 * 3600, 24, now=now)
+    assert start == now - 3 * 3600 and not notes
+    start, end, notes = clamp_window(now - 500 * 3600, 24, now=now)
+    assert start >= now - MAX_BACKDATE_HOURS * 3600 and notes
+
+    # --- the announcement tells the truth about its own window ---
+    early = parse_tct(f'25-10-2026 {EVENT_EARLIEST_TCT_HOUR:02d}:00')[0]
+    text_early = announce_text({'name': 'H', 'start': early,
+                                'end': early + 120 * 3600,
+                                'minimum': 10, 'target': 500})
+    assert 'does not matter what time' in text_early, text_early
+    assert 'do not count' not in text_early
+
+    late = parse_tct('25-10-2026 16:00')[0]
+    text_late = announce_text({'name': 'H', 'start': late,
+                               'end': late + 120 * 3600,
+                               'minimum': 10, 'target': 0})
+    assert 'do not count' in text_late, (
+        'a window opening after the earliest possible event start must say '
+        'so, not promise every hit counts')
+    assert 'does not matter what time' not in text_late
+
+    # Both always explain that hits add up across chains.
+    for t in (text_early, text_late):
+        assert 'not need 10 in a single chain' in t, t
+
+    # --- due(): the loop only fires an event if this says it is time ---
+    from features.chain_events import ChainEventManager
+    mgr = ChainEventManager.__new__(ChainEventManager)
+    mgr.events = {
+        'a': {'id': 'a', 'name': 'Scheduled', 'start': late,
+              'end': late + 120 * 3600, 'status': 'scheduled'},
+        'b': {'id': 'b', 'name': 'Already running', 'start': late,
+              'end': late + 120 * 3600, 'status': 'running'},
+    }
+    assert [e['id'] for e in mgr.due(now=late - 60)] == [], 'not yet'
+    assert [e['id'] for e in mgr.due(now=late)] == ['a'], 'exactly on time'
+    # THE one that matters: the bot was down at 16:00 and came back at 19:00.
+    # A start that has passed must still fire, or an outage silently cancels
+    # the event and nobody notices until the totals are wrong.
+    assert [e['id'] for e in mgr.due(now=late + 3 * 3600)] == ['a'], (
+        'a scheduled start the bot slept through must still fire, not be '
+        'skipped because the exact minute was missed')
+    # And its window is unchanged, so it still counts from 16:00 not 19:00.
+    assert mgr.events['a']['start'] == late
+
+    assert mgr.pending()['id'] == 'a'
+    mgr.events['a']['status'] = 'running'
+    assert mgr.pending() is None
+    assert mgr.due(now=late + 3 * 3600) == [], 'a running event is not due'
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -5582,4 +5672,5 @@ if __name__ == '__main__':
     test_poll_day_menu_replaces_only_its_own_day()
     test_guides_restore_skips_the_retired_ones()
     test_poll_restore_defaults_to_the_layout_it_was_posted_with()
+    test_chain_event_scheduling_counts_from_when_it_was_meant_to_start()
     print('All smoke tests passed.')

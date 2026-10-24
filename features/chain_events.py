@@ -47,6 +47,14 @@ DEFAULT_MINIMUM = 10
 # anybody remembers to tell the bot, so starting "3 hours ago" is normal; a
 # week ago is a typo.
 MAX_BACKDATE_HOURS = 48
+# And how far ahead one may be scheduled. Torn's events are announced days
+# out, not months, so anything past this is a mistyped year.
+MAX_SCHEDULE_DAYS = 14
+# Torn lets each player choose when their own event begins, anywhere in this
+# range. A faction-wide window has to open at the EARLIEST of them, or a
+# member who picked 10:00 loses six hours of real chain hits off their total
+# purely because the leader picked 16:00 for themselves.
+EVENT_EARLIEST_TCT_HOUR = 10
 
 
 # ---------------------------------------------------------------- pure logic
@@ -157,10 +165,17 @@ def clamp_window(start_ts, hours, now=None):
     notes = []
     start = int(start_ts)
     earliest = now - MAX_BACKDATE_HOURS * 3600
+    latest = now + MAX_SCHEDULE_DAYS * 86400
     if start < earliest:
         start = int(earliest)
         notes.append(f'start pulled forward to {MAX_BACKDATE_HOURS}h ago '
                      f'(backdating further is almost always a typo)')
+    elif start > latest:
+        # Almost always a mistyped year or month. Scheduling something for
+        # next March would sit there silently and never fire.
+        start = int(latest)
+        notes.append(f'start pulled back to {MAX_SCHEDULE_DAYS} days ahead '
+                     f'(that date looked like a typo)')
     hours = max(1, int(hours))
     if hours > MAX_EVENT_DAYS * 24:
         hours = MAX_EVENT_DAYS * 24
@@ -220,6 +235,32 @@ class ChainEventManager:
                 return ev
         return None
 
+    def pending(self):
+        """An event scheduled but not yet begun, or None."""
+        for ev in self.events.values():
+            if ev.get('status') == 'scheduled':
+                return ev
+        return None
+
+    def due(self, now=None):
+        """
+        Scheduled events whose start time has arrived.
+
+        A missed start is NOT skipped: counting is derived from the window,
+        so an event that should have begun while the bot was down still
+        begins, and still counts from its scheduled time rather than from
+        whenever the bot woke up.
+        """
+        now = now or time.time()
+        return [ev for ev in self.events.values()
+                if ev.get('status') == 'scheduled' and now >= int(ev['start'])]
+
+    def begin(self, event):
+        """Flip a scheduled event to running."""
+        event['status'] = 'running'
+        self.save()
+        logger.info(f'Chain event now running: {event["name"]}')
+
     def start(self, name, start_ts, hours, minimum=DEFAULT_MINIMUM,
               target=0, now=None):
         """
@@ -230,10 +271,12 @@ class ChainEventManager:
         somebody is about to be judged on.
         """
         now = now or time.time()
-        existing = self.active(now=now)
+        existing = self.active(now=now) or self.pending()
         if existing:
-            return None, [f'"{existing["name"]}" is still running. End or '
-                          f'cancel it first.']
+            word = ('still running' if existing.get('status') == 'running'
+                    else 'already scheduled')
+            return None, [f'"{existing["name"]}" is {word}. End or cancel it '
+                          f'first.']
         start, end, notes = clamp_window(start_ts, hours, now=now)
         ev = {
             'id': str(int(start)),
@@ -242,7 +285,10 @@ class ChainEventManager:
             'end': end,
             'minimum': max(1, int(minimum)),
             'target': max(0, int(target)),
-            'status': 'running',
+            # A start in the future waits; the minute loop begins it. Counting
+            # is derived from the window either way, so a scheduled event that
+            # the bot sleeps through still counts from its own start time.
+            'status': 'scheduled' if start > now else 'running',
             'totals': {},
             # Nothing counted yet, so the cursor sits at the window's start.
             'cursor': start,
@@ -497,3 +543,69 @@ class ShortfallView(discord.ui.View):
         await interaction.response.edit_message(view=self)
         await interaction.followup.send(
             'Dismissed — no strikes filed for this event.')
+
+
+# ---------------------------------------------------------------- scheduling
+
+def parse_tct(text, now=None):
+    """
+    "DD-MM-YYYY HH:MM" in TCT (which is UTC) -> epoch seconds.
+
+    Returns (timestamp, None) or (None, reason). Deliberately strict about
+    the format rather than guessing: a misread date here schedules an event
+    for the wrong day, and nobody notices until the hits do not count.
+    """
+    from datetime import datetime, timezone
+    raw = (text or '').strip()
+    if not raw:
+        return None, 'no start time given'
+    for fmt in ('%d-%m-%Y %H:%M', '%d-%m-%y %H:%M'):
+        try:
+            dt = datetime.strptime(raw, fmt).replace(tzinfo=timezone.utc)
+            return int(dt.timestamp()), None
+        except ValueError:
+            continue
+    return None, (f'could not read "{raw}". Use DD-MM-YYYY HH:MM in TCT, '
+                  f'for example 25-10-2026 16:00')
+
+
+def announce_text(event):
+    """
+    What the chain channel sees when counting begins.
+
+    The window explanation is spelled out because members choose their own
+    Halloween start time anywhere from 10:00 to 16:00 TCT, and somebody who
+    picked a different hour from the leader will otherwise assume their early
+    hits were not counted - or worse, assume they were when they were not.
+    """
+    from datetime import datetime, timezone
+    start = datetime.fromtimestamp(int(event['start']), timezone.utc)
+    end = datetime.fromtimestamp(int(event['end']), timezone.utc)
+    days = max(1, int(round((int(event['end']) - int(event['start'])) / 86400)))
+    target = (f"\n\U0001f3af **Target:** {event['target']} chain hits "
+              f"as a faction" if event.get('target') else '')
+    return (
+        f"⛓️ **{event['name']} is live**\n\n"
+        f"⏱️ **Counting from** `{start:%d %b %H:%M} TCT` "
+        f"**to** `{end:%d %b %H:%M} TCT` ({days} days)\n"
+        f"✅ **Minimum:** {event['minimum']} chain hits each"
+        f"{target}\n\n"
+        f"**What counts:** any hit of yours that lands in a chain, in any "
+        f"chain during that window. They all add up to one total — you do "
+        f"not need {event['minimum']} in a single chain.\n\n"
+        + (
+            f"**It does not matter what time you set your own Halloween "
+            f"event to start.** This window opens at or before the earliest "
+            f"anyone's can ({EVENT_EARLIEST_TCT_HOUR:02d}:00 TCT), so every "
+            f"chain hit you make counts whichever start time you picked.\n\n"
+            if start.hour <= EVENT_EARLIEST_TCT_HOUR else
+            # Saying "every hit counts" on a window that opens late would be
+            # the one sentence a member relies on and gets struck by.
+            f"⚠️ **Hits before `{start:%H:%M} TCT` do not count.** "
+            f"Halloween events can start from "
+            f"{EVENT_EARLIEST_TCT_HOUR:02d}:00 TCT, so if you began earlier "
+            f"than this window, those earlier hits are not in your total.\n\n"
+        )
+        + f"Check yourself any time with `/chain view:Event` — it shows "
+          f"who has hit what so far."
+    )
