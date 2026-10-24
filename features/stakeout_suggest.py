@@ -77,7 +77,7 @@ def build_embed(targets, enemy_label, has_ff):
     lines = []
     for tid, name, lvl, bs, band in targets:
         stat = f'{bs:,}' if bs else f'level {lvl}'
-        lines.append(f'`{tid}` **{name}** — {band}, {stat}')
+        lines.append(f'`{tid}` **{name}** - {band}, {stat}')
 
     cmds = '\n'.join(f'/enemy stakeout add torn_id:{t[0]}' for t in targets[:3])
     note = ('' if has_ff else

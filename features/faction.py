@@ -3,8 +3,8 @@ Faction Tools Module
 Faction-level commands for comparison, intel, and management.
 
 Features:
-- /faction compare <faction_id> — Side-by-side overview comparison
-- /faction stats <faction_id>   — Level distribution & battle strength analysis
+- /faction compare <faction_id> - Side-by-side overview comparison
+- /faction stats <faction_id>   - Level distribution & battle strength analysis
 """
 
 import discord
@@ -184,7 +184,7 @@ def _parse_rankedwars(rankedwars: dict, faction_id: int) -> list:
         elif our_score < opp_score:
             results.append('L')
         else:
-            # Scores tied — check winner field as tiebreaker
+            # Scores tied - check winner field as tiebreaker
             winner = war.get('winner', 0)
             if winner and str(winner) == fid_str:
                 results.append('W')

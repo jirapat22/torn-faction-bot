@@ -433,7 +433,7 @@ class StakeoutManager:
         config = self.stakeouts.get(torn_id, {})
         name = config.get('name', torn_id)
 
-        # Hourly counts — only online vs offline matter for coordination decisions
+        # Hourly counts - only online vs offline matter for coordination decisions
         hourly_online = defaultdict(int)
         hourly_offline = defaultdict(int)
         hourly_total = defaultdict(int)
@@ -498,12 +498,12 @@ class StakeoutManager:
             else:
                 heatmap.append('░')
 
-        # Sleep / offline window — primary: streak-based; fallback: hourly search
+        # Sleep / offline window - primary: streak-based; fallback: hourly search
         sleep_window = self._find_sleep_window_streaks(history)
         if not sleep_window:
             sleep_window = self._find_sleep_window(hour_stats)
 
-        # Peak-online window — the hours they're most reliably watching
+        # Peak-online window - the hours they're most reliably watching
         peak_online_window = self._find_peak_online_window(hour_stats)
 
         # Secondary: ranked hour lists (kept for backward-compat callers)
@@ -540,7 +540,7 @@ class StakeoutManager:
                 day_activity.append((day_names[day], rate, total))
         day_activity.sort(key=lambda x: x[1], reverse=True)
 
-        # Coverage — how much of the 24h clock we've actually sampled
+        # Coverage - how much of the 24h clock we've actually sampled
         hours_covered = sum(1 for h in range(24) if hourly_total.get(h, 0) > 0)
 
         # Time range
@@ -669,7 +669,7 @@ class StakeoutManager:
         mean_angle = math.atan2(sin_sum, cos_sum)
         mean_start = (mean_angle * 24 / (2 * math.pi)) % 24
 
-        # Circular variance R = sqrt(sin²+cos²)/n — 1.0 = perfectly aligned, 0 = random
+        # Circular variance R = sqrt(sin²+cos²)/n - 1.0 = perfectly aligned, 0 = random
         R = math.hypot(sin_sum, cos_sum) / len(streaks)
 
         # Keep streaks within ±2h of mean_start (circular distance)
@@ -743,7 +743,7 @@ class StakeoutManager:
     def _find_safe_hours(self, hour_stats: Dict) -> List[tuple]:
         """
         Rank hours by smoothed offline probability (target least likely to be watching).
-        Returns list of (hour, offline_p) — top 6.
+        Returns list of (hour, offline_p) - top 6.
         """
         windows = [(h, hour_stats[h]['offline_p']) for h in range(24)
                    if hour_stats[h]['samples'] > 0]
@@ -753,7 +753,7 @@ class StakeoutManager:
     def _find_danger_hours(self, hour_stats: Dict) -> List[tuple]:
         """
         Rank hours by smoothed online probability (most active).
-        Returns list of (hour, online_p) — top 6.
+        Returns list of (hour, online_p) - top 6.
         """
         windows = [(h, hour_stats[h]['online_p']) for h in range(24)
                    if hour_stats[h]['samples'] > 0]
@@ -771,7 +771,7 @@ class StakeoutManager:
             return []
         present = sorted(set(h % 24 for h in hours))
         if len(present) == 24:
-            return [(0, 0)]  # full day — represent as 0-0
+            return [(0, 0)]  # full day - represent as 0-0
 
         # Find gaps to determine where blocks start
         blocks = []
@@ -1218,7 +1218,7 @@ async def setup_stakeout_commands(bot, manager: StakeoutManager, enemy_group):
                 inline=True
             )
 
-        # Day of week breakdown — most/least active
+        # Day of week breakdown - most/least active
         day_activity = report.get('day_activity', [])
         if len(day_activity) >= 3:
             most_active = day_activity[0]

@@ -173,7 +173,7 @@ class LobbyChaseView(discord.ui.View):
             parts.append(f"✅ DM'd **{len(sent)}**: {', '.join(sent)}")
         if failed:
             parts.append(f"⚠️ Could not DM **{len(failed)}**: "
-                         f"{', '.join(failed)} — their DMs are closed, so "
+                         f"{', '.join(failed)} - their DMs are closed, so "
                          f"somebody has to catch them another way.")
         await interaction.followup.send('\n'.join(parts) or 'Nobody to DM.')
 

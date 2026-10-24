@@ -471,7 +471,7 @@ class PresetSelect(discord.ui.Select):
             await interaction.response.edit_message(
                 content='⚠️ ' + ' '.join(notes), view=None)
             return
-        msg = (f"⛓️ **{ev['name']}** started — running "
+        msg = (f"⛓️ **{ev['name']}** started - running "
                f"**{hours}h**, minimum **{ev['minimum']}** hits each.\n"
                f"Check it any time: type `/chain` and pick **Event**.")
         if notes:
@@ -542,7 +542,7 @@ class ShortfallView(discord.ui.View):
             child.disabled = True
         await interaction.response.edit_message(view=self)
         await interaction.followup.send(
-            'Dismissed — no strikes filed for this event.')
+            'Dismissed - no strikes filed for this event.')
 
 
 # ---------------------------------------------------------------- scheduling
@@ -585,35 +585,41 @@ def announce_text(event):
     target = (f"\n\U0001f3af **Target:** {event['target']} chain hits "
               f"as a faction" if event.get('target') else '')
     mn = event['minimum']
-    # A worked example beats a rule. Split the minimum across three days so
-    # "they add up" stops being an abstract claim.
-    a = max(1, mn // 3)
-    b = max(1, mn // 3)
-    c = max(0, mn - a - b)
+    goal = (f"\U0001f3af **Faction target: {event['target']} chain hits**\n"
+            if event.get('target') else '')
     return (
         f"⛓️ **{event['name']} is live**\n\n"
-        f"⏱️ **Counting:** `{start:%d %b %H:%M}` → "
+        f"⏱️ **Counting:** `{start:%d %b %H:%M}` to "
         f"`{end:%d %b %H:%M} TCT` ({days} days)\n"
-        f"✅ **You need: {mn} chain hits**"
-        f"{target}\n\n"
+        f"{goal}"
+        f"⚠️ **Minimum: {mn} chain hits each. That is the floor, not the "
+        f"goal.**\n\n"
         f"__**How it works**__\n"
         f"• Only hits you make **during a chain** count\n"
         f"• Every chain in that window adds to the **same total**\n"
-        f"• So {a} hits today + {b} tomorrow + {c} later = {mn}. Done.\n"
-        f"• You do **not** need {mn} in one chain\n\n"
+        f"• {mn} is the point where you stop being a problem. It is not the "
+        f"point where you stop hitting.\n"
+        f"• **Every hit past {mn} is another treat roll** and pushes us "
+        f"toward the target. Stopping at {mn} costs you treats, not us.\n\n"
         + (
-            f"__**Your Halloween start time does not matter**__\n"
-            f"Some of you set {EVENT_EARLIEST_TCT_HOUR:02d}:00, some set "
-            f"later. Counting starts at `{start:%H:%M} TCT`, which is before "
-            f"the earliest anyone's event can begin — so nobody loses hits "
-            f"for picking a different time.\n\n"
+            f"__**Everyone's event starts at a different time**__\n"
+            f"Torn lets each player choose when their own Halloween begins, "
+            f"anywhere from `{EVENT_EARLIEST_TCT_HOUR:02d}:00` to `16:00 "
+            f"TCT`. **Check yours on the Torn calendar.**\n"
+            f"Counting here opens at `{start:%H:%M} TCT`, before the earliest "
+            f"anyone's can, so every chain hit counts whichever time you "
+            f"picked. Just make sure your own event has actually started "
+            f"before you expect treats to drop, and that you are wearing "
+            f"something scary.\n\n"
             if start.hour <= EVENT_EARLIEST_TCT_HOUR else
             # Promising "every hit counts" on a window that opens late is the
             # one sentence a member would rely on and be struck by.
             f"⚠️ __**Hits before `{start:%H:%M} TCT` do not count**__\n"
-            f"Halloween events can start as early as "
-            f"`{EVENT_EARLIEST_TCT_HOUR:02d}:00 TCT`. If yours began before "
-            f"`{start:%H:%M}`, those earlier hits are **not** in your total.\n\n"
+            f"Torn lets each player choose when their own Halloween begins, "
+            f"anywhere from `{EVENT_EARLIEST_TCT_HOUR:02d}:00` to `16:00 "
+            f"TCT`. **Check yours on the Torn calendar.** If yours began "
+            f"before `{start:%H:%M}`, those earlier hits are **not** in your "
+            f"total.\n\n"
         )
         + f"__**Check your own total**__\n"
           f"Type `/chain` and pick **Event** from the list. It shows everyone's "

@@ -151,7 +151,7 @@ def build_embed(result, roster_size, guild_size):
         body = '\n'.join(f'- **{label}** · {detail}' for label, detail in shown)
         if len(rows) > len(shown):
             body += f'\n- ...and {len(rows) - len(shown)} more'
-        parts.append(f'**{title} — {len(rows)}**\n-# {why}\n{body}')
+        parts.append(f'**{title} - {len(rows)}**\n-# {why}\n{body}')
 
     desc = (f'Roster **{roster_size}**, server **{guild_size}**, '
             f'**{total}** mismatch(es).\n\n' + '\n\n'.join(parts))

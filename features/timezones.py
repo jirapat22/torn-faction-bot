@@ -232,7 +232,7 @@ def build_embed(groups, active_names=(), total_members=0, curve=None,
         desc.append(f'-# Busiest **{best}** · quietest **{quiet}** (TCT)'
                     if quiet else f'-# Busiest **{best}** (TCT)')
     if unset:
-        desc.append(f'-# **{unset}** not on the board yet — pick your '
+        desc.append(f'-# **{unset}** not on the board yet - pick your '
                     f'region from the menu above and you appear here.')
 
     embed = create_embed(title='\U0001f30d Where everyone is',

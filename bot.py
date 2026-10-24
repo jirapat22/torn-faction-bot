@@ -104,7 +104,7 @@ async def _start_healthcheck_server():
         return
     port_str = os.getenv('PORT')
     if not port_str:
-        return  # local run — skip
+        return  # local run - skip
     try:
         port = int(port_str)
     except ValueError:
@@ -257,7 +257,7 @@ async def on_ready():
         activity_profile_manager = ActivityProfileManager(bot)
         await activity_profile_manager.load_data()
 
-        # Initialize enemy watchlist — builds the /enemy command group
+        # Initialize enemy watchlist - builds the /enemy command group
         # (stakeout attaches to it below; added to the tree once, after)
         enemy_watchlist = EnemyWatchlist(bot)
         await enemy_watchlist.load_watchlist()
@@ -288,7 +288,7 @@ async def on_ready():
         event_reminder_manager = EventReminderManager(bot)
         await event_reminder_manager.load_data()
 
-        # Initialize stakeout manager (enemy behavior tracking) —
+        # Initialize stakeout manager (enemy behavior tracking) -
         # nests as /enemy stakeout under the group built above
         stakeout_manager = StakeoutManager(bot)
         await stakeout_manager.load_data()
@@ -473,7 +473,7 @@ async def daily_inactivity_check():
 
         # Auto-verify using Torn's official Torn<->Discord account link, which the
         # player establishes through Torn itself and so proves ownership. A Discord
-        # nickname does NOT — it's user-set, so anyone could claim another member's
+        # nickname does NOT - it's user-set, so anyone could claim another member's
         # Torn ID. Nickname matching stays manual/human-reviewed (/verify bulksync).
         # Unlinked members keep using /register as normal.
         if verification_system:

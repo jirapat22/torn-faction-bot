@@ -133,13 +133,13 @@ def test_flytrack_logic():
     assert parse_phase({'state': 'Okay', 'description': 'Okay'})[0] == PHASE_HOME
 
     # Tier learning: a 13-minute Mexico flight (26 std) is business class (x0.30 → 7.8)
-    # vs WLT (x0.50 → 13.0) — should learn WLT
+    # vs WLT (x0.50 → 13.0) - should learn WLT
     mgr = FlyTracker(bot=None)
     mgr._learn_tier('42', 'Testy', 'Mexico', 13 * 60)
     assert mgr.tiers['42']['tier'] == 'wlt'
 
     # Unmeasured player falls back to the empirical median ratio across the
-    # faction (0.669), not the theoretical airstrip bucket — measured against
+    # faction (0.669), not the theoretical airstrip bucket - measured against
     # 82 real flights, the buckets ran ~6% slow and always predicted late.
     from features.flytrack import DEFAULT_RATIO
     eta = mgr._eta_ts('999', 'Mexico', 1_000_000)
@@ -157,8 +157,8 @@ def test_flytrack_logic():
 def test_flytrack_estimate_leg():
     """
     _estimate_leg is the only ETA path (Torn's `travel` selection returns API
-    error 7 "Incorrect ID-entity relation" for any ID but the key owner's own —
-    confirmed live in production — so there is no exact-time path for enemies).
+    error 7 "Incorrect ID-entity relation" for any ID but the key owner's own -
+    confirmed live in production - so there is no exact-time path for enemies).
     """
     from features.flytrack import (FlyTracker, PHASE_OUT, PHASE_RETURNING,
                                    STANDARD_FLIGHT_MINUTES, DEFAULT_RATIO)
@@ -179,7 +179,7 @@ def test_flytrack_estimate_leg():
     assert resolved['dest'] == 'Switzerland'
     assert resolved['eta'] == int(now_ts + STANDARD_FLIGHT_MINUTES['Switzerland'] * DEFAULT_RATIO * 60)
 
-    # Genuinely unknown destination (no text match, no prior dest) — no ETA,
+    # Genuinely unknown destination (no text match, no prior dest) - no ETA,
     # but the caller still gets a phase and a graceful "unknown" message
     resolved = mgr._estimate_leg('3', PHASE_OUT, None, now_ts)
     assert resolved['eta'] is None
@@ -195,7 +195,7 @@ def test_flytrack_group_formatting():
     from features.flytrack import FlyTracker, PHASE_OUT, PHASE_RETURNING
 
     mgr = FlyTracker(bot=None)
-    # mgr.players deliberately left empty — formatters take fields directly
+    # mgr.players deliberately left empty - formatters take fields directly
     assert mgr.players == {}
 
     line = mgr._format_group_line('Chaosito', PHASE_OUT, 'China', 1_700_000)
@@ -700,7 +700,7 @@ def test_activity_profile_decay():
     """
     Regression test for an audit finding: hour counters accumulated forever
     with no decay, so a member's activity from months ago carried the same
-    weight as yesterday's — directly undermining the "notice a member's
+    weight as yesterday's - directly undermining the "notice a member's
     pattern shrinking" use case. Counters must now shrink day-over-day.
     """
     import asyncio
@@ -743,7 +743,7 @@ def test_activity_profile_decay_backfills_legacy_baseline():
     Regression test for a bug in the decay fix itself: profiles written before
     decay existed have no 'last_decay_date'. The original fallback read that
     key defaulting to *today*, recomputed every call, so days_elapsed was
-    permanently 0 and the early return never wrote a baseline back — leaving
+    permanently 0 and the early return never wrote a baseline back - leaving
     those profiles exempt from decay forever. A baseline must get stamped on
     first sight, so decay actually kicks in from the next day onward.
     """
@@ -771,7 +771,7 @@ def test_activity_profile_decay_backfills_legacy_baseline():
     assert mgr.profiles['100']['last_decay_date'] == '2025-05-01'
     assert mgr.profiles['100']['hours']['10'] == [50, 101]  # just the new sample
 
-    # Next day, decay must actually apply — under the old code it never would
+    # Next day, decay must actually apply - under the old code it never would
     day2 = datetime(2025, 5, 2, 10, 0, tzinfo=timezone.utc)
     asyncio.run(mgr.record_snapshot(faction_members, now=day2))
     active, total = mgr.profiles['100']['hours']['10']
@@ -822,7 +822,7 @@ def test_inactivity_daily_check_retries_transient_api_failure():
     """
     Regression test for a real production failure: the daily inactivity check
     posted "Could not connect to Torn API ... Will retry tomorrow" after a
-    single failed fetch. It's the only 24h loop in the bot — every other check
+    single failed fetch. It's the only 24h loop in the bot - every other check
     re-runs within 1-15 minutes, so a momentary blip costs them one tick, but
     costs this one a full day of accountability data. It must retry in place.
     """
@@ -910,7 +910,7 @@ def test_inactivity_daily_check_retries_transient_api_failure():
 def test_oc_check_skipped_when_crimes_unavailable():
     """
     Regression test for a real production incident: the daily report flagged 17
-    members as "no OC for 4+ days" plus 13 warnings — nearly the whole faction —
+    members as "no OC for 4+ days" plus 13 warnings - nearly the whole faction -
     while most of them were demonstrably mid-OC at that moment.
 
     Cause: fetch_faction_crimes() returned [] on API failure, indistinguishable
@@ -994,7 +994,7 @@ def test_stale_v1_crimes_fallback_rejected():
     But for an OC2 faction the v1 endpoint keeps answering 200 with frozen OC1
     history (measured live: newest record 585 days old, zero in progress). If v2
     failed and that got served as current, every crime would look completed, the
-    in-progress set would be empty, and every member mid-OC would be flagged —
+    in-progress set would be empty, and every member mid-OC would be flagged -
     today's bug again, but invisible, because the list comes back populated.
     """
     import asyncio
@@ -1015,7 +1015,7 @@ def test_stale_v1_crimes_fallback_rejected():
                                      'participants': [{'111': None}, {'222': None}]}}}
         api.fetch_faction_data = v1_stale
         assert asyncio.run(api.fetch_faction_crimes()) is None, \
-            'stale v1 history must not stand in for live data — report the outage instead'
+            'stale v1 history must not stand in for live data - report the outage instead'
 
         # v1 with a crime actually in progress is live; trust it
         async def v1_live(*a, **k):
@@ -1043,7 +1043,7 @@ def test_retry_preserves_already_good_payload():
     Re-audit finding: the retry loop now also fires when only the crimes fetch
     failed. It reassigned both payloads from each retry, so a retry where the
     member fetch blipped would overwrite good member data with None and abort
-    the whole report — turning a partial success into a total failure.
+    the whole report - turning a partial success into a total failure.
     """
     import asyncio
     import features.inactivity as inactivity_mod
@@ -1105,7 +1105,7 @@ def test_retry_preserves_already_good_payload():
 def test_left_faction_access_revoked_after_grace_period():
     """
     Someone who leaves the faction keeps their verified role (and so their
-    channel access) for the grace period, then loses it — falling back to what
+    channel access) for the grace period, then loses it - falling back to what
     @everyone can see. Revocation must be once-only, must not touch members
     still inside the grace window, and must not fire for people already back.
     """
@@ -1178,7 +1178,7 @@ def test_flytrack_uses_measured_speed_not_rounded_bucket():
     """
     Regression test for a real report: "he landed like 5 minute earlier than
     what was said". MegaBates had been MEASURED at 143 min to South Africa, but
-    the ETA was computed from the WLT bucket (0.50 x 297 = 148.5 min) — so the
+    the ETA was computed from the WLT bucket (0.50 x 297 = 148.5 min) - so the
     bot ignored its own measurement and predicted 5.5 min late. Across 82 stored
     flights every single prediction ran late (avg 8 min, worst 24) for the same
     reason: each bucket is ~6% slower than reality.
@@ -1294,8 +1294,8 @@ def test_finished_war_stats_stop_at_the_war_end():
 def test_attacks_shape_change_is_not_read_as_no_attacks():
     """
     The outage door closed, so this checks the shape door. The paginator stops
-    on an empty page, so if Torn turned `attacks` into a list — which it has
-    already done once, to rankedwarreport's factions and members — degrading
+    on an empty page, so if Torn turned `attacks` into a list - which it has
+    already done once, to rankedwarreport's factions and members - degrading
     to {} would truncate the war log exactly as an outage used to.
 
     Torn really does send {"attacks": {}} for "none" (probed live), so an empty
@@ -1861,7 +1861,7 @@ def test_war_report_v2_shape_normalised():
     now answers "error 23: only available in API v2", so the per-member war
     report was silently coming back empty ("No data from API and no cache").
 
-    v2 also changed shape — factions and members are LISTS where v1 used dicts
+    v2 also changed shape - factions and members are LISTS where v1 used dicts
     keyed by id. Consumers here call .items() on factions and index members by
     user id, so the payload must be normalised at the boundary.
     """
@@ -1910,7 +1910,7 @@ def test_war_report_v2_shape_normalised():
 
 def test_war_report_rejects_another_factions_war():
     """
-    The v2 path id is a WAR id, not a faction id — and passing the wrong one
+    The v2 path id is a WAR id, not a faction id - and passing the wrong one
     does not error, it returns somebody else's war. Verified live: asking with
     faction id 45635 returned war 45635, a Nirvana vs Unicorn Apocalypse match
     this faction was never in. Importing that as our own war history would be
@@ -1954,7 +1954,7 @@ def test_war_report_rejects_another_factions_war():
             "a report that doesn't include our faction must be rejected"
         assert calls == [47427], 'the WAR id must be sent as the path id, not the faction id'
 
-        # Without a war id we must not ask at all — asking with the faction id
+        # Without a war id we must not ask at all - asking with the faction id
         # is exactly what returned a stranger's war.
         calls.clear()
         assert asyncio.run(tracker._fetch_rankedwarreport(war_id=None)) is None
@@ -5529,7 +5529,7 @@ def test_chain_event_scheduling_counts_from_when_it_was_meant_to_start():
     text_early = announce_text({'name': 'H', 'start': early,
                                 'end': early + 120 * 3600,
                                 'minimum': 10, 'target': 500})
-    assert 'start time does not matter' in text_early, text_early
+    assert "Everyone's event starts at a different time" in text_early, text_early
     assert 'do not count' not in text_early
 
     late = parse_tct('25-10-2026 16:00')[0]
@@ -5539,11 +5539,17 @@ def test_chain_event_scheduling_counts_from_when_it_was_meant_to_start():
     assert 'do not count' in text_late, (
         'a window opening after the earliest possible event start must say '
         'so, not promise every hit counts')
-    assert 'start time does not matter' not in text_late
+    assert "Everyone's event starts at a different" not in text_late
 
     # Both always explain that hits add up across chains.
     for t in (text_early, text_late):
-        assert 'not** need 10 in one chain' in t, t
+        assert 'floor, not the goal' in t, (
+            'the minimum must not read as a target to stop at')
+        assert 'another treat roll' in t, (
+            'there has to be a reason to keep hitting past the minimum')
+        assert 'Check yours on the Torn calendar' in t, (
+            'members pick their own event start, so they must be told to '
+            'go and look at theirs')
         # The command is picked from a list, not typed as "view:Event".
         assert 'view:Event' not in t, (
             'members cannot type slash-command shorthand; the text must say '

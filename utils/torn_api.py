@@ -22,10 +22,10 @@ logger = logging.getLogger(__name__)
 # Format: {cache_key: {'data': data, 'timestamp': timestamp}}
 api_cache = {}
 
-# Separate FFScouter cache — keyed by sorted target ID list
+# Separate FFScouter cache - keyed by sorted target ID list
 # Format: {cache_key: {'data': data, 'timestamp': timestamp}}
 _ffscouter_cache = {}
-FFSCOUTER_CACHE_SECONDS = 900  # 15 minutes — estimates don't change fast
+FFSCOUTER_CACHE_SECONDS = 900  # 15 minutes - estimates don't change fast
 
 # How recent a v1 (legacy OC1) crime record must be for the fallback to be
 # treated as live data. An OC2 faction's v1 feed keeps returning 200 with
@@ -220,7 +220,7 @@ async def fetch_faction_data_v2(selections='wars', path_id=None):
     Args:
         selections: Comma-separated API selections
         path_id: Overrides the id in the URL path. Defaults to our faction.
-                 Not every v2 selection keys off a faction id —
+                 Not every v2 selection keys off a faction id -
                  `rankedwarreport` keys off a WAR id, and passing a faction id
                  there silently returns a different faction's war rather than
                  erroring. Callers must pass the id that selection expects.
@@ -294,7 +294,7 @@ async def fetch_faction_attacks(from_ts=None, to_ts=None, sort=None):
     # same failure as an outage arriving through a different door. Torn has
     # already turned dicts into lists once (rankedwarreport), so this is a
     # migration away from happening, not a hypothetical.
-    logger.error('Torn attacks field is %s, not a dict — response shape changed; '
+    logger.error('Torn attacks field is %s, not a dict - response shape changed; '
                  'reporting unreadable rather than "no attacks"',
                  type(attacks).__name__)
     return None
@@ -368,7 +368,7 @@ async def fetch_user_discord(torn_id):
 async def fetch_user_messages():
     """
     Fetch the API key owner's last 100 personal messages (includes
-    'Faction newsletter' type entries — title/sender/timestamp only, no body).
+    'Faction newsletter' type entries - title/sender/timestamp only, no body).
 
     Returns:
         Dict of {message_id: {timestamp, ID, name, type, title, seen, read}}
@@ -384,7 +384,7 @@ async def fetch_faction_crimes():
     Fetch and normalize faction organized crimes.
 
     v2 (OC2) is authoritative. The v1 fallback exists only for factions still
-    on legacy OC1 and is accepted ONLY if it actually looks live — for an OC2
+    on legacy OC1 and is accepted ONLY if it actually looks live - for an OC2
     faction, v1 keeps answering 200 with ancient OC1 records (measured: newest
     585 days old, zero in progress). Serving those as current would leave the
     "who is mid-crime" set empty and flag every participating member at once,
@@ -417,14 +417,14 @@ async def fetch_faction_crimes():
     # must not quietly degrade into "nobody is in a crime".
     v2_shape_ok = False
 
-    # Try v2 first (Torn OC2 system — slots-based)
+    # Try v2 first (Torn OC2 system - slots-based)
     data = await fetch_faction_data_v2('crimes')
     if data is not None:
         reached = True
         if isinstance(data.get('crimes'), list):
             v2_shape_ok = True
         else:
-            logger.error('Torn v2 crimes field is %s, not a list — response shape changed; '
+            logger.error('Torn v2 crimes field is %s, not a list - response shape changed; '
                          'treating as unusable rather than as "no crimes"',
                          type(data.get('crimes')).__name__)
     if data and isinstance(data.get('crimes'), list) and data['crimes']:
@@ -466,7 +466,7 @@ async def fetch_faction_crimes():
         if normalized:
             return normalized
 
-    # Fall back to v1 (legacy OC1 system) — only trusted if it looks live
+    # Fall back to v1 (legacy OC1 system) - only trusted if it looks live
     v1_normalized = []
     data = await fetch_faction_data('crimes')
     if data:
@@ -507,14 +507,14 @@ async def fetch_faction_crimes():
         )
 
     if not reached:
-        logger.error('Torn crimes fetch failed on both v2 and v1 — returning None so callers '
+        logger.error('Torn crimes fetch failed on both v2 and v1 - returning None so callers '
                      'can tell an outage apart from "no active crimes"')
         return None
 
     if not v2_shape_ok:
         # v2 answered but not in a shape we could read, and v1 gave nothing
         # usable either. Returning [] here would read as "no one is in a crime".
-        logger.error('No usable crimes data (v2 shape unreadable, no live v1 fallback) — '
+        logger.error('No usable crimes data (v2 shape unreadable, no live v1 fallback) - '
                      'reporting an outage rather than an empty crime list')
         return None
 
@@ -535,7 +535,7 @@ async def fetch_ffscouter_stats(torn_ids: list) -> dict:
     """
     from config import FFSCOUTER_API_KEY
     if not FFSCOUTER_API_KEY:
-        logger.info('FFScouter: FFSCOUTER_API_KEY not set — skipping stat lookup')
+        logger.info('FFScouter: FFSCOUTER_API_KEY not set - skipping stat lookup')
         return {}
 
     if not torn_ids:

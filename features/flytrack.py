@@ -458,7 +458,7 @@ class FlyTracker:
         )
 
     async def status_embed(self) -> discord.Embed:
-        """Read-only snapshot of who's currently flying/abroad, on demand —
+        """Read-only snapshot of who's currently flying/abroad, on demand -
         does NOT touch self.players or self.enabled, so it's safe to call
         anytime without disturbing the running background tracker."""
         if not self.enabled:
@@ -577,12 +577,12 @@ class FlyTracker:
         #
         # self.enemy_faction_id is fixed once at enable() and never
         # re-derived, so if the tracked war ends and a genuinely different
-        # war starts (new opponent), nothing else here would ever notice —
+        # war starts (new opponent), nothing else here would ever notice -
         # it would keep polling the old, no-longer-relevant faction's
         # roster indefinitely. Cross-checking current_war_id catches that.
         #
         # Both was_war_active and current_war_id reset on process restart
-        # and only recover once war_update_check completes its first tick —
+        # and only recover once war_update_check completes its first tick -
         # that loop and this one fire around the same on_ready() moment
         # with no ordering guarantee between them, so on every restart
         # there's a window where either check could read a stale value
@@ -1030,7 +1030,7 @@ class FlyTracker:
         ratio = (elapsed_seconds / 60) / std
 
         # Reject only physically implausible timings (a missed poll, a status
-        # we misread). Anything inside the plausible band is kept as measured —
+        # we misread). Anything inside the plausible band is kept as measured -
         # we no longer round it to a tier, because that rounding was itself the
         # source of the "landed early" complaints.
         if not (MIN_PLAUSIBLE_RATIO <= ratio <= MAX_PLAUSIBLE_RATIO):

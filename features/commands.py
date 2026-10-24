@@ -383,7 +383,7 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
                     return
                 extra = ('\n-# ' + ' · '.join(notes)) if notes else ''
                 await interaction.response.send_message(
-                    f"⛓️ **{ev['name']}** started — running "
+                    f"⛓️ **{ev['name']}** started - running "
                     f"**{hours}h**, minimum **{mn}** hits each.{extra}")
                 return
             # No hours given: offer the presets so nothing has to be typed.

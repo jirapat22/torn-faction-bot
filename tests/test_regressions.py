@@ -1,7 +1,7 @@
 """
 Regression tests for logic that has failed silently before.
 
-Both bugs guarded here produced no error — they just quietly did nothing,
+Both bugs guarded here produced no error - they just quietly did nothing,
 which is why they survived so long. Keep these cheap and dependency-free.
 """
 
@@ -20,7 +20,7 @@ sys.path.insert(0, str(ROOT))
 
 def _v2_crimes_payload():
     return {'crimes': [
-        {   # concluded crime — has executed_at, participants under slots[].user.id
+        {   # concluded crime - has executed_at, participants under slots[].user.id
             'id': 1, 'name': 'Snow Blind', 'status': 'Successful',
             'executed_at': 1784005629, 'ready_at': 1784000000, 'planning_at': None,
             'slots': [
@@ -28,7 +28,7 @@ def _v2_crimes_payload():
                 {'position': 'Muscle', 'user': {'id': 3198618, 'outcome': 'Injured'}},
             ],
         },
-        {   # still recruiting — no executed_at, empty slot
+        {   # still recruiting - no executed_at, empty slot
             'id': 2, 'name': 'Mob Mentality', 'status': 'Recruiting',
             'executed_at': None,
             'slots': [{'position': 'Looter', 'user': None}],
@@ -124,6 +124,6 @@ def test_bulksync_is_not_callable_unattended_with_nickname_trust():
     """
     bot_src = (ROOT / 'bot.py').read_text(encoding='utf-8')
     assert 'bulksync_members' not in bot_src, (
-        'bot.py must not call bulksync_members — nickname matching is not identity '
+        'bot.py must not call bulksync_members - nickname matching is not identity '
         'proof and must not run unattended'
     )

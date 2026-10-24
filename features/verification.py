@@ -283,7 +283,7 @@ class VerificationSystem:
         Verify faction members using Torn's official Torn<->Discord account link.
 
         The player establishes that link through Torn itself, so it is proof of
-        ownership — unlike a Discord nickname, which the user sets themselves and
+        ownership - unlike a Discord nickname, which the user sets themselves and
         can therefore claim any Torn ID. Only this authoritative source is allowed
         to verify anyone unattended.
 
@@ -299,7 +299,7 @@ class VerificationSystem:
         if not faction_members:
             return None
 
-        # Torn IDs already verified — skip them entirely (saves an API call each)
+        # Torn IDs already verified - skip them entirely (saves an API call each)
         known_tids = {str(d.get('torn_id')) for d in self.verified_users.values()}
 
         verified = 0
@@ -349,7 +349,7 @@ class VerificationSystem:
         """
         Match unverified Discord members to faction members by nickname/display name.
 
-        NOT identity proof — a nickname is user-controlled. Manual, human-reviewed
+        NOT identity proof - a nickname is user-controlled. Manual, human-reviewed
         use only (/verify bulksync); never call this from an unattended job.
 
         Returns:

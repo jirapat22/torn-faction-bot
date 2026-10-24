@@ -1,7 +1,7 @@
 """
 Activity Profile Module
 Tracks when faction members are typically online, built from data already
-fetched hourly for role sync (last_action / status) — no extra API calls.
+fetched hourly for role sync (last_action / status) - no extra API calls.
 
 Not a live-tracking system: it accumulates an hour-of-day probability curve
 per member over many days ("what fraction of hourly snapshots at 18:00 UTC
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 DATA_FILE = 'data/activity_profile.json'
 
 ACTIVE_STATUSES = {'Online', 'Idle'}
-# Snapshots are taken roughly hourly — treat "last action within ~65 minutes"
+# Snapshots are taken roughly hourly - treat "last action within ~65 minutes"
 # as still active-ish, to cover drift in when the hourly tick actually fires.
 RECENT_ACTION_WINDOW_SECONDS = 65 * 60
 
@@ -35,7 +35,7 @@ COVERAGE_WINDOW_HOURS = 3     # width of the sliding window for best/quiet facti
 # (~34-day half-life at 0.98/day).
 DECAY_FACTOR = 0.98
 # Drop a member's profile once they've been absent from the faction fetch for
-# this many days straight — avoids stale ex-members quietly skewing Coverage
+# this many days straight - avoids stale ex-members quietly skewing Coverage
 # and cluttering the roster view forever. A grace period (not "first miss")
 # so one API hiccup doesn't wipe real history.
 PRUNE_AFTER_DAYS = 7
@@ -107,7 +107,7 @@ def best_and_quiet_windows(probs: dict, window_hours: int = COVERAGE_WINDOW_HOUR
     """
     Slide a window_hours-wide window around the 24h circle and return
     ((best_start, best_end, best_avg), (quiet_start, quiet_end, quiet_avg))
-    — the highest- and lowest-average-probability windows.
+    - the highest- and lowest-average-probability windows.
     """
     best = None
     quiet = None
@@ -149,7 +149,7 @@ class ActivityProfileManager:
         payload (torn_id -> member data including name/status/last_action).
 
         Args:
-            now: Override for the current UTC time (tests only) — defaults
+            now: Override for the current UTC time (tests only) - defaults
                  to the real current time.
         """
         if not faction_members:
@@ -210,7 +210,7 @@ class ActivityProfileManager:
         last_decay_str = profile.get('last_decay_date')
         if last_decay_str is None:
             # Legacy profile with no baseline (predates this method). Stamp one
-            # now rather than leaving it unset — defaulting the read to "today"
+            # now rather than leaving it unset - defaulting the read to "today"
             # on every call would make days_elapsed permanently 0, exempting
             # this profile from decay forever.
             profile['last_decay_date'] = date_key
@@ -235,14 +235,14 @@ class ActivityProfileManager:
         for torn_id, profile in self.profiles.items():
             last_seen_str = profile.get('last_seen_in_faction')
             if not last_seen_str:
-                continue  # no staleness info yet (legacy entry) — leave it alone
+                continue  # no staleness info yet (legacy entry) - leave it alone
             last_seen_date = datetime.strptime(last_seen_str, '%Y-%m-%d').date()
             if (today - last_seen_date).days > PRUNE_AFTER_DAYS:
                 stale_ids.append(torn_id)
 
         for torn_id in stale_ids:
             name = self.profiles[torn_id].get('name', torn_id)
-            logger.info(f'Activity profile: pruning {name} ({torn_id}) — absent from faction {PRUNE_AFTER_DAYS}+ days')
+            logger.info(f'Activity profile: pruning {name} ({torn_id}) - absent from faction {PRUNE_AFTER_DAYS}+ days')
             del self.profiles[torn_id]
 
     def has_enough_data(self, torn_id: str) -> bool:

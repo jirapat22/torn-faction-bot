@@ -608,7 +608,7 @@ class AvailabilityManager:
             if now < poll_end:
                 continue
 
-            # Poll has ended — try to post results first, then mark as closed
+            # Poll has ended - try to post results first, then mark as closed
             try:
                 channel_id = poll.get('channel_id')
                 channel = self.bot.get_channel(channel_id) if channel_id else None
@@ -844,7 +844,7 @@ class DaySelect(discord.ui.Select):
                 value=str(b['id']),
                 description=(f'{count} going' if count else 'nobody yet')))
         super().__init__(
-            placeholder=f'{date} — pick every slot you can make',
+            placeholder=f'{date} - pick every slot you can make',
             min_values=0, max_values=len(options), options=options,
             custom_id=f'availday_{poll_id}_{date}')
 

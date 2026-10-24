@@ -204,7 +204,7 @@ class WarTracker:
                                      enemy_name, friendly_hosps=None, attack_stats=None):
         """Save per-member war data + friendly-hosp log to persistent history. Keeps last 10 wars.
 
-        Saves even if rankedwarreport member data is missing — the friendly-hosp
+        Saves even if rankedwarreport member data is missing - the friendly-hosp
         event log alone is still valuable to preserve.
 
         attack_stats (from _get_war_attack_stats) supplies hits taken. Without
@@ -300,7 +300,7 @@ class WarTracker:
         is passed through untouched.
 
         Note: v2 members carry id/name/level/attacks/score but no `defends`,
-        so defend counts now read as 0 — the data is simply no longer offered.
+        so defend counts now read as 0 - the data is simply no longer offered.
         """
         if not isinstance(report, dict):
             return report
@@ -330,7 +330,7 @@ class WarTracker:
         """
         Fetch ranked war report with complete per-member stats.
         Uses the v2 'rankedwarreport' selection (v1 answers error 23 since
-        Torn retired it). v2 gives attacks/score per member but NOT defends —
+        Torn retired it). v2 gives attacks/score per member but NOT defends -
         hits taken come from the attacks log instead, see _incoming_split.
         Caches the report so it remains available after the war ends.
 
@@ -342,7 +342,7 @@ class WarTracker:
         """
         cache_file = 'data/warreport_cache.json'
 
-        # v2 only — Torn retired this selection from v1, which now answers
+        # v2 only - Torn retired this selection from v1, which now answers
         # "error 23: This selection is only available in API v2", so the whole
         # per-member war report was silently coming back empty.
         #
@@ -358,7 +358,7 @@ class WarTracker:
             report = self._normalise_rankedwarreport(data.get('rankedwarreport', {}))
             if report and str(TORN_FACTION_ID) not in (report.get('factions') or {}):
                 logger.warning(
-                    f'War report: ignoring report for war {war_id} — it covers factions '
+                    f'War report: ignoring report for war {war_id} - it covers factions '
                     f'{list((report.get("factions") or {}))} and not ours ({TORN_FACTION_ID})'
                 )
                 report = {}
@@ -375,7 +375,7 @@ class WarTracker:
                     save_json(cache_file, cache_data)
                     return report
 
-        # API didn't return report — try loading from cache
+        # API didn't return report - try loading from cache
         cached = load_json(cache_file, default={})
         if cached and cached.get('report'):
             cached_war_id = cached.get('war_id')
@@ -384,7 +384,7 @@ class WarTracker:
                 logger.info('War report: Using cached report (API no longer returning data)')
                 return cached['report']
             else:
-                logger.info(f'War report: Cache is for war {cached_war_id}, current war is {war_id} — ignoring stale cache')
+                logger.info(f'War report: Cache is for war {cached_war_id}, current war is {war_id} - ignoring stale cache')
                 return None
 
         logger.info('War report: No data from API and no cache available')
@@ -568,7 +568,7 @@ class WarTracker:
             fields.append({'name': 'Status', 'value': 'In Progress', 'inline': True})
 
         # Note: friendly-hosp count is shown in /war board (which already
-        # paginates the attack log). Don't recompute it here — /war status
+        # paginates the attack log). Don't recompute it here - /war status
         # should stay a fast, glanceable read.
 
         # Build embed
@@ -591,7 +591,7 @@ class WarTracker:
             war_start: Unix timestamp to start fetching from
             war_end: Unix timestamp to stop at, or None for an ongoing war.
                 Without it the window never closes, so every later hit on the
-                former opponent keeps counting as a war hit — measured on war
+                former opponent keeps counting as a war hit - measured on war
                 50338, the log read 422 against the official 421 because one
                 member hit them again after it was over. Left unbounded, Xanax
                 reimbursement for a finished war grows the longer you wait.
@@ -811,7 +811,7 @@ class WarTracker:
                                 'bonus': bonus_mod,
                             })
 
-                # Friendly hospitalization — teammate hosps teammate to keep them
+                # Friendly hospitalization - teammate hosps teammate to keep them
                 # safe from enemy attacks. Tracked separately from war/outside hits.
                 if (attacker_faction == our_faction
                         and defender_faction == our_faction
@@ -1173,7 +1173,7 @@ class WarTracker:
         total_outside_incoming = sum(m['outside_incoming'] for m in member_list)
         participants = len([m for m in member_list if m['war_hits'] > 0])
 
-        # Friendly hospitalisations — teammates protecting teammates from enemy hits
+        # Friendly hospitalisations - teammates protecting teammates from enemy hits
         friendly_hosps = attack_stats.get('_friendly_hosps', []) if isinstance(attack_stats, dict) else []
         total_friendly_hosps = len(friendly_hosps)
         # Top hospitalizers (members who keep teammates safe most often)
@@ -1249,7 +1249,7 @@ class WarTracker:
         max_name = max((len(m['name']) for m in sorted_members), default=10)
         max_name = min(max_name, 15)  # Cap at 15 chars to fit mobile
 
-        # ANSI colour highlights — Discord renders these inside ```ansi blocks.
+        # ANSI colour highlights - Discord renders these inside ```ansi blocks.
         # Top-3 distinct War hits → green; top-3 distinct WHt → red. Ties keep
         # everyone on the boundary highlighted.
         GREEN = '[32m'
@@ -1472,7 +1472,7 @@ class WarTracker:
             '\n\n**War** = Hits on war opponent | **Chn** = Outside hits during chain\n'
             '**Hsp** = Friendly hosps (teammate put safe) | **Tot** = all three combined\n'
             f'**\\*** = reached {XAN_REIMBURSE_MIN_HITS} hits, so Xanax is '
-            f'reimbursed — **{len(qualified)} of {len(member_list)}** did'
+            f'reimbursed - **{len(qualified)} of {len(member_list)}** did'
         )
         if not xan_log_ok:
             description = f'{description}\n\n{WAR_LOG_INCOMPLETE_NOTE}'
@@ -1772,7 +1772,7 @@ class WarTracker:
 
         last_5 = wars[-5:]
 
-        # War summary — annotate each with friendly-hosp count when present
+        # War summary - annotate each with friendly-hosp count when present
         war_lines = []
         for w in reversed(last_5):
             icon = '✅' if w['result'] == 'victory' else '❌'
@@ -2733,12 +2733,12 @@ class WarTracker:
 
     async def check_pending_war(self):
         """
-        Detect a ranked war that's been declared but hasn't started yet — Torn
+        Detect a ranked war that's been declared but hasn't started yet - Torn
         gives a multi-day notice window between declaration and start.
 
         DRY-RUN STAGE: only logs the raw payload and posts a plain notice embed.
         Deliberately NOT wired up to auto-create an availability poll or
-        auto-populate the enemy watchlist yet — that comes after we've
+        auto-populate the enemy watchlist yet - that comes after we've
         inspected a real declaration's data shape from the logged payload.
         """
         rankedwars = await self._fetch_rankedwars()
@@ -2782,7 +2782,7 @@ class WarTracker:
                 await channel.send(embed=embed)
                 logger.info(f'Posted pending-war notice for war {war_id}')
             else:
-                logger.warning(f'Could not post pending-war notice — war channel not found (ID: {WAR_CHANNEL_ID})')
+                logger.warning(f'Could not post pending-war notice - war channel not found (ID: {WAR_CHANNEL_ID})')
 
             # Name who is worth watching while there is still time to set
             # it up. Suggestions only: a stakeout spends API calls on a
@@ -2828,9 +2828,9 @@ class WarTracker:
         if self.was_war_active and not war_info:
             # Re-fetch raw rankedwars data to confirm the war is truly over.
             # get_current_war() returning None can mean:
-            #   (a) API is down — raw_data is None
-            #   (b) Torn glitch — war entry temporarily has a non-zero end timestamp
-            #   (c) War genuinely ended — war entry has end <= now
+            #   (a) API is down - raw_data is None
+            #   (b) Torn glitch - war entry temporarily has a non-zero end timestamp
+            #   (c) War genuinely ended - war entry has end <= now
             # We only announce in case (c).
             raw_data = await fetch_faction_data('rankedwars')
             if raw_data is None:
@@ -2845,7 +2845,7 @@ class WarTracker:
                 war = war_entry.get('war', {})
                 end = war.get('end', 0)
                 if not end or end > now:
-                    # end is 0 or in the future — war is still active, Torn API glitch
+                    # end is 0 or in the future - war is still active, Torn API glitch
                     logger.info(f'War: API returned end={end} for active war {self.current_war_id}, ignoring false end signal')
                     return
 
@@ -2956,7 +2956,7 @@ class WarTracker:
                         logger.info('Posted detailed war report to management channel')
                     else:
                         logger.warning(
-                            f'War end: management report not posted for war {self.current_war_id} — '
+                            f'War end: management report not posted for war {self.current_war_id} - '
                             f'format_war_management_report returned no embeds (likely no our-faction '
                             f'member data in the war report yet)'
                         )

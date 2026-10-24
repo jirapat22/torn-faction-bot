@@ -30,8 +30,8 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Torn's fixed/recurring annual events (not Discord Scheduled Events).
-# (name, month, day) — day=None means "first Friday of month".
-# Source: https://wiki.torn.com/wiki/Current_Events — update by hand if Torn changes dates.
+# (name, month, day) - day=None means "first Friday of month".
+# Source: https://wiki.torn.com/wiki/Current_Events - update by hand if Torn changes dates.
 CALENDAR_EVENTS = [
     ('Awareness Week', 1, 15),
     ('Weekend Road Trip', 1, 31),
@@ -134,7 +134,7 @@ class EventReminderManager:
     async def check_newsletters(self):
         """
         Surface new in-game 'Faction Newsletter' mail to Discord. Torn's API
-        only exposes title/sender/timestamp, not the body — members still
+        only exposes title/sender/timestamp, not the body - members still
         need to check Torn mail for the actual details (dates, etc.).
         """
         messages = await fetch_user_messages()
@@ -143,7 +143,7 @@ class EventReminderManager:
             return
 
         if self.last_newsletter_id == 0:
-            # First run — baseline to newest so we don't dump months of history
+            # First run - baseline to newest so we don't dump months of history
             self.last_newsletter_id = max(newsletter_ids)
             await self.save_data()
             return
