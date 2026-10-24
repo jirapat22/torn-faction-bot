@@ -244,6 +244,9 @@ async def on_ready():
         # user for the DM; the detections need the ledger to post candidates.
         strike_manager.verification_system = verification_system
         inactivity_tracker.strike_manager = strike_manager
+        # Turns the Discord user running /chain into a Torn id, so the
+        # member view can show them their own rank.
+        chain_event_manager.verification_system = verification_system
         await verification_system.load_config()
         await setup_verification_commands(bot, verification_system)
 

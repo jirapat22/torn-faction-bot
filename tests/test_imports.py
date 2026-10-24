@@ -5581,6 +5581,95 @@ def test_chain_event_scheduling_counts_from_when_it_was_meant_to_start():
     assert mgr.due(now=late + 3 * 3600) == [], 'a running event is not due'
 
 
+def test_chain_event_member_view_and_late_joiner_exemption():
+    """
+    Two separate views, because they answer different questions and have
+    different blast radii.
+
+    A member gets the top 5 and their own rank, privately. They never see who
+    is short: that list is management's, and putting it in front of the
+    faction turns a nudge into a pillory.
+
+    And the minimum only applies to people who were actually here. Somebody
+    who joined on day 6 of 7 had no chance to make it, so striking them is
+    the fastest way to lose a new member. They stay on the leaderboard
+    though, because excusing somebody is not pretending they did nothing.
+    """
+    from features.chain_events import (member_embed, progress_embed,
+                                       leaderboard, rank_of, eligible,
+                                       names_of, shortfall)
+
+    start = 2_000_000_000
+    ev = {'name': 'Halloween', 'start': start, 'end': start + 7 * 86400,
+          'minimum': 10, 'target': 500, 'status': 'running'}
+    now = start + 2 * 86400
+
+    roster = {
+        '1': {'name': 'Ikaros22', 'days_in_faction': 800},
+        '2': {'name': 'dakkkz', 'days_in_faction': 400},
+        '3': {'name': 'Lagger', 'days_in_faction': 300},
+        '4': {'name': 'Trizzy973', 'days_in_faction': 500},
+        '9': {'name': 'NewGuy', 'days_in_faction': 1},
+    }
+    totals = {'1': 48, '2': 31, '4': 12, '3': 5, '9': 7}
+
+    # --- late joiner is excused from the minimum ---
+    judged = eligible(roster, ev, now=now)
+    assert '9' not in judged, 'joined after the start, so not judged'
+    assert set(judged) == {'1', '2', '3', '4'}
+    short = shortfall(totals, judged, 10)
+    assert [m['name'] for m in short] == ['Lagger'], short
+    assert 'NewGuy' not in [m['name'] for m in short], (
+        'a member who joined on day 6 must not be struck for the full minimum')
+
+    # ...but still appears on the leaderboard.
+    assert 'NewGuy' in [r['name'] for r in leaderboard(totals, roster, limit=0)]
+
+    # Missing join data must NOT excuse anybody: a field that quietly
+    # vanishes from the API should fail toward judging, not toward silence.
+    no_data = {'5': {'name': 'Unknown'}}
+    assert '5' in eligible(no_data, ev, now=now)
+
+    # --- rank is among people who actually hit ---
+    rank, ranked, hits = rank_of('4', totals, roster)
+    assert (rank, hits) == (3, 12), (rank, ranked, hits)
+    rank, ranked, hits = rank_of('404', totals, roster)
+    assert rank is None and hits == 0, 'nobody with no hits gets a rank'
+
+    # --- the member view ---
+    text = member_embed(ev, totals, roster, True, '4', now=now).description
+    assert 'Ikaros22' in text and 'Top hitters' in text
+    assert 'You: 12 hits' in text and 'rank **3**' in text
+    assert 'Minimum cleared' in text
+    assert 'another treat roll' in text, 'must push past the minimum'
+    # A short member can appear in the top 5 when few people have hit, which
+    # is fine: they are ranked, not flagged. What must never appear is the
+    # shortfall SECTION, which is the part that marks people as failing.
+    assert 'short' not in text.lower(), (
+        f'the member view must not render the shortfall list: {text}')
+    assert '/10' not in text, (
+        f'the x/minimum format belongs to the management board only: {text}')
+
+    # The chase line names the NEAREST person ahead, not the leader.
+    assert 'dakkkz' in text.split('treat roll')[1], (
+        f'should chase the nearest above (dakkkz 31), not the leader: {text}')
+    assert 'only 19 ahead' in text, text
+
+    # Somebody short is told exactly what is left.
+    short_text = member_embed(ev, totals, roster, True, '3', now=now).description
+    assert '5 more' in short_text and 'minimum' in short_text, short_text
+
+    # An unreadable log must not render a confident board.
+    bad = member_embed(ev, totals, roster, False, '4', now=now).description
+    assert 'could not be read' in bad and 'Top hitters' not in bad
+
+    # --- the management board keeps the shortfall list ---
+    board = progress_embed(ev, totals, roster, True, now=now).description
+    assert 'Lagger' in board and 'Top hitters' in board
+    assert 'joined after this event started' in board
+    assert '1 member joined' in board, f'singular grammar: {board}'
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -5683,4 +5772,5 @@ if __name__ == '__main__':
     test_guides_restore_skips_the_retired_ones()
     test_poll_restore_defaults_to_the_layout_it_was_posted_with()
     test_chain_event_scheduling_counts_from_when_it_was_meant_to_start()
+    test_chain_event_member_view_and_late_joiner_exemption()
     print('All smoke tests passed.')

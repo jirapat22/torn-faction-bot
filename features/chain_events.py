@@ -363,18 +363,18 @@ class ChainEventManager:
 
     async def roster_for(self, event):
         """
-        {torn_id: name} the minimum applies to.
+        {torn_id: {'name', 'days_in_faction'}} for the current roster.
 
-        Current roster, deliberately: somebody who left the faction mid-event
-        is no longer ours to strike, and somebody who joined is on it. The
-        join-date nuance is surfaced in the report instead of silently
-        excusing or condemning anybody here.
+        Current roster deliberately: somebody who left mid-event is no longer
+        ours to strike. Join dates ride along so late joiners can be excused
+        from the minimum without being hidden from the leaderboard.
         """
         from utils.torn_api import fetch_faction_members
         members = await fetch_faction_members()
         if not members:
             return None
-        return {str(tid): m.get('name', f'ID:{tid}')
+        return {str(tid): {'name': m.get('name', f'ID:{tid}'),
+                           'days_in_faction': m.get('days_in_faction', 9999)}
                 for tid, m in members.items()}
 
 
@@ -405,8 +405,12 @@ def progress_embed(event, totals, roster, ok, now=None):
 
     day, days = day_of(event, now=now)
     minimum = event['minimum']
-    short = shortfall(totals, roster, minimum)
-    met = met_minimum(totals, roster, minimum)
+    # The minimum applies only to members who were here when it started;
+    # the leaderboard still shows everybody who hit.
+    judged = eligible(roster, event, now=now) if roster else roster
+    excused = (len(names_of(roster)) - len(judged)) if roster else 0
+    short = shortfall(totals, judged, minimum)
+    met = met_minimum(totals, judged, minimum)
     hits = sum((totals or {}).values())
 
     lines = [f"**Day {day} of {days}** · minimum **{minimum}** hits each"]
@@ -425,6 +429,13 @@ def progress_embed(event, totals, roster, ok, now=None):
         lines.append('\n⚠️ **The roster could not be read**, so who '
                      'is short cannot be worked out right now.')
     else:
+        top = leaderboard(totals, roster, limit=5)
+        if top:
+            medal = {1: '\U0001f947', 2: '\U0001f948', 3: '\U0001f949'}
+            lines.append('\n\U0001f525 **Top hitters**')
+            lines.append('\n'.join(
+                f"{medal.get(i, f'`{i}.`')} **{r['name']}** {r['hits']}"
+                for i, r in enumerate(top, start=1)))
         lines.append(f'\n✅ **{met}** met the minimum · '
                      f'⚠️ **{len(short)}** short')
         if short:
@@ -433,6 +444,11 @@ def progress_embed(event, totals, roster, ok, now=None):
             if len(short) > 20:
                 rows.append(f'-# +{len(short) - 20} more')
             lines.append('\n'.join(rows))
+        if excused:
+            lines.append(
+                f'-# {excused} member{"s" if excused != 1 else ""} joined '
+                f'after this event started and {"are" if excused != 1 else "is"} '
+                f'not judged against the minimum.')
 
     return create_embed(
         title=f"⛓️ {event['name']}",
@@ -625,3 +641,143 @@ def announce_text(event):
           f"Type `/chain` and pick **Event** from the list. It shows everyone's "
           f"hits so far and who is still short."
     )
+
+
+# ------------------------------------------------------------ roster shaping
+
+def names_of(roster):
+    """{torn_id: name}, accepting either roster shape."""
+    if not roster:
+        return {}
+    out = {}
+    for tid, v in roster.items():
+        out[str(tid)] = v.get('name', str(tid)) if isinstance(v, dict) else v
+    return out
+
+
+def eligible(roster, event, now=None):
+    """
+    Who the minimum actually applies to.
+
+    Somebody who joined the faction after the event started is left out: they
+    were not here for most of the window, and striking a new member for hits
+    they had no chance to make is the fastest way to lose them. They still
+    appear on the leaderboard, because excusing somebody is not the same as
+    pretending they did nothing.
+
+    Missing join data counts as present. A strike should never rest on a
+    field that quietly disappeared from an API, which is how a missing
+    `defends` once reported a whole faction as taking zero hits.
+    """
+    if not roster:
+        return {}
+    now = now or time.time()
+    started = int(event['start'])
+    out = {}
+    for tid, v in roster.items():
+        if not isinstance(v, dict):
+            out[str(tid)] = v
+            continue
+        days = v.get('days_in_faction')
+        joined = now - (days or 0) * 86400 if days is not None else 0
+        if days is None or joined <= started:
+            out[str(tid)] = v.get('name', str(tid))
+    return out
+
+
+def leaderboard(totals, roster, limit=5):
+    """Highest first. Members with no hits are not ranked."""
+    names = names_of(roster)
+    rows = [{'torn_id': t, 'name': names.get(str(t), str(t)), 'hits': h}
+            for t, h in (totals or {}).items() if h > 0 and str(t) in names]
+    rows.sort(key=lambda r: (-r['hits'], r['name'].lower()))
+    return rows[:limit] if limit else rows
+
+
+def rank_of(torn_id, totals, roster):
+    """
+    (rank, ranked_count, hits) for one member, or (None, n, 0) if they have
+    no hits yet. Ranking only among people who actually hit keeps "rank 26 of
+    26" off the screen of somebody who simply has not started.
+    """
+    rows = leaderboard(totals, roster, limit=0)
+    for i, r in enumerate(rows, start=1):
+        if str(r['torn_id']) == str(torn_id):
+            return i, len(rows), r['hits']
+    return None, len(rows), 0
+
+
+def member_embed(event, totals, roster, ok, torn_id, now=None):
+    """
+    What a member sees: the top 5, where they sit, and a reason to keep going.
+
+    Deliberately does NOT name who is short. That list is management's, and
+    putting it in front of the whole faction turns a nudge into a pillory.
+    """
+    from utils.helpers import create_embed
+    from config import EMBED_COLOR_INFO, EMBED_COLOR_WARNING
+
+    day, days = day_of(event, now=now)
+    mn = event['minimum']
+    hits_total = sum((totals or {}).values())
+    lines = [f'**Day {day} of {days}**']
+    if event.get('target'):
+        pct = int(100 * hits_total / event['target']) if event['target'] else 0
+        lines.append(f"Faction: **{hits_total}** of **{event['target']}** "
+                     f"({pct}%)")
+    else:
+        lines.append(f'Faction: **{hits_total}** chain hits')
+
+    if not ok:
+        lines.append('\n⚠️ The attacks log could not be read, so '
+                     'these numbers are not current.')
+        return create_embed(title=f"⛓️ {event['name']}",
+                            description='\n'.join(lines),
+                            color=EMBED_COLOR_WARNING)
+
+    top = leaderboard(totals, roster, limit=5)
+    if top:
+        medal = {1: '\U0001f947', 2: '\U0001f948', 3: '\U0001f949'}
+        lines.append('\n\U0001f525 **Top hitters**')
+        lines.append('\n'.join(
+            f"{medal.get(i, f'`{i}.`')} **{r['name']}** {r['hits']}"
+            for i, r in enumerate(top, start=1)))
+
+    rank, ranked, mine = rank_of(torn_id, totals, roster)
+    if torn_id is None:
+        lines.append('\n-# Register with `/register` to see your own total '
+                     'here.')
+        return create_embed(title=f"⛓️ {event['name']}",
+                            description='\n'.join(lines),
+                            color=EMBED_COLOR_INFO)
+
+    lines.append('')
+    if rank:
+        lines.append(f'\U0001f464 **You: {mine} hits** · rank '
+                     f'**{rank}** of {ranked}')
+    else:
+        lines.append(f'\U0001f464 **You: 0 hits** · not on the board yet')
+
+    if mine < mn:
+        lines.append(f'⚠️ **{mn - mine} more** to clear the minimum.')
+    else:
+        lines.append('✅ Minimum cleared.')
+    # The whole reason the minimum must not read as a finish line: during
+    # Halloween every chain hit is also a treat roll, so stopping costs the
+    # member before it costs the faction.
+    # The NEAREST person above, not the leader. The leaderboard is sorted
+    # highest first, so taking the first row above them names whoever is
+    # winning, which is discouraging rather than motivating when you are
+    # fourth and they are forty hits away.
+    above = [r for r in leaderboard(totals, roster, limit=0)
+             if r['hits'] > mine]
+    chase = ''
+    if above and rank and rank > 1:
+        nearest = min(above, key=lambda r: r['hits'])
+        chase = (f" **{nearest['name']}** is only "
+                 f"{nearest['hits'] - mine} ahead.")
+    lines.append(f'-# Every hit from here is another treat roll.{chase}')
+
+    return create_embed(title=f"⛓️ {event['name']}",
+                        description='\n'.join(lines),
+                        color=EMBED_COLOR_INFO)

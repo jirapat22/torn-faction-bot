@@ -309,7 +309,8 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
                 'Chain events are not set up on this bot.', ephemeral=True)
             return
 
-        mgmt_only = action in ('event_start', 'event_end', 'event_cancel')
+        mgmt_only = action in ('event_start', 'event_end', 'event_cancel',
+                               'event_board')
         if mgmt_only and not is_management(interaction):
             await interaction.response.send_message(
                 embed=create_embed(title='Permission Denied',
@@ -413,12 +414,27 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
                 f"shortfall list.")
             return
 
-        await interaction.response.defer()
+        # The member view is private: 26 people checking should not fill the
+        # channel, and their standing is not everyone else's business.
+        await interaction.response.defer(ephemeral=(action == 'event'))
         full = (action == 'event_end')
         totals, ok = await chain_event_manager.tally(event, full=full)
         roster = await chain_event_manager.roster_for(event)
-        embed = progress_embed(event, totals, roster, ok)
 
+        if action == 'event':
+            from features.chain_events import member_embed
+            torn_id = None
+            vs = getattr(chain_event_manager, 'verification_system', None)
+            rec = (getattr(vs, 'verified_users', None) or {}).get(
+                str(interaction.user.id)) if vs else None
+            if rec:
+                torn_id = str(rec.get('torn_id'))
+            await interaction.followup.send(
+                embed=member_embed(event, totals, roster, ok, torn_id),
+                ephemeral=True)
+            return
+
+        embed = progress_embed(event, totals, roster, ok)
         if action != 'event_end':
             await interaction.followup.send(embed=embed)
             return
@@ -462,7 +478,8 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
             app_commands.Choice(name='Status - Current chain info', value='status'),
             app_commands.Choice(name='Report - Last chain top contributors', value='report'),
             app_commands.Choice(name='Board - Full participation board (Management)', value='board'),
-            app_commands.Choice(name='Event - Progress: who has hit what so far', value='event'),
+            app_commands.Choice(name='Event - Your hits, your rank, and the top 5', value='event'),
+            app_commands.Choice(name='Event board - Everyone, and who is short (Management)', value='event_board'),
             app_commands.Choice(name='Event start - Begin a chain event (Management)', value='event_start'),
             app_commands.Choice(name='Event end - Finish and show who fell short (Management)', value='event_end'),
             app_commands.Choice(name='Event cancel - Stop it, no strikes (Management)', value='event_cancel'),
