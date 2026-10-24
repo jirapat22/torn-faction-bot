@@ -24,11 +24,14 @@ Two deliberate restraints:
 import logging
 import time
 
+import discord
+
 from utils.helpers import create_embed, load_json, save_json
 from config import (
     EMBED_COLOR_WARNING,
     WELCOME_CHANNEL_ID,
     INACTIVITY_ALERTS_CHANNEL_ID,
+    MANAGEMENT_CHANNEL_ID,
 )
 
 logger = logging.getLogger(__name__)
@@ -78,9 +81,15 @@ def classify_lobby(members, verified_ids, now=None, state=None):
             continue
 
         rec = state.get(did) or {'nags': 0, 'last': 0}
-        if rec['nags'] < MAX_NAGS and (now - rec.get('last', 0)) >= NAG_EVERY_HOURS * 3600:
-            to_nag.append(m)
-            rec = {'nags': rec['nags'] + 1, 'last': now}
+        # A human said they would go and talk to this one. Stop the public
+        # nagging - the bot and a person chasing the same member on the same
+        # day reads as a pile-on - but keep tracking them, so escalation
+        # still fires if the conversation never happened.
+        if not rec.get('claimed'):
+            if (rec['nags'] < MAX_NAGS
+                    and (now - rec.get('last', 0)) >= NAG_EVERY_HOURS * 3600):
+                to_nag.append(m)
+                rec = dict(rec, nags=rec['nags'] + 1, last=now)
         state[did] = rec
 
         if hours_in >= ESCALATE_AFTER_DAYS * 24:
@@ -105,6 +114,87 @@ def nag_text(member_ids):
         '- Or link your Torn account to Discord in Torn itself, and the bot '
         'picks you up automatically overnight - no command needed.\n\n'
         '-# Never paste an API key in Discord. The bot never asks for one.')
+
+
+def dm_text():
+    """
+    What the bot says in a DM. Shorter than the public nag and without the
+    mentions, since a DM is already addressed to them.
+    """
+    return (
+        "Hey - you joined the Ascended Punks Discord but haven't registered "
+        "yet, so the bot can't see you: no war calls, no availability poll, "
+        "no payout line.\n\n"
+        "**Two ways to fix it**\n"
+        "- Run `/register torn_id:<your Torn ID>` in the server. Your ID is "
+        "the number in your Torn profile URL.\n"
+        "- Or link your Torn account to Discord inside Torn itself, and the "
+        "bot picks you up automatically overnight.\n\n"
+        "-# Never paste an API key in Discord. The bot never asks for one.")
+
+
+class LobbyChaseView(discord.ui.View):
+    """
+    The choice management gets when somebody has sat unregistered for a day:
+    let the bot DM them, or take it yourself.
+
+    Not persistent, so these buttons die on a restart. That is fine - the
+    check runs again and posts a fresh message; the state is what matters and
+    it lives in the JSON, not in the view.
+    """
+
+    def __init__(self, members, state_file=STATE_FILE):
+        super().__init__(timeout=7 * 86400)
+        self.members = members
+        self.state_file = state_file
+
+    @discord.ui.button(label='Bot DMs them',
+                       style=discord.ButtonStyle.primary)
+    async def dm_them(self, interaction, button):
+        await interaction.response.defer()
+        sent, failed = [], []
+        for m in self.members:
+            user = interaction.guild.get_member(int(m['id'])) if interaction.guild else None
+            if user is None:
+                failed.append(m['name'])
+                continue
+            try:
+                await user.send(dm_text())
+                sent.append(m['name'])
+            except Exception:
+                # Closed DMs are common and are NOT a silent success: saying
+                # nothing here would leave management thinking it was handled.
+                failed.append(m['name'])
+        for child in self.children:
+            child.disabled = True
+        await interaction.edit_original_response(view=self)
+        parts = []
+        if sent:
+            parts.append(f"✅ DM'd **{len(sent)}**: {', '.join(sent)}")
+        if failed:
+            parts.append(f"⚠️ Could not DM **{len(failed)}**: "
+                         f"{', '.join(failed)} — their DMs are closed, so "
+                         f"somebody has to catch them another way.")
+        await interaction.followup.send('\n'.join(parts) or 'Nobody to DM.')
+
+    @discord.ui.button(label="I'll message them",
+                       style=discord.ButtonStyle.secondary)
+    async def claim(self, interaction, button):
+        state = load_json(self.state_file, default={}) or {}
+        for m in self.members:
+            rec = state.get(str(m['id'])) or {'nags': 0, 'last': 0}
+            rec['claimed'] = True
+            rec['claimed_by'] = str(interaction.user.id)
+            state[str(m['id'])] = rec
+        save_json(self.state_file, state)
+        for child in self.children:
+            child.disabled = True
+        await interaction.response.edit_message(view=self)
+        await interaction.followup.send(
+            f"\U0001f44d {interaction.user.mention} has got "
+            f"**{len(self.members)}** of them. The bot will stop nagging them "
+            f"publicly, but will still escalate if they are still "
+            f"unregistered after {ESCALATE_AFTER_DAYS} days.")
 
 
 async def run(bot, guild, verification_system, state_file=STATE_FILE):
@@ -142,6 +232,32 @@ async def run(bot, guild, verification_system, state_file=STATE_FILE):
                 logger.error(f'Lobby nag failed: {e}')
         else:
             logger.warning('Lobby: welcome channel not found')
+
+    # Tell management the same day, with the decision attached. A public nag
+    # is easy for somebody to scroll past; a named person deciding to chase
+    # them is what actually converts a joiner.
+    if to_nag and MANAGEMENT_CHANNEL_ID:
+        mgmt = bot.get_channel(MANAGEMENT_CHANNEL_ID)
+        if mgmt:
+            rows = '\n'.join(
+                f'- <@{m["id"]}> ({m["name"]}) · '
+                f'{int((time.time() - m["joined_at"]) / 3600)}h in the server'
+                for m in to_nag[:20])
+            try:
+                await mgmt.send(
+                    embed=create_embed(
+                        title='\U0001f6aa Joined but never registered',
+                        description=(
+                            f'{rows}\n\n'
+                            f'They have been reminded in the welcome pit. '
+                            f'Until they register the bot cannot see them: no '
+                            f'war call, no poll, no payout line.'),
+                        color=EMBED_COLOR_WARNING),
+                    view=LobbyChaseView(to_nag[:20], state_file=state_file))
+            except Exception as e:
+                logger.error(f'Lobby management notice failed: {e}')
+        else:
+            logger.warning('Lobby: management channel not found')
 
     if to_escalate and INACTIVITY_ALERTS_CHANNEL_ID:
         channel = bot.get_channel(INACTIVITY_ALERTS_CHANNEL_ID)

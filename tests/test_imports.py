@@ -5285,6 +5285,61 @@ def test_chain_event_never_calls_an_unreadable_log_a_no_show():
     assert start > now - 400 * 3600 and notes, 'a 400h backdate must be pulled in'
 
 
+def test_lobby_claim_stops_nagging_but_never_stops_escalation():
+    """
+    A joiner who never registers is invisible to the bot, so management gets
+    told at the 24h mark and picks: let the bot DM them, or take it
+    themselves.
+
+    Claiming one must stop the PUBLIC nagging - the bot and a person chasing
+    the same member the same day is a pile-on - without stopping escalation.
+    If claiming silenced escalation too, "I'll message them" would become a
+    way to lose somebody quietly, which is the opposite of what it is for.
+    """
+    from features.lobby import (classify_lobby, NAG_AFTER_HOURS,
+                                ESCALATE_AFTER_DAYS, MAX_NAGS)
+
+    H = 3600
+    now = 2_000_000_000
+    member = [{'id': '1', 'name': 'NewGuy', 'joined_at': now - 30 * H}]
+
+    # --- first day of grace, then a nag ---
+    fresh = [{'id': '1', 'name': 'NewGuy', 'joined_at': now - 2 * H}]
+    nag, esc, _ = classify_lobby(fresh, set(), now=now)
+    assert not nag, f'nobody is chased in their first {NAG_AFTER_HOURS}h'
+
+    nag, esc, state = classify_lobby(member, set(), now=now)
+    assert [m['name'] for m in nag] == ['NewGuy']
+    assert state['1']['nags'] == 1
+
+    # --- a human takes it ---
+    state['1']['claimed'] = True
+    later = now + 72 * H
+    nag2, esc2, state2 = classify_lobby(member, set(), now=later, state=state)
+    assert not nag2, 'a claimed member must not be nagged publicly again'
+    assert [m['name'] for m in esc2] == ['NewGuy'], (
+        'claiming must NOT suppress escalation - otherwise "I will message '
+        'them" becomes a way to lose somebody quietly')
+    assert state2['1'].get('claimed') is True, 'the claim must survive a run'
+
+    # --- registering drops them entirely ---
+    nag3, esc3, state3 = classify_lobby(member, {'1'}, now=later, state=state2)
+    assert not nag3 and not esc3
+    assert state3 == {}, (
+        'somebody who registered or left stops being tracked, or the file '
+        'grows forever and a rejoin resumes mid-nag')
+
+    # --- nagging gives up after MAX_NAGS ---
+    st = {'1': {'nags': MAX_NAGS, 'last': 0}}
+    nag4, _esc4, _ = classify_lobby(member, set(), now=now, state=st)
+    assert not nag4, f'stops after {MAX_NAGS} nags'
+
+    # --- no join date is not a reason to pester anybody ---
+    unknown = [{'id': '2', 'name': 'NoDate', 'joined_at': 0}]
+    nag5, esc5, _ = classify_lobby(unknown, set(), now=now)
+    assert not nag5 and not esc5
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -5382,4 +5437,5 @@ if __name__ == '__main__':
     test_notices_never_turn_an_unreadable_channel_into_an_accusation()
     test_timezone_board_awake_means_their_clock_not_their_last_click()
     test_chain_event_never_calls_an_unreadable_log_a_no_show()
+    test_lobby_claim_stops_nagging_but_never_stops_escalation()
     print('All smoke tests passed.')
