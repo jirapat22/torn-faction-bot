@@ -241,6 +241,31 @@ class AvailabilityManager:
             self.data[poll_id][block_key].append(user_id_str)
             return True
 
+    def set_day_availability(self, poll_id: str, day_block_ids, chosen_ids,
+                             user_id) -> int:
+        """
+        Set exactly `chosen_ids` for one day, clearing that day's other blocks.
+
+        A dropdown submits the whole day at once, so this replaces rather than
+        toggles - and it touches ONLY the ids passed in `day_block_ids`, so
+        submitting Sunday can never wipe what somebody picked for Monday.
+
+        Returns how many blocks they are now down for that day.
+        """
+        if poll_id not in self.data:
+            self.data[poll_id] = {}
+        uid = str(user_id)
+        chosen = {str(c) for c in (chosen_ids or ())}
+        for bid in day_block_ids:
+            key = str(bid)
+            holders = self.data[poll_id].setdefault(key, [])
+            if key in chosen:
+                if uid not in holders:
+                    holders.append(uid)
+            elif uid in holders:
+                holders.remove(uid)
+        return len(chosen)
+
     ROSTER_FIELD = "\U0001f9cd Who's in"
 
     def build_roster(self, poll_id: str, guild, max_chars: int = 1000) -> str:
@@ -564,7 +589,7 @@ class AvailabilityManager:
         embed.set_footer(text=f'Block size: {WAR_POLL_BLOCK_HOURS}h | '
                               f'Only {verified_role_name} members can vote')
 
-        view = AvailabilityView(self, poll_id, blocks, verified_role_name)
+        view = AvailabilityDropdownView(self, poll_id, blocks, verified_role_name)
         message = await channel.send(embed=embed, view=view)
         self.polls[poll_id]['message_id'] = message.id
         await self.save_polls()
@@ -700,13 +725,17 @@ def block_times(b):
             f" · you: <t:{b['start_unix']}:t>–<t:{b['end_unix']}:t>")
 
 
-def block_list_lines(blocks):
+def block_list_lines(blocks, use_buttons=False):
     """
     The block list for a poll body, grouped by date.
 
-    Also names any block that will have no button. Listing an option nobody
-    can click is a worse failure than refusing to make the poll, because it
-    looks like the member chose not to answer.
+    Also names anything the viewer will not be able to vote for. Listing an
+    option nobody can click is a worse failure than refusing to make the
+    poll, because it looks like the member chose not to answer.
+
+    The two layouts run out of room differently: buttons cap at 25 blocks on
+    the message, day menus cap at 5 days (one action row each) but hold 25
+    blocks within each day.
     """
     lines, current_date = [], None
     for b in blocks:
@@ -716,14 +745,158 @@ def block_list_lines(blocks):
             lines.append(f"**{b['date']}:**")
             current_date = b['date']
         lines.append(block_times(b))
-    unvotable = blocks[MAX_POLL_BUTTONS:]
-    if unvotable:
-        names = ', '.join(b['label'] for b in unvotable)
-        lines.append('')
-        lines.append(f'⚠️ **{names}** have no button – Discord allows only '
-                     f'{MAX_POLL_BUTTONS} per message. Use a bigger block size '
-                     f'or a shorter window.')
+    if use_buttons:
+        unvotable = blocks[MAX_POLL_BUTTONS:]
+        if unvotable:
+            names = ', '.join(b['label'] for b in unvotable)
+            lines.append('')
+            lines.append(
+                f'⚠️ **{names}** have no button – Discord allows '
+                f'only {MAX_POLL_BUTTONS} per message. Use a bigger block '
+                f'size, a shorter window, or drop the old_buttons option.')
+    else:
+        extra_days = [d for d, _ in _day_groups(blocks)[MAX_POLL_DAYS:]]
+        if extra_days:
+            lines.append('')
+            lines.append(
+                f'⚠️ **{", ".join(extra_days)}** have no menu – '
+                f'Discord fits only {MAX_POLL_DAYS} on a message. Split the '
+                f'poll into two.')
     return lines
+
+
+# Discord allows 5 action rows, so 5 day-menus on one message. Each menu
+# holds 25 options, which is more blocks than a day can have.
+MAX_POLL_DAYS = 5
+
+
+def _day_groups(blocks):
+    """Blocks grouped by date, in order. Used to build one menu per day."""
+    days, order = {}, []
+    for b in blocks:
+        if b['date'] not in days:
+            days[b['date']] = []
+            order.append(b['date'])
+        days[b['date']].append(b)
+    return [(d, days[d]) for d in order]
+
+
+class DaySelect(discord.ui.Select):
+    """
+    One day's blocks as a multi-select.
+
+    Replaces buttons because a 24-block poll meant 24 clicks and 24
+    confirmations. The ticks always start empty: a poll message is shared by
+    everyone, so Discord cannot pre-tick one viewer's own picks on it. That
+    is why the confirmation says the day was replaced rather than added to.
+    """
+
+    def __init__(self, manager, poll_id, date, day_blocks, verified_role_name):
+        self.manager = manager
+        self.poll_id = poll_id
+        self.date = date
+        self.day_blocks = day_blocks
+        self.verified_role_name = verified_role_name
+        options = []
+        for b in day_blocks[:25]:
+            count = manager.get_block_count(poll_id, b['id'])
+            options.append(discord.SelectOption(
+                label=f"{b['label']} · {b['start_time']}–{b['end_time']} TCT",
+                value=str(b['id']),
+                description=(f'{count} going' if count else 'nobody yet')))
+        super().__init__(
+            placeholder=f'{date} — pick every slot you can make',
+            min_values=0, max_values=len(options), options=options,
+            custom_id=f'availday_{poll_id}_{date}')
+
+    async def callback(self, interaction: discord.Interaction):
+        poll = self.manager.polls.get(self.poll_id, {})
+        poll_end = poll.get('poll_end_unix', 0)
+        if poll.get('closed') or (poll_end and int(datetime.now(timezone.utc).timestamp()) > poll_end):
+            await interaction.response.send_message('This poll has closed.',
+                                                    ephemeral=True)
+            return
+
+        verified_role = discord.utils.find(
+            lambda r: r.name.lower() == self.verified_role_name.lower(),
+            interaction.user.roles)
+        if not verified_role:
+            await interaction.response.send_message(
+                f'You must have the **{self.verified_role_name}** role to set '
+                f'availability. Please use `/register` with your Torn ID first.',
+                ephemeral=True)
+            return
+
+        try:
+            ids = [b['id'] for b in self.day_blocks]
+            n = self.manager.set_day_availability(
+                self.poll_id, ids, self.values, interaction.user.id)
+            await self.manager.save_data()
+
+            # Refresh every menu's counts, not just this one: another member
+            # may have answered since this message was last drawn.
+            for item in self.view.children:
+                if isinstance(item, DaySelect):
+                    for opt in item.options:
+                        c = self.manager.get_block_count(self.poll_id, opt.value)
+                        opt.description = f'{c} going' if c else 'nobody yet'
+
+            embed = None
+            if interaction.message and interaction.message.embeds:
+                embed = interaction.message.embeds[0]
+                roster = self.manager.build_roster(self.poll_id, interaction.guild)
+                if roster:
+                    idx = next((i for i, f in enumerate(embed.fields)
+                                if f.name == AvailabilityManager.ROSTER_FIELD), None)
+                    if idx is None:
+                        embed.add_field(name=AvailabilityManager.ROSTER_FIELD,
+                                        value=roster, inline=False)
+                    else:
+                        embed.set_field_at(idx, name=AvailabilityManager.ROSTER_FIELD,
+                                           value=roster, inline=False)
+
+            if embed is not None:
+                await interaction.response.edit_message(embed=embed, view=self.view)
+            else:
+                await interaction.response.edit_message(view=self.view)
+
+            chosen = [b for b in self.day_blocks if str(b['id']) in set(self.values)]
+            if chosen:
+                times = ' · '.join(
+                    f"{b['start_time']}–{b['end_time']}" for b in chosen)
+                msg = (f"✅ **{self.date}** set: "
+                       f"{', '.join(b['label'] for b in chosen)}\n"
+                       f"`{times} TCT`\n"
+                       f"-# This replaced your earlier picks for {self.date}.")
+            else:
+                msg = (f"❌ **{self.date}**: marked you down for nothing.\n"
+                       f"-# This cleared your earlier picks for {self.date}.")
+            await interaction.followup.send(msg, ephemeral=True)
+
+        except discord.NotFound:
+            await interaction.response.send_message(
+                'This availability poll no longer exists.', ephemeral=True)
+        except Exception as e:
+            logger.error(f'Error in availability select callback: {e}')
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    'Something went wrong. Please try again.', ephemeral=True)
+
+
+class AvailabilityDropdownView(discord.ui.View):
+    """One multi-select per day. Two days is two menus, not 24 buttons."""
+
+    def __init__(self, manager, poll_id, blocks, verified_role_name):
+        super().__init__(timeout=None)
+        groups = _day_groups(blocks)
+        if len(groups) > MAX_POLL_DAYS:
+            logger.error(
+                f'Availability: poll {poll_id} spans {len(groups)} days but '
+                f'only {MAX_POLL_DAYS} menus fit on a message - '
+                f'{", ".join(d for d, _ in groups[MAX_POLL_DAYS:])} unvotable')
+        for date, day_blocks in groups[:MAX_POLL_DAYS]:
+            self.add_item(DaySelect(manager, poll_id, date, day_blocks,
+                                    verified_role_name))
 
 
 class AvailabilityView(discord.ui.View):
@@ -882,7 +1055,8 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
         block_length='[Setup] Hours per time block (1-6, default: 2)',
         poll_duration='[Setup] Hours until poll closes (default: 24)',
         member='[Activity] Check one member instead of the whole roster',
-        confirm='[Delete] Required to delete a poll that already has answers'
+        confirm='[Delete] Required to delete a poll that already has answers',
+        old_buttons='[Setup] Use the old one-button-per-block layout instead of day menus'
     )
     @app_commands.choices(action=[
         app_commands.Choice(name='Setup - Create availability poll (Management)', value='setup'),
@@ -903,7 +1077,8 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
         block_length: int = 2,
         poll_duration: int = 24,
         member: Optional[discord.Member] = None,
-        confirm: bool = False
+        confirm: bool = False,
+        old_buttons: bool = False
     ):
         """Unified availability command"""
         action_value = action.value
@@ -1014,7 +1189,7 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
             manager.polls[poll_id]['poll_end_unix'] = poll_end_unix
             manager.polls[poll_id]['closed'] = False
 
-            block_list = block_list_lines(blocks)
+            block_list = block_list_lines(blocks, use_buttons=old_buttons)
 
             if start_date == actual_end_date or (start_dt == end_dt - timedelta(days=1) and end_time == '00:00'):
                 title = f"🕒 Availability Poll – {start_date}"
@@ -1039,7 +1214,12 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
             )
             embed.set_footer(text=f"Block size: {block_length}h | Only {verified_role_name} members can vote")
 
-            view = AvailabilityView(manager, poll_id, blocks, verified_role_name)
+            # Day menus by default: a 24-block poll was 24 clicks and 24
+            # confirmations. old_buttons is the way back if they misbehave.
+            use_buttons = old_buttons
+            manager.polls[poll_id]['style'] = 'buttons' if use_buttons else 'menus'
+            view = (AvailabilityView if use_buttons else AvailabilityDropdownView)(
+                manager, poll_id, blocks, verified_role_name)
             if poll_target.id == interaction.channel.id:
                 message = await interaction.followup.send(embed=embed, view=view)
             else:
@@ -1466,8 +1646,13 @@ async def restore_availability_views(bot, manager: AvailabilityManager, verified
             if not channel:
                 continue
 
-            # Re-create view and add to bot
-            view = AvailabilityView(manager, poll_id, blocks, verified_role_name)
+            # Re-create the view the poll was POSTED with. A poll's message
+            # already carries its components; handing it the other style
+            # after a restart would leave every control dead, because the
+            # custom_ids would no longer match what is on the message.
+            use_buttons = poll.get('style') == 'buttons'
+            view = (AvailabilityView if use_buttons else AvailabilityDropdownView)(
+                manager, poll_id, blocks, verified_role_name)
             bot.add_view(view, message_id=message_id)
             logger.info(f'Restored availability view for {poll_id}')
 

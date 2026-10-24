@@ -5340,6 +5340,69 @@ def test_lobby_claim_stops_nagging_but_never_stops_escalation():
     assert not nag5 and not esc5
 
 
+def test_poll_day_menu_replaces_only_its_own_day():
+    """
+    A day menu submits a whole day at once, so it REPLACES that day rather
+    than toggling one block. The failure that would actually hurt is it
+    replacing more than its own day: answering Sunday must never clear what
+    somebody picked for Monday, or people lose answers they already gave -
+    and answering the poll is what exempts them from the absence strike.
+
+    Ticks always start empty, because a poll message is shared and Discord
+    cannot pre-tick one viewer's picks on it. That is a known trade, not a
+    bug, which is why the confirmation says the day was replaced.
+    """
+    from features.availability import AvailabilityManager, _day_groups
+
+    m = AvailabilityManager.__new__(AvailabilityManager)
+    m.data = {}
+    m.polls = {}
+    POLL = 'p1'
+
+    sunday = [1, 2, 3]
+    monday = [4, 5, 6]
+
+    # Sunday: blocks 1 and 3.
+    m.set_day_availability(POLL, sunday, ['1', '3'], 'u1')
+    # Monday: block 5.
+    m.set_day_availability(POLL, monday, ['5'], 'u1')
+    got = {k: v for k, v in m.data[POLL].items() if v}
+    assert got == {'1': ['u1'], '3': ['u1'], '5': ['u1']}, got
+
+    # Re-answering Sunday replaces Sunday only.
+    m.set_day_availability(POLL, sunday, ['2'], 'u1')
+    got = {k: v for k, v in m.data[POLL].items() if v}
+    assert got == {'2': ['u1'], '5': ['u1']}, (
+        f'Monday must survive a Sunday edit: {got}')
+
+    # Clearing a day removes only that day.
+    m.set_day_availability(POLL, sunday, [], 'u1')
+    got = {k: v for k, v in m.data[POLL].items() if v}
+    assert got == {'5': ['u1']}, got
+
+    # One member's answer never disturbs another's.
+    m.set_day_availability(POLL, monday, ['4', '5'], 'u2')
+    assert sorted(m.data[POLL]['5']) == ['u1', 'u2'], m.data[POLL]['5']
+    m.set_day_availability(POLL, monday, [], 'u2')
+    assert m.data[POLL]['5'] == ['u1'], (
+        f'u2 clearing their day must not remove u1: {m.data[POLL]["5"]}')
+
+    # No double-add when the same pick is submitted twice.
+    m.set_day_availability(POLL, monday, ['5'], 'u1')
+    m.set_day_availability(POLL, monday, ['5'], 'u1')
+    assert m.data[POLL]['5'] == ['u1'], m.data[POLL]['5']
+
+    # --- grouping drives one menu per day, in order ---
+    blocks = [
+        {'id': 1, 'date': '28-10-2026', 'label': 'A'},
+        {'id': 2, 'date': '28-10-2026', 'label': 'B'},
+        {'id': 3, 'date': '29-10-2026', 'label': 'C'},
+    ]
+    groups = _day_groups(blocks)
+    assert [d for d, _ in groups] == ['28-10-2026', '29-10-2026']
+    assert [len(b) for _, b in groups] == [2, 1]
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -5438,4 +5501,5 @@ if __name__ == '__main__':
     test_timezone_board_awake_means_their_clock_not_their_last_click()
     test_chain_event_never_calls_an_unreadable_log_a_no_show()
     test_lobby_claim_stops_nagging_but_never_stops_escalation()
+    test_poll_day_menu_replaces_only_its_own_day()
     print('All smoke tests passed.')
