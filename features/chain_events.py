@@ -473,7 +473,7 @@ class PresetSelect(discord.ui.Select):
             return
         msg = (f"⛓️ **{ev['name']}** started — running "
                f"**{hours}h**, minimum **{ev['minimum']}** hits each.\n"
-               f"Check it any time with `/chain view:Event`.")
+               f"Check it any time: type `/chain` and pick **Event**.")
         if notes:
             msg += '\n-# ' + ' · '.join(notes)
         await interaction.response.edit_message(content=msg, view=None)
@@ -584,28 +584,38 @@ def announce_text(event):
     days = max(1, int(round((int(event['end']) - int(event['start'])) / 86400)))
     target = (f"\n\U0001f3af **Target:** {event['target']} chain hits "
               f"as a faction" if event.get('target') else '')
+    mn = event['minimum']
+    # A worked example beats a rule. Split the minimum across three days so
+    # "they add up" stops being an abstract claim.
+    a = max(1, mn // 3)
+    b = max(1, mn // 3)
+    c = max(0, mn - a - b)
     return (
         f"⛓️ **{event['name']} is live**\n\n"
-        f"⏱️ **Counting from** `{start:%d %b %H:%M} TCT` "
-        f"**to** `{end:%d %b %H:%M} TCT` ({days} days)\n"
-        f"✅ **Minimum:** {event['minimum']} chain hits each"
+        f"⏱️ **Counting:** `{start:%d %b %H:%M}` → "
+        f"`{end:%d %b %H:%M} TCT` ({days} days)\n"
+        f"✅ **You need: {mn} chain hits**"
         f"{target}\n\n"
-        f"**What counts:** any hit of yours that lands in a chain, in any "
-        f"chain during that window. They all add up to one total — you do "
-        f"not need {event['minimum']} in a single chain.\n\n"
+        f"__**How it works**__\n"
+        f"• Only hits you make **during a chain** count\n"
+        f"• Every chain in that window adds to the **same total**\n"
+        f"• So {a} hits today + {b} tomorrow + {c} later = {mn}. Done.\n"
+        f"• You do **not** need {mn} in one chain\n\n"
         + (
-            f"**It does not matter what time you set your own Halloween "
-            f"event to start.** This window opens at or before the earliest "
-            f"anyone's can ({EVENT_EARLIEST_TCT_HOUR:02d}:00 TCT), so every "
-            f"chain hit you make counts whichever start time you picked.\n\n"
+            f"__**Your Halloween start time does not matter**__\n"
+            f"Some of you set {EVENT_EARLIEST_TCT_HOUR:02d}:00, some set "
+            f"later. Counting starts at `{start:%H:%M} TCT`, which is before "
+            f"the earliest anyone's event can begin — so nobody loses hits "
+            f"for picking a different time.\n\n"
             if start.hour <= EVENT_EARLIEST_TCT_HOUR else
-            # Saying "every hit counts" on a window that opens late would be
-            # the one sentence a member relies on and gets struck by.
-            f"⚠️ **Hits before `{start:%H:%M} TCT` do not count.** "
-            f"Halloween events can start from "
-            f"{EVENT_EARLIEST_TCT_HOUR:02d}:00 TCT, so if you began earlier "
-            f"than this window, those earlier hits are not in your total.\n\n"
+            # Promising "every hit counts" on a window that opens late is the
+            # one sentence a member would rely on and be struck by.
+            f"⚠️ __**Hits before `{start:%H:%M} TCT` do not count**__\n"
+            f"Halloween events can start as early as "
+            f"`{EVENT_EARLIEST_TCT_HOUR:02d}:00 TCT`. If yours began before "
+            f"`{start:%H:%M}`, those earlier hits are **not** in your total.\n\n"
         )
-        + f"Check yourself any time with `/chain view:Event` — it shows "
-          f"who has hit what so far."
+        + f"__**Check your own total**__\n"
+          f"Type `/chain` and pick **Event** from the list. It shows everyone's "
+          f"hits so far and who is still short."
     )

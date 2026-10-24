@@ -5529,7 +5529,7 @@ def test_chain_event_scheduling_counts_from_when_it_was_meant_to_start():
     text_early = announce_text({'name': 'H', 'start': early,
                                 'end': early + 120 * 3600,
                                 'minimum': 10, 'target': 500})
-    assert 'does not matter what time' in text_early, text_early
+    assert 'start time does not matter' in text_early, text_early
     assert 'do not count' not in text_early
 
     late = parse_tct('25-10-2026 16:00')[0]
@@ -5539,11 +5539,15 @@ def test_chain_event_scheduling_counts_from_when_it_was_meant_to_start():
     assert 'do not count' in text_late, (
         'a window opening after the earliest possible event start must say '
         'so, not promise every hit counts')
-    assert 'does not matter what time' not in text_late
+    assert 'start time does not matter' not in text_late
 
     # Both always explain that hits add up across chains.
     for t in (text_early, text_late):
-        assert 'not need 10 in a single chain' in t, t
+        assert 'not** need 10 in one chain' in t, t
+        # The command is picked from a list, not typed as "view:Event".
+        assert 'view:Event' not in t, (
+            'members cannot type slash-command shorthand; the text must say '
+            'to pick Event from the list')
 
     # --- due(): the loop only fires an event if this says it is time ---
     from features.chain_events import ChainEventManager
