@@ -5194,6 +5194,79 @@ def test_targets_and_retals_decide_what_to_post():
     assert 'Nobody yet' in build_board_embed({}, {}, {}, now).description
 
 
+def test_retals_show_live_status_and_the_board_keeps_reasons():
+    """
+    A retal is only worth chasing if the attacker can be hit now, so the
+    message leads with their live status. Status lookups are grouped by
+    faction: in a war, ten open retals from one enemy faction must cost one
+    call, not ten, or the 30s loop eats the API budget.
+    """
+    import asyncio
+    from features import targets as T
+    now = 10_000
+
+    # status headline, and the colour bar follows it (green = go)
+    head, colour = T.retal_status({'state': 'Okay'}, now)
+    assert 'hit now' in head and colour == T.EMBED_COLOR_SUCCESS
+    head, colour = T.retal_status({'state': 'Hospital', 'until': now + 600}, now)
+    assert 'Hospital' in head and f'<t:{now + 600}:R>' in head and colour == T.EMBED_COLOR_CRITICAL
+    assert 'Mexico' in T.retal_status({'state': 'Traveling', 'description': 'Traveling to Mexico'}, now)[0]
+    assert 'unavailable' in T.retal_status(None, now)[0]
+
+    retal = {'attacker_id': '9', 'attacker_name': 'Oceiros', 'level': 54,
+             'status': {'state': 'Okay'}, 'expires': now + 200, 'retaliated_by': None,
+             'hits': [{'defender_name': 'Ellanna', 'result': 'Mugged', 'ended': now - 100}]}
+    embed = T.build_retal_embed(retal, {'bs_estimate': 467_000, 'bs_estimate_human': '467k',
+                                        'last_updated': now - 9 * 86400}, now)
+    assert 'Oceiros' in embed.title and 'Lv54' in embed.title and '467k' in embed.title
+    assert embed.description.startswith('\U0001f7e2'), 'status leads'
+    assert 'est. 9 days ago' in embed.footer.text and T.RETAL_FOOTER in embed.footer.text
+    assert embed.colour.value == T.EMBED_COLOR_SUCCESS
+
+    # reasons ride on the board line, in italics, cut short and escaped
+    board = {'1': {'name': 'A', 'reason': 'mugged me twice'},
+             '2': {'name': 'B', 'reason': 'x' * 100},
+             '3': {'name': 'C', 'reason': 'has *stars* and _bars_'}}
+    text = T.build_board_embed(board, {}, {}, now).description
+    assert '*mugged me twice*' in text
+    assert 'x' * T.REASON_SHORT not in text and '…' in text, 'long reason cut'
+    assert '\\*stars\\*' in text, 'markdown in a reason is escaped'
+
+    # one faction call for two attackers in the same faction; a factionless
+    # attacker gets a profile lookup; a failed lookup keeps the old status
+    calls = {'faction': [], 'profile': []}
+
+    async def fake_faction(fid, selections='basic', **_kw):
+        calls['faction'].append(fid)
+        return {'members': {'1': {'level': 10, 'status': {'state': 'Okay'}},
+                            '2': {'level': 20, 'status': {'state': 'Hospital', 'until': now + 60}}}}
+
+    async def fake_profile(tid, selections='profile', **_kw):
+        calls['profile'].append(tid)
+        return None if tid == '4' else {'level': 30, 'status': {'state': 'Abroad', 'description': 'In Japan'}}
+
+    retals = {
+        '1': {'attacker_faction': '777', 'expires': now + 100},
+        '2': {'attacker_faction': '777', 'expires': now + 100},
+        '3': {'attacker_faction': '', 'expires': now + 100},
+        '4': {'attacker_faction': '', 'expires': now + 100,
+              'status': {'state': 'Okay'}, 'status_sig': ['Okay', None, None], 'level': 5},
+        '5': {'attacker_faction': '777', 'expires': now + 100, 'retaliated_by': 'PATTO'},
+    }
+    saved = T.fetch_any_faction_data, T.fetch_player_data
+    T.fetch_any_faction_data, T.fetch_player_data = fake_faction, fake_profile
+    try:
+        manager = T.TargetManager(bot=None)
+        changed = asyncio.run(manager._refresh_statuses(retals, now))
+    finally:
+        T.fetch_any_faction_data, T.fetch_player_data = saved
+    assert calls['faction'] == ['777'], calls
+    assert sorted(calls['profile']) == ['3', '4'], 'answered retal (5) is not looked up'
+    assert sorted(changed) == ['1', '2', '3']
+    assert retals['2']['status']['state'] == 'Hospital' and retals['3']['level'] == 30
+    assert retals['4']['status'] == {'state': 'Okay'}, 'failed lookup keeps last status'
+
+
 def test_targets_channel_is_created_once_when_both_loops_start_together():
     """
     The retal loop and the board loop start in the same second on boot and
@@ -6568,5 +6641,6 @@ if __name__ == '__main__':
     test_chain_report_and_board_do_not_overstate_what_they_know()
     test_poll_names_who_did_not_answer()
     test_targets_and_retals_decide_what_to_post()
+    test_retals_show_live_status_and_the_board_keeps_reasons()
     test_targets_channel_is_created_once_when_both_loops_start_together()
     print('All smoke tests passed.')

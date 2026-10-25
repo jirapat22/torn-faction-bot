@@ -36,7 +36,7 @@ import discord
 from discord import app_commands
 
 from utils.helpers import load_json, save_json, create_embed, is_management
-from utils.torn_api import (fetch_faction_attacks, fetch_player_data,
+from utils.torn_api import (fetch_faction_attacks, fetch_player_data, fetch_any_faction_data,
                             fetch_ffscouter_stats)
 from config import (TORN_FACTION_ID, WAR_CHANNEL_ID, VERIFIED_ROLE_NAME, GUILD_ID,
                     EMBED_COLOR_INFO, EMBED_COLOR_SUCCESS, EMBED_COLOR_WARNING,
@@ -51,16 +51,19 @@ RETAL_WINDOW = 300          # Torn's retaliation bonus lasts 5 minutes
 TARGET_DAYS = 7
 PER_MEMBER_CAP = 5
 REASON_MAX = 80
+REASON_SHORT = 40      # what fits on the board line; the rest is in List
 
 # Results where the attacker actually took something from us. 'Lost',
 # 'Stalemate', 'Escape' and friends are attacks we won or nobody did.
 LANDED = {'Hospitalized', 'Mugged', 'Attacked'}
 
 BOARD_TITLE = '\U0001f3af Target board'
-RETAL_PREFIX = '⚔️ Retal'
+RETAL_PREFIX = '⚔️'
 RETALIATED_PREFIX = '✅ Retaliated'
 
 ADD_BUTTON_ID = 'tgt:retal:add'
+# Marks a message as a retal for the startup sweep; titles vary too much.
+RETAL_FOOTER = 'deletes itself when the window closes'
 
 
 def profile_url(torn_id):
@@ -114,6 +117,7 @@ def landed_hits(attacks, faction_id):
             'code': a.get('code') or code,
             'attacker_id': str(a['attacker_id']),
             'attacker_name': a.get('attacker_name') or str(a['attacker_id']),
+            'attacker_faction': str(a.get('attacker_faction') or ''),
             'defender_name': a.get('defender_name') or str(a.get('defender_id')),
             'result': a['result'],
             'ended': int(a.get('timestamp_ended') or 0),
@@ -144,6 +148,7 @@ def merge_hit(retals, hit):
                           'result': hit['result'], 'ended': hit['ended']})
     retal['expires'] = max(retal['expires'], hit['ended'] + RETAL_WINDOW)
     retal['attacker_name'] = hit['attacker_name']
+    retal['attacker_faction'] = hit.get('attacker_faction', '')
     retal['retaliated_by'] = None
     return True
 
@@ -210,18 +215,48 @@ def status_line(profile, now):
     return (5, 0), ''
 
 
+def stats_age(ff, now):
+    """'est. today' / 'est. 9 days ago', or '' when FFScouter gave no date."""
+    updated = int((ff or {}).get('last_updated') or 0)
+    if not updated:
+        return ''
+    days = max(0, int((now - updated) // 86400))
+    return 'est. today' if days == 0 else ('est. 1 day ago' if days == 1 else f'est. {days} days ago')
+
+
 def stats_line(ff, now):
     """'~1.2m stats (est. 3 days ago)', or 'stats unknown' when FFScouter has
     nothing. Never a made-up number."""
     if not ff or not ff.get('bs_estimate'):
         return 'stats unknown'
     human = ff.get('bs_estimate_human') or f"{int(ff['bs_estimate']):,}"
-    updated = int(ff.get('last_updated') or 0)
-    if not updated:
-        return f'~{human} stats'
-    days = max(0, int((now - updated) // 86400))
-    age = 'today' if days == 0 else ('1 day ago' if days == 1 else f'{days} days ago')
-    return f'~{human} stats (est. {age})'
+    age = stats_age(ff, now)
+    return f'~{human} stats ({age})' if age else f'~{human} stats'
+
+
+def retal_status(status, now):
+    """
+    (headline, colour) for the attacker's live status on a retal: the first
+    thing a member needs is "can I hit them right now", so it leads.
+    `status` is Torn's status block, or None when it could not be read.
+    """
+    status = status or {}
+    state = status.get('state')
+    until = int(status.get('until') or 0)
+    desc = status.get('description') or ''
+    if state == 'Okay':
+        return '\U0001f7e2 **Okay, hit now**', EMBED_COLOR_SUCCESS
+    if state == 'Hospital':
+        out = f'out <t:{until}:R>' if until > now else 'out any moment'
+        return f'\U0001f534 **Hospital**, {out}', EMBED_COLOR_CRITICAL
+    if state == 'Abroad':
+        return f'\U0001f535 **{desc or "Abroad"}**', EMBED_COLOR_WARNING
+    if state == 'Traveling':
+        return f'\u2708\ufe0f **{desc or "Flying"}**', EMBED_COLOR_WARNING
+    if state in ('Jail', 'Federal'):
+        out = f', out <t:{until}:R>' if until > now else ''
+        return f'\u26d3\ufe0f **{desc or "Jail"}**{out}', EMBED_COLOR_WARNING
+    return '\u26aa Status unavailable', EMBED_COLOR_INFO
 
 
 def prune_targets(targets, now):
@@ -240,8 +275,8 @@ def build_board_embed(targets, profiles, ff, now):
     The pinned board: one short line per target, grouped by status so "who
     can I hit right now" is always the first block. Weakest first inside a
     group (hospital and jail by who is out soonest). The name is the attack
-    link; who added it and why live in /target action:List, because mid-fight
-    nobody reads them and they doubled the board's height.
+    link and the reason rides at the end in italics; who added it lives in
+    /target action:List, because a second line per target doubled the board.
 
     `profiles` is {torn_id: profile or None}, `ff` the FFScouter dict.
     """
@@ -262,6 +297,13 @@ def build_board_embed(targets, profiles, ff, now):
         parts.append(human or 'stats ?')
         if detail:
             parts.append(detail)
+        reason = (t.get('reason') or '').strip()
+        if reason:
+            # Cut so one long grudge cannot wrap the line; the full text is
+            # in /target action:List. Escaped so a * or _ in it cannot
+            # break the formatting of the lines after it.
+            short = reason if len(reason) <= REASON_SHORT else reason[:REASON_SHORT - 1].rstrip() + '\u2026'
+            parts.append(f'*{discord.utils.escape_markdown(short)}*')
         groups.setdefault(section, []).append((order, ' \u00b7 '.join(parts)))
 
     blocks, shown = [], 0
@@ -301,22 +343,32 @@ def build_board_embed(targets, profiles, ff, now):
 
 
 def build_retal_embed(retal, ff, now):
-    attacker = f"{retal['attacker_name']} [{retal['attacker_id']}]"
-    hits = ', '.join(f"{h['result']} **{h['defender_name']}**" for h in retal['hits'][-5:])
+    """
+    Status first, because "can I hit them right now" decides whether anyone
+    bothers. Title: who, level, rough stats. Then the live status, what they
+    did to us, and the countdown. The colour bar follows the status (green =
+    go), and turns green with a tick once one of us has hit back.
+    """
+    name = retal['attacker_name']
+    level = retal.get('level')
+    human = (ff or {}).get('bs_estimate_human') if (ff or {}).get('bs_estimate') else None
+    head = ' \u00b7 '.join([name] + ([f'Lv{level}'] if level else []) + [human or 'stats ?'])
+    headline, color = retal_status(retal.get('status'), now)
+    hits = '\n'.join(f"{h['result']} **{discord.utils.escape_markdown(h['defender_name'])}**"
+                      for h in retal['hits'][-5:])
     if retal.get('retaliated_by'):
-        title = f"{RETALIATED_PREFIX} by {retal['retaliated_by']}"
+        title = f"{RETALIATED_PREFIX} by {retal['retaliated_by']}: {name}"
         color = EMBED_COLOR_SUCCESS
-        closing = 'Done. No need for anyone else to hit them.'
+        closing = 'Done, no need for anyone else to go.'
     else:
-        title = f'{RETAL_PREFIX}: {attacker}'
-        color = EMBED_COLOR_CRITICAL
-        closing = f"Window closes <t:{retal['expires']}:R>"
-    embed = create_embed(
-        title=title[:256],
-        description=(f'[{attacker}]({profile_url(retal["attacker_id"])}) hit us: {hits}\n'
-                     f'{stats_line(ff, now)}\n{closing}'),
-        color=color)
-    embed.set_footer(text='This message deletes itself when the 5 minutes are up.')
+        title = f'{RETAL_PREFIX} {head}'
+        closing = f"\u23f1 Closes <t:{retal['expires']}:R>"
+    embed = create_embed(title=title[:256],
+                         description=f'{headline}\n{hits}\n{closing}', color=color)
+    embed.url = profile_url(retal['attacker_id'])
+    age = stats_age(ff, now)
+    embed.set_footer(text=' \u00b7 '.join(
+        ['Live status'] + ([f'stats {age}'] if age else []) + [RETAL_FOOTER]))
     return embed
 
 
@@ -574,11 +626,58 @@ class TargetManager:
         known = {r.get('message_id') for r in self.data['retals'].values()}
         removed = 0
         async for msg in ch.history(limit=100):
-            if (msg.author.id == self.bot.user.id and msg.embeds and msg.id not in known
-                    and (msg.embeds[0].title or '').startswith((RETAL_PREFIX, RETALIATED_PREFIX))):
+            # Matched on the footer, which every retal version has carried,
+            # never the title (which changes with status and layout). The
+            # board's footer says "drop off", so it can never match.
+            footer = (msg.embeds[0].footer.text or '') if msg.embeds else ''
+            if (msg.author.id == self.bot.user.id and msg.id not in known
+                    and 'deletes itself' in footer):
                 await self._delete(ch, msg.id)
                 removed += 1
         return removed
+
+    async def _refresh_statuses(self, retals, now):
+        """
+        Fetch the current Torn status of each open, unanswered attacker and
+        return the keys whose status changed.
+
+        Grouped by faction: one faction lookup returns every member's status,
+        so ten enemies from the same faction in a war cost one call, not ten.
+        Only attackers with no faction get a profile lookup each. A failed
+        lookup keeps the last known status rather than blanking it.
+        """
+        open_ = {k: r for k, r in retals.items()
+                 if r['expires'] > now and not r.get('retaliated_by')}
+        by_faction = {}
+        for key, r in open_.items():
+            by_faction.setdefault(r.get('attacker_faction') or '', []).append(key)
+
+        found = {}
+        for fid, keys in by_faction.items():
+            if fid and fid != '0':
+                data = await fetch_any_faction_data(fid, 'basic', cache_seconds=25)
+                members = (data or {}).get('members') or {}
+                for key in keys:
+                    m = members.get(key)
+                    if m:
+                        found[key] = (m.get('status'), m.get('level'))
+            # Factionless, or not found in the faction they had at the time
+            # of the hit (they may have just left it): ask for the profile.
+            for key in keys:
+                if key not in found:
+                    prof = await fetch_player_data(key, 'profile', cache_seconds=25)
+                    if prof:
+                        found[key] = (prof.get('status'), prof.get('level'))
+
+        changed = []
+        for key, (status, level) in found.items():
+            r = retals[key]
+            sig = [(status or {}).get('state'), (status or {}).get('until'),
+                   (status or {}).get('description')]
+            if sig != r.get('status_sig') or level != r.get('level'):
+                r['status'], r['status_sig'], r['level'] = status, sig, level
+                changed.append(key)
+        return changed
 
     async def retal_tick(self):
         async with self._retal_lock:
@@ -608,6 +707,12 @@ class TargetManager:
                         retal['retaliated_by'] = who
                         changed.add(key)
                         logger.info(f"Retal: {retal['attacker_name']} hit back by {who}")
+
+            # Live status of every attacker still open, so the message says
+            # whether they can be hit right now. Only re-edited when the
+            # status actually changes; a hospital countdown ticks by itself.
+            for key in await self._refresh_statuses(retals, now):
+                changed.add(key)
             # An outage (attacks is None) still lets expiry run below: closing
             # a retal needs only the clock, never the API.
 
