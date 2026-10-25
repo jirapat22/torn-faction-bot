@@ -8,6 +8,7 @@ Features:
 - Automatic updates to #chaining every 30 minutes during active chains
 """
 
+import asyncio
 import discord
 from datetime import datetime
 from utils.helpers import load_json, save_json, create_embed, format_timestamp, get_current_timestamp
@@ -38,6 +39,11 @@ logger = logging.getLogger(__name__)
 CHAIN_ALERT_MIN_COUNT = 25
 CHAIN_ALERT_SECONDS_LEFT = 30
 CHAIN_ALERT_COOLDOWN = 300
+# The chain loop runs once a minute, so a 30s window is only seen about half
+# the time. A check that finds the timer under this many seconds books one
+# extra fresh look for when it should be just inside the 30s mark.
+CHAIN_RECHECK_WITHIN = 90
+CHAIN_RECHECK_AT = 25
 
 def chain_seconds_left(timeout, now):
     """
@@ -76,6 +82,7 @@ class ChainTracker:
         # would look like the same one and the second would never be posted.
         self.last_reported_chain_start = 0
         self.chain_end_checks = 0  # Counter for consecutive "no chain" checks (prevents false completion)
+        self._recheck_task = None  # the one pending "chain dying" re-check, if any
 
     async def load_chain_history(self):
         """Load chain history from JSON file"""
@@ -693,6 +700,51 @@ class ChainTracker:
         })
         return True
 
+    async def _warn_dying(self, channel, count, seconds_left, now_ts):
+        if now_ts - self._last_chain_warning < CHAIN_ALERT_COOLDOWN:
+            return False
+        self._last_chain_warning = now_ts
+        await channel.send(
+            f'\u26a0\ufe0f **Chain dying: {count} hits, '
+            f'{int(seconds_left)}s left.** Any successful hit resets it to 5:00. '
+            f'A lost fight does NOT, so pick someone you can beat.'
+        )
+        logger.info(f'Chain break warning sent at {count} hits, {int(seconds_left)}s left')
+        return True
+
+    def _book_recheck(self, channel, chain_start, seconds_left):
+        """
+        One extra look, timed to land just inside the 30s mark. A background
+        task rather than a sleep in the loop, so the minute loop keeps its
+        rhythm; only one is ever pending.
+        """
+        if self._recheck_task and not self._recheck_task.done():
+            return
+        delay = max(0, seconds_left - CHAIN_RECHECK_AT)
+        self._recheck_task = asyncio.create_task(
+            self._recheck_dying(channel, chain_start, delay))
+
+    async def _recheck_dying(self, channel, chain_start, delay):
+        """
+        Warns only if, on a FRESH read, it is still the same chain, still not
+        on cooldown, and still inside the 30s window: if somebody hit in the
+        meantime the timer is back near 5:00 and nothing is said.
+        """
+        try:
+            await asyncio.sleep(delay)
+            data = await fetch_faction_data('chain', cache_seconds=0)
+            chain = (data or {}).get('chain') or {}
+            now_ts = get_current_timestamp()
+            left = chain_seconds_left(chain.get('timeout'), now_ts)
+            if (chain_start and int(chain.get('start') or 0) != int(chain_start)) \
+                    or int(chain.get('cooldown') or 0) > 0:
+                return
+            if 0 < left <= CHAIN_ALERT_SECONDS_LEFT and \
+                    int(chain.get('current') or 0) >= CHAIN_ALERT_MIN_COUNT:
+                await self._warn_dying(channel, chain['current'], left, now_ts)
+        except Exception as e:
+            logger.error(f'Chain dying re-check failed: {e}')
+
     async def check_chain_update(self):
         """
         Check if chain count changed and post update if needed
@@ -801,18 +853,11 @@ class ChainTracker:
         # A timeout of 0 or past the 5:00 maximum is Torn glitching, not a
         # chain on its last legs - the status embed guards the same way.
         timeout_sane = 0 < seconds_left <= 300
-        if (timeout_sane
-                and current_count >= CHAIN_ALERT_MIN_COUNT
-                and seconds_left <= CHAIN_ALERT_SECONDS_LEFT
-                and now_ts - self._last_chain_warning >= CHAIN_ALERT_COOLDOWN):
-            self._last_chain_warning = now_ts
-            await channel.send(
-                f'\u26a0\ufe0f **Chain dying: {current_count} hits, '
-                f'{int(seconds_left)}s left.** Any successful hit resets it to 5:00. '
-                f'A lost fight does NOT, so pick someone you can beat.'
-            )
-            logger.info(f'Chain break warning sent at {current_count} hits, '
-                        f'{int(seconds_left)}s left')
+        if timeout_sane and current_count >= CHAIN_ALERT_MIN_COUNT:
+            if seconds_left <= CHAIN_ALERT_SECONDS_LEFT:
+                await self._warn_dying(channel, current_count, seconds_left, now_ts)
+            elif seconds_left <= CHAIN_RECHECK_WITHIN:
+                self._book_recheck(channel, chain_start, seconds_left)
 
         # Only post at bonus milestones
         should_post = False

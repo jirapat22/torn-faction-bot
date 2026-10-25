@@ -545,6 +545,46 @@ def test_chain_timeout_is_a_countdown_not_a_clock_time():
     assert any(f.name == 'Breaks' for f in embed.fields)
     assert 'about to timeout' not in embed.description, '120s is not critical'
 
+    # A minute loop only sees the last 30s about half the time, so a tick in
+    # the last 90s books one fresh re-check near the 30s mark instead.
+    posted.clear()
+    t._last_chain_warning = 0
+    booked = {}
+
+    async def at_70s():
+        return {'current': 100, 'timeout': 70, 'modifier': 1, 'cooldown': 0, 'start': 7000}
+    t.get_current_chain = at_70s
+
+    async def tick_and_peek():
+        await t.check_chain_update()
+        booked['task'] = t._recheck_task is not None
+        t._recheck_task.cancel()
+    asyncio.run(tick_and_peek())
+    assert booked['task'] and not any('Chain dying' in (p or '') for p in posted), \
+        'books a re-check instead of warning early'
+
+    fresh = {}
+
+    async def fake_fetch(selections='basic', cache_seconds=None):
+        assert cache_seconds == 0, 'the re-check must not read a cached answer'
+        return {'chain': fresh}
+    saved = chains_mod.fetch_faction_data
+    chains_mod.fetch_faction_data = fake_fetch
+    try:
+        def recheck(**chain):
+            fresh.clear()
+            fresh.update({'current': 100, 'cooldown': 0, 'start': 7000, **chain})
+            t._last_chain_warning = 0
+            before = len(posted)
+            asyncio.run(t._recheck_dying(FakeChannel(), 7000, 0))
+            return len(posted) > before
+        assert recheck(timeout=22), 'nobody hit: warn'
+        assert not recheck(timeout=280), 'somebody hit, timer reset: stay quiet'
+        assert not recheck(timeout=22, cooldown=900), 'chain already over'
+        assert not recheck(timeout=22, start=8000), 'a different chain'
+    finally:
+        chains_mod.fetch_faction_data = saved
+
 
 def test_flytrack_autostop_trusts_war_tracker_not_raw_none():
     """

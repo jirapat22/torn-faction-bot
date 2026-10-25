@@ -194,19 +194,24 @@ async def fetch_faction_members():
     return members
 
 
-async def fetch_faction_data(selections='basic'):
+async def fetch_faction_data(selections='basic', cache_seconds=None):
     """
     Fetch general faction data from Torn API
 
     Args:
         selections: Comma-separated API selections (basic, chainreport, wars, etc.)
+        cache_seconds: Override cache TTL (0 = always fetch fresh). The chain
+                       dying re-check needs this: a 30s-old answer is useless
+                       when the whole question is "did anyone hit in the
+                       last 30 seconds".
 
     Returns:
         Dict with faction data or None if error
     """
     data = await _make_api_request(
         f'faction/{TORN_FACTION_ID}',
-        {'selections': selections}
+        {'selections': selections},
+        cache_seconds=cache_seconds
     )
 
     return data
