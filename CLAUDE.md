@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-A Discord bot for a Torn.com faction (Ascended Punks), deployed on Railway. `discord.py` + `aiohttp`, no database: state is JSON files under `data/`.
+A Discord bot for a Torn.com faction (Ascended Punks), running on Pat's home Mac mini (since 25/10/2026). `discord.py` + `aiohttp`, no database: state is JSON files under `data/`.
 
 ## Commands
 
@@ -28,17 +28,18 @@ Tests are deliberately dependency-free: no mocking library, just hand-rolled fak
 
 ### Deploying
 
-Railway auto-deploys from `main`. Pushing is deploying.
+Runs on Pat's home **Mac mini** in Docker Compose (`~/Projects/mac-server`, service `apexpunk`), **not Railway**.
 
-```bash
-railway logs -s torn-faction-bot                          # only retains since last restart
-railway deployment list -s torn-faction-bot --limit 3 --json
-railway ssh --service torn-faction-bot "cat data/<file>.json"   # inspect live state
-```
-
-Log retention is short and resets on every deploy, so capture logs *before* pushing anything else. `railway ssh` is the main way to see what the bot actually believes, far more reliable than reasoning about persisted state from the code.
-
-If the CLI returns `Unauthorized`, it needs `railway login --browserless` run by the user in a real terminal (the plain browser flow is broken here, and neither works without a TTY).
+- **Deploy:** push to `main`, then on the Mac run `cd ~/Projects/mac-server && bash scripts/update.sh`
+  (or `git -C ~/Projects/ApexPunk pull && docker compose up -d --build apexpunk`). **Pushing alone deploys nothing.**
+- **Settings/secrets:** `~/Projects/mac-server/env/apexpunk.env` (never committed). **Data:** `~/Projects/mac-server/data/apexpunk/`
+  (mounted as `/app/data`), backed up nightly with the other apps.
+- **Logs:** `docker compose logs -f apexpunk` (kept across restarts, unlike Railway's).
+- **Live state:** `docker compose exec apexpunk cat data/<file>.json` is the way to see what the bot actually believes,
+  far more reliable than reasoning about persisted state from the code.
+- **Health:** `curl http://127.0.0.1:3108/health` on the Mac.
+- **Railway** is a stopped cold backup: deployment removed and auto-deploy disabled (repo still linked so it can be
+  redeployed by hand in an emergency). A bot must only run in ONE place, so never redeploy there while the Mac runs it.
 
 ## Architecture
 
