@@ -5084,8 +5084,16 @@ def test_targets_and_retals_decide_what_to_post():
     # whatever members paste
     assert parse_torn_id('2345678') == 2345678
     assert parse_torn_id('https://www.torn.com/profiles.php?XID=2345678') == 2345678
+    assert parse_torn_id('torn.com/page.php?sid=attack&user2ID=2345678') == 2345678
+    # old-style links still sit in people's bookmarks and chat history
     assert parse_torn_id('torn.com/loader.php?sid=attack&user2ID=2345678') == 2345678
     assert parse_torn_id('SomeBully [2345678]') == 2345678
+
+    # Torn retired loader.php: a link to it opens a JSON error page instead of
+    # the fight. Every attack link the bot posts must use page.php.
+    for module in ('targets', 'flytrack', 'enemies'):
+        source = (ROOT / 'features' / f'{module}.py').read_text(encoding='utf-8')
+        assert 'loader.php' not in source, f'features/{module}.py still links loader.php'
     assert parse_torn_id('SomeBully') is None and parse_torn_id('') is None
 
     def hit(code, attacker, result='Mugged', ended=1000, stealthed=0,

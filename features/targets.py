@@ -74,7 +74,7 @@ def profile_url(torn_id):
 
 
 def attack_url(torn_id):
-    return f'https://www.torn.com/loader.php?sid=attack&user2ID={torn_id}'
+    return f'https://www.torn.com/page.php?sid=attack&user2ID={torn_id}'
 
 
 # ------------------------------------------------------------ pure helpers

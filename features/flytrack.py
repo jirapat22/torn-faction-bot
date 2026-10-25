@@ -1099,7 +1099,7 @@ class FlyTracker:
     def _format_return_alert(self, torn_id: str, name: str, dest: Optional[str],
                              eta: Optional[int], early: Optional[int] = None) -> str:
         dest_label = dest or 'abroad'
-        attack = f'https://www.torn.com/loader.php?sid=attack&user2ID={torn_id}'
+        attack = f'https://www.torn.com/page.php?sid=attack&user2ID={torn_id}'
         if eta:
             return (f'🟢 **{name}** ← **{dest_label}** · lands {self._eta_text(eta, early)} '
                     f'· [Attack]({attack})')

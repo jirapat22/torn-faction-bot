@@ -269,7 +269,7 @@ class EnemyWatchlist:
                     fields=[
                         {'name': 'Status', 'value': self.format_status_text(change['status']), 'inline': True},
                         {'name': 'Level', 'value': str(change['status']['level']), 'inline': True},
-                        {'name': 'Profile', 'value': f'[Attack](https://www.torn.com/loader.php?sid=attack&user2ID={change["torn_id"]})', 'inline': True}
+                        {'name': 'Profile', 'value': f'[Attack](https://www.torn.com/page.php?sid=attack&user2ID={change["torn_id"]})', 'inline': True}
                     ]
                 )
                 await channel.send(embed=embed)
@@ -303,7 +303,7 @@ class EnemyWatchlist:
 
             status_text = self.format_status_text(status)
             last_action = status.get('last_action_relative', 'Unknown')
-            entry = f'**{name}** [Lvl {status["level"]}] - {status_text}\n└ Last action: {last_action} | [Attack](https://www.torn.com/loader.php?sid=attack&user2ID={torn_id})'
+            entry = f'**{name}** [Lvl {status["level"]}] - {status_text}\n└ Last action: {last_action} | [Attack](https://www.torn.com/page.php?sid=attack&user2ID={torn_id})'
 
             state = status.get('state', 'Okay')
             if state == 'Hospital':
