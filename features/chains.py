@@ -54,6 +54,10 @@ class ChainTracker:
         self.chain_history = {}
         self.chain_session = {'chains': []}  # Per-member data for chains in current session
         self.last_reported_chain_id = None  # Track last reported chain to prevent duplicates
+        # The start time is what really identifies a chain: the "id" above is
+        # the hit count, so two different chains that both end on 231 hits
+        # would look like the same one and the second would never be posted.
+        self.last_reported_chain_start = 0
         self.chain_end_checks = 0  # Counter for consecutive "no chain" checks (prevents false completion)
 
     async def load_chain_history(self):
@@ -65,6 +69,7 @@ class ChainTracker:
         self.last_reported_chain_id = state.get('last_reported_chain_id')
         self.last_chain_count = state.get('last_chain_count', 0)
         self.last_chain_start = state.get('last_chain_start', 0)
+        self.last_reported_chain_start = state.get('last_reported_chain_start', 0)
 
         logger.info(f'Loaded chain history with {len(self.chain_history)} records')
         if self.last_reported_chain_id:
@@ -316,6 +321,13 @@ class ChainTracker:
 
         current = chain_data.get('current', 0)
         show_count = display_count if display_count is not None else current
+        cooldown = int(chain_data.get('cooldown') or 0)
+        if cooldown > 0:
+            return create_embed(
+                title=f'Chain over: {current} hits',
+                description=('\U0001f9ca On cooldown. A new chain can start '
+                             f'<t:{get_current_timestamp() + cooldown}:R>.'),
+                color=EMBED_COLOR_INFO)
         timeout = chain_data.get('timeout', 0)
         modifier = float(chain_data.get('modifier', 1.0))
 
@@ -619,6 +631,51 @@ class ChainTracker:
             logger.error(f'Error checking chain events: {e}')
             return False
 
+    async def _report_chain_end(self, channel, expect_start=None, cooldown_ends=None):
+        """
+        Post the finished chain's report once. Returns True when the chain is
+        dealt with (posted now, or already posted earlier), False when the
+        report is not ready yet and the caller should try again next tick.
+
+        expect_start: the start time of the chain that just ended. Torn can
+        take a moment to swap in the new report, and posting the PREVIOUS
+        chain's report as this one's would be worse than a minute's wait.
+        """
+        chainreport = await self.get_chain_report()
+        if not chainreport:
+            return expect_start is None
+        report_start = int(chainreport.get('start') or 0)
+        if expect_start and report_start != int(expect_start):
+            logger.info('Chain over, but Torn has not published its report yet; retrying')
+            return False
+
+        chain_id = chainreport.get('chain', 0)
+        # Save per-member data for aggregation (always, even if already reported)
+        await self._save_chain_member_data(chainreport)
+
+        already = (report_start and report_start == self.last_reported_chain_start) or \
+                  (not report_start and chain_id == self.last_reported_chain_id)
+        if already:
+            logger.info(f'Chain #{chain_id} already reported, skipping duplicate')
+            return True
+
+        report_embed = await self.format_chainreport_embed(chainreport)
+        header = '\U0001f3c1 **Chain Complete!**'
+        if cooldown_ends:
+            header += f' Faction is on cooldown, a new chain can start <t:{int(cooldown_ends)}:R>.'
+        await channel.send(header, embed=report_embed)
+        logger.info(f'Posted chain completion report for chain #{chain_id}')
+
+        self.last_reported_chain_id = chain_id
+        self.last_reported_chain_start = report_start
+        save_json(self.chain_state_file, {
+            'last_reported_chain_id': chain_id,
+            'last_chain_count': self.last_chain_count,
+            'last_chain_start': self.last_chain_start,
+            'last_reported_chain_start': self.last_reported_chain_start,
+        })
+        return True
+
     async def check_chain_update(self):
         """
         Check if chain count changed and post update if needed
@@ -637,6 +694,31 @@ class ChainTracker:
             logger.warning(f'Warning: Could not find #chaining channel (ID: {CHAINING_CHANNEL_ID})')
             return
 
+        # Torn says outright when a chain is over: the faction goes on
+        # cooldown and the API keeps showing the final count. The old check
+        # waited for the count to fall to 0, which Torn only does when the
+        # cooldown ENDS, so "Chain Complete" arrived 20+ minutes late and
+        # people kept hitting a dead chain. An explicit cooldown is not the
+        # API glitch the 3-check rule below guards against, so it is trusted
+        # on the first read.
+        cooldown = int((chain or {}).get('cooldown') or 0)
+        if chain and cooldown > 0:
+            # Below 10 hits is not a chain (same threshold as tracking). And a
+            # chain already reported needs no report fetch on every minute of
+            # a 20-minute cooldown.
+            reported = (chain.get('start')
+                        and int(chain['start']) == int(self.last_reported_chain_start or 0))
+            if int(chain.get('current') or 0) >= 10 and not reported:
+                done = await self._report_chain_end(
+                    channel, expect_start=chain.get('start'),
+                    cooldown_ends=get_current_timestamp() + cooldown)
+                if done:
+                    self.was_chain_active = False
+                    self.chain_end_checks = 0
+            # Never fall through: a chain on cooldown is not "active", and
+            # treating its frozen count as live would re-announce milestones.
+            return
+
         # Detect chain END (was active, now not)
         # Require 3 consecutive "no chain" checks to prevent false completion from API glitches
         if self.was_chain_active and not chain:
@@ -649,31 +731,7 @@ class ChainTracker:
 
             logger.info('Chain confirmed ended after 3 checks. Posting report...')
 
-            # Get chain report
-            chainreport = await self.get_chain_report()
-            if chainreport:
-                chain_id = chainreport.get('chain', 0)
-
-                # Save per-member data for aggregation (always, even if already reported)
-                await self._save_chain_member_data(chainreport)
-
-                # Check if we've already reported this chain
-                if chain_id != self.last_reported_chain_id:
-                    # Post chain report
-                    report_embed = await self.format_chainreport_embed(chainreport)
-
-                    await channel.send('🏁 **Chain Complete!**', embed=report_embed)
-                    logger.info(f'Posted chain completion report for chain #{chain_id}')
-
-                    # Save this as last reported chain
-                    self.last_reported_chain_id = chain_id
-                    save_json(self.chain_state_file, {
-                        'last_reported_chain_id': chain_id,
-                        'last_chain_count': self.last_chain_count,
-                        'last_chain_start': self.last_chain_start,
-                    })
-                else:
-                    logger.info(f'Chain #{chain_id} already reported, skipping duplicate')
+            await self._report_chain_end(channel)
 
             # Reset state - keep last_chain_count so if chain comes back
             # after an API glitch, we don't re-announce old milestones
@@ -770,6 +828,7 @@ class ChainTracker:
             'last_reported_chain_id': self.last_reported_chain_id,
             'last_chain_count': self.last_chain_count,
             'last_chain_start': self.last_chain_start,
+            'last_reported_chain_start': self.last_reported_chain_start,
         })
 
         # Save chain data to history (keep last 100 entries max)

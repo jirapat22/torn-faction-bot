@@ -414,6 +414,93 @@ def test_chain_milestone_picks_highest_on_jump():
     assert tracker.last_chain_count == 120
 
 
+def test_chain_complete_posts_when_the_cooldown_starts():
+    """
+    Torn keeps showing a finished chain's final count for the whole cooldown
+    and only drops it to 0 when the cooldown ends. The bot waited for the 0,
+    so "Chain Complete" arrived 20+ minutes late while people kept hitting a
+    dead chain. Shapes below are the live API's, read during a real cooldown:
+    current 231, timeout 0, cooldown 1039.
+    """
+    import asyncio
+    import features.chains as chains_mod
+    from features.chains import ChainTracker
+
+    posted = []
+
+    class FakeChannel:
+        async def send(self, content=None, embed=None):
+            posted.append(content)
+
+    chains_mod.save_json = lambda *a, **kw: None  # avoid real disk writes
+    live = {'chain': {'current': 231, 'max': 250, 'timeout': 0, 'modifier': 1,
+                      'cooldown': 1039, 'start': 5000}}
+    report = {'report': {'chain': 159, 'start': 4000}}   # Torn still on the OLD one
+    fetches = []
+
+    def tracker_with(**state):
+        t = ChainTracker(bot=None)
+        t.bot = type('FakeBot', (), {'get_channel': lambda self, cid: FakeChannel()})()
+
+        async def current():
+            return live['chain']
+
+        async def chain_report():
+            fetches.append(1)
+            return report['report']
+
+        async def nothing(*_a, **_kw):
+            return None
+
+        async def embed(_r):
+            return None
+        t.get_current_chain = current
+        t.get_chain_report = chain_report
+        t._save_chain_member_data = nothing
+        t.format_chainreport_embed = embed
+        for k, v in state.items():
+            setattr(t, k, v)
+        return t
+
+    t = tracker_with(was_chain_active=True, last_chain_count=231, last_chain_start=5000,
+                     last_reported_chain_id=159, last_reported_chain_start=4000)
+    # report not published yet: never post the previous chain's report as this one
+    asyncio.run(t.check_chain_update())
+    assert posted == [] and t.was_chain_active, 'waits for the right report'
+
+    report['report'] = {'chain': 231, 'start': 5000}
+    asyncio.run(t.check_chain_update())
+    assert len(posted) == 1 and 'Chain Complete' in posted[0] and 'cooldown' in posted[0]
+    assert t.last_reported_chain_start == 5000 and not t.was_chain_active
+
+    # the rest of the cooldown: no repost, no report fetch, no milestones
+    fetches.clear()
+    asyncio.run(t.check_chain_update())
+    assert len(posted) == 1 and fetches == []
+
+    # cooldown over, count drops to 0: nothing more to say
+    live['chain'] = {'current': 0, 'cooldown': 0, 'timeout': 0}
+    for _ in range(3):
+        asyncio.run(t.check_chain_update())
+    assert len(posted) == 1
+
+    # two DIFFERENT chains can end on the same count; the start tells them apart
+    live['chain'] = {'current': 231, 'timeout': 0, 'cooldown': 900, 'start': 9000}
+    report['report'] = {'chain': 231, 'start': 9000}
+    t2 = tracker_with(last_reported_chain_id=231, last_reported_chain_start=5000)
+    asyncio.run(t2.check_chain_update())
+    assert len(posted) == 2, 'same count, new chain: still reported'
+
+    # a restart mid-cooldown after it was already posted stays quiet
+    t3 = tracker_with(last_reported_chain_id=231, last_reported_chain_start=9000)
+    asyncio.run(t3.check_chain_update())
+    assert len(posted) == 2
+
+    # /chain status says it is over, not "Chain Active"
+    embed = asyncio.run(t3.format_chain_embed(live['chain']))
+    assert 'Chain over' in embed.title and 'cooldown' in embed.description
+
+
 def test_flytrack_autostop_trusts_war_tracker_not_raw_none():
     """
     Regression test for a real production incident: fly-tracking silently
@@ -6545,6 +6632,7 @@ if __name__ == '__main__':
     test_register_allows_unlinked_torn_id()
     test_flytrack_autostop_trusts_war_tracker_not_raw_none()
     test_chain_milestone_picks_highest_on_jump()
+    test_chain_complete_posts_when_the_cooldown_starts()
     test_war_report_v2_shape_normalised()
     test_war_report_rejects_another_factions_war()
     test_xan_counts_friendly_hosps()
