@@ -103,6 +103,13 @@ DEFAULT_RATIO = 0.669          # used until we have measured that player
 MIN_PLAUSIBLE_RATIO = 0.15     # faster than this is a glitch, not a perk
 MAX_PLAUSIBLE_RATIO = 1.30
 MAX_RATIO_SAMPLES = 5          # keep a few and take the median, to damp noise
+# How long a speed measurement stays useful. These are mostly ENEMY players
+# from past wars, not our own members, so faction membership is the wrong
+# rule to prune on: the file would grow forever either way. A player's flight
+# speed does not really change, so old samples stay valid and the only reason
+# to drop them is that we will never see that person again. Six months still
+# covers fighting the same faction a second time.
+RATIO_RETENTION_DAYS = 180
 
 # Landing times are shown as a window, not a single minute. The early edge is
 # the "be ready by" moment, because the cost of error is asymmetric: an enemy
@@ -270,6 +277,14 @@ class FlyTracker:
         self.enemy_faction_name = data.get('enemy_faction_name', '')
         self.players = data.get('players', {})
         self.tiers = data.get('tiers', {})
+        # Pruned on load rather than on a timer: it only grows when a war
+        # runs, so checking once per start is plenty and costs nothing on a
+        # quiet boot.
+        self.tiers, dropped = prune_ratios(self.tiers)
+        if dropped:
+            logger.info(f'Fly: pruned {dropped} speed measurement(s) older '
+                        f'than {RATIO_RETENTION_DAYS} days '
+                        f'({len(self.tiers)} kept)')
         self.follow_cooldowns = data.get('follow_cooldowns', {})
         self.auto_started_war_id = data.get('auto_started_war_id')
         if self.enabled:
@@ -1130,3 +1145,28 @@ class FlyTracker:
                 await channel.send(embed=embed)
         except Exception as e:
             logger.error(f'Fly: failed to post to war-tracker channel: {e}')
+
+
+def prune_ratios(tiers, now=None, days=RATIO_RETENTION_DAYS):
+    """
+    Drop speed measurements nobody will use again.
+
+    Pure, so the retention rule is testable without a bot. Returns
+    (kept_dict, dropped_count).
+
+    An entry with no timestamp is KEPT. These predate the field, and
+    throwing away a real measurement because of a missing bookkeeping value
+    makes every future ETA for that player worse, which is the opposite of
+    why the data exists.
+    """
+    if not tiers:
+        return {}, 0
+    cutoff = (now or datetime.now(timezone.utc).timestamp()) - days * 86400
+    kept = {}
+    for tid, entry in tiers.items():
+        if not isinstance(entry, dict):
+            continue
+        ts = entry.get('ts')
+        if ts is None or float(ts) >= cutoff:
+            kept[tid] = entry
+    return kept, len(tiers) - len(kept)

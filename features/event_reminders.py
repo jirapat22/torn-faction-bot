@@ -297,8 +297,16 @@ class EventReminderManager:
                 inline=False
             )
 
+        # The raw event URL in the content is what makes Discord render the
+        # event card with its Interested button. Without it the reminder is
+        # just text, and a member who wants their own alert has to go and
+        # find the event in a sidebar that only says "2 Events".
+        link = f'https://discord.com/events/{event.guild_id}/{event.id}'
         try:
-            await channel.send(embed=embed)
+            await channel.send(
+                content=f'{link}\n-# Click **Interested** above and Discord '
+                        f'will remind you itself.',
+                embed=embed)
             logger.info(f'Event reminder posted for "{event.name}" in channel {channel_id}')
         except Exception as e:
             logger.error(f'Event reminders: Failed to post reminder for "{event.name}": {e}')

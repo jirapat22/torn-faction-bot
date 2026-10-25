@@ -555,7 +555,22 @@ async def chain_update_check():
                 chain_event_manager.begin(ev)
                 channel = bot.get_channel(CHAINING_CHANNEL_ID)
                 if channel:
-                    await channel.send(announce_text(ev))
+                    text = announce_text(ev)
+                    # The Events tab only says "2 Events" in a sidebar, so
+                    # the announcement carries the event's own link. Posting
+                    # the raw URL is what renders the card with Interested,
+                    # which is how a member gets their own reminder.
+                    try:
+                        from features.calendar_sync import event_link
+                        from config import GUILD_ID as _g
+                        link = event_link(_g, f"chain:{ev['id']}")
+                        if link:
+                            text += (
+                                '\n\n' + link + '\n-# Click **Interested** '
+                                'and Discord will remind you itself.')
+                    except Exception as e:
+                        logger.debug(f'Chain event link lookup failed: {e}')
+                    await channel.send(text)
                 else:
                     logger.warning('Chain event: chaining channel not found, '
                                    'started without announcing')

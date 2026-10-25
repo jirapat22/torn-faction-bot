@@ -237,3 +237,19 @@ async def sync(bot, guild, chain_event_manager=None, war_tracker=None,
                     f'{removed} removed')
     return {'created': created, 'updated': updated, 'removed': removed,
             'tracked': len(new_state)}
+
+def event_link(guild_id, key, state_file=STATE_FILE):
+    """
+    The Discord event URL for one of our keys, or None.
+
+    Posting this raw URL is what makes Discord render the event card with
+    its Interested button, which is the only way a member gets their own
+    reminder without the bot pinging everybody.
+    """
+    if not guild_id:
+        return None
+    state = load_json(state_file, default={}) or {}
+    tracked = state.get(key)
+    if not tracked or not tracked.get('id'):
+        return None
+    return f"https://discord.com/events/{guild_id}/{tracked['id']}"

@@ -5982,6 +5982,49 @@ def test_calendar_sync_keeps_stable_keys_and_leaves_human_events_alone():
             f'a changed {field} must trigger an edit')
 
 
+def test_flytrack_ratio_pruning_keeps_what_is_still_useful():
+    """
+    Flight speed measurements are mostly of ENEMY players from past wars, not
+    our own members, so "prune people who left the faction" was the wrong
+    rule: the file grows forever either way. Age is the rule, because a
+    player's flight speed does not change and the only reason to drop a
+    sample is that we will never see that person again.
+
+    An entry with no timestamp is kept. Those predate the field, and throwing
+    away a real measurement over a missing bookkeeping value makes every
+    future ETA for that player worse, which is the opposite of the point.
+    """
+    from features.flytrack import prune_ratios, RATIO_RETENTION_DAYS
+
+    now = 2_000_000_000
+    day = 86400
+    tiers = {
+        '1': {'name': 'Recent', 'ratios': [0.67], 'ts': now - 10 * day},
+        '2': {'name': 'OldButInside', 'ratios': [0.70],
+              'ts': now - (RATIO_RETENTION_DAYS - 1) * day},
+        '3': {'name': 'Ancient', 'ratios': [0.65],
+              'ts': now - (RATIO_RETENTION_DAYS + 30) * day},
+        '4': {'name': 'NoTimestamp', 'ratios': [0.68]},
+        '5': 'not a dict at all',
+    }
+
+    kept, dropped = prune_ratios(tiers, now=now)
+    assert set(kept) == {'1', '2', '4'}, kept.keys()
+    assert dropped == 2, dropped
+    assert kept['4']['ratios'] == [0.68], (
+        'a measurement with no timestamp predates the field and must be '
+        'kept, or that player loses their calibration for nothing')
+
+    # Exactly on the boundary stays: dropping it gains nothing and the
+    # measurement is still as valid as it was a second earlier.
+    edge = {'e': {'ts': now - RATIO_RETENTION_DAYS * day, 'ratios': [0.66]}}
+    kept, dropped = prune_ratios(edge, now=now)
+    assert dropped == 0 and 'e' in kept
+
+    assert prune_ratios({}, now=now) == ({}, 0)
+    assert prune_ratios(None, now=now) == ({}, 0)
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -6089,4 +6132,5 @@ if __name__ == '__main__':
     test_chain_event_audit_findings()
     test_chain_event_second_audit_findings()
     test_calendar_sync_keeps_stable_keys_and_leaves_human_events_alone()
+    test_flytrack_ratio_pruning_keeps_what_is_still_useful()
     print('All smoke tests passed.')
