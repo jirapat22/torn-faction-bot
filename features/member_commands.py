@@ -66,6 +66,10 @@ SECTIONS = [
         ('/chain view:Report',
          'Who did what on the last chain.',
          [CHAINING_CHANNEL_ID]),
+        ('/chain view:Event',
+         'During a chain event: your hits, your rank, and the top 5. '
+         'Only you see it.',
+         [CHAINING_CHANNEL_ID]),
     ]),
     ('\U0001f5d3️ Availability', [
         ('/avail action:Mine date:DD-MM-YYYY',

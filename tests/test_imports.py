@@ -2515,10 +2515,13 @@ def test_fly_auto_start_retries_when_enable_fails():
 
 def test_poll_roster_names_who_picked_each_block():
     """
-    Counts tell you a block is thin but not who to chase, which is the point of
-    running the poll at all. Empty blocks matter most, so truncation happens
-    inside a block rather than by dropping blocks - a popular early block must
-    never hide a later one with nobody in it.
+    Counts tell you a block is thin but not who to chase, which is the point
+    of running the poll at all, so names stay on every row.
+
+    Empty blocks used to get a line each, which is what made a 24 block poll
+    unreadable. They are now summarised as a count with a pointer to the full
+    view instead. That is a move, not a loss: the number of empty blocks is
+    still on the message, so a week with no coverage still says so.
     """
     from features.availability import AvailabilityManager
 
@@ -2533,17 +2536,23 @@ def test_poll_roster_names_who_picked_each_block():
             return self._m.get(int(uid))
 
     mgr = AvailabilityManager(bot=None)
-    mgr.polls = {'p1': {'blocks': [
-        {'id': 0, 'label': 'A'}, {'id': 1, 'label': 'B'}, {'id': 2, 'label': 'C'}]}}
+    def blk(i, label, st):
+        return {'id': i, 'label': label, 'date': '25-10-2026',
+                'start_time': st, 'end_time': st}
+
+    mgr.polls = {'p1': {'blocks': [blk(0, 'A', '02:00'), blk(1, 'B', '06:00'),
+                                   blk(2, 'C', '10:00')]}}
     mgr.data = {'p1': {'0': [1, 2], '1': [], '2': [3]}}
     guild = FakeGuild({1: FakeMember('Ikaros22'), 2: FakeMember('SirAua'),
                        3: FakeMember('dakkkz')})
 
     out = mgr.build_roster('p1', guild)
     assert 'Ikaros22' in out and 'SirAua' in out, out
-    assert '**A** (2)' in out
-    assert '**B** (0): nobody yet' in out, 'an empty block is the signal, never hidden'
-    assert '**C** (1): dakkkz' in out
+    assert '**2**' in out and 'dakkkz' in out, out
+    # The empty block is counted, not listed.
+    assert '1 with nobody' in out, (
+        f'an empty block is still the signal and must be reported: {out}')
+    assert 'nobody yet' not in out, 'but not as its own line any more'
 
     # Unknown member falls back to a mention rather than vanishing
     out2 = mgr.build_roster('p1', FakeGuild({}))
@@ -5700,6 +5709,69 @@ def test_chain_event_member_view_and_late_joiner_exemption():
     assert '1 member joined' in board, f'singular grammar: {board}'
 
 
+def test_poll_summary_shows_best_blocks_in_clock_order():
+    """
+    A 24 block poll listed every block and everyone in it, which ran to 24
+    dense lines and buried the only question anybody is asking: when do we
+    chain.
+
+    The summary now shows the blocks worth calling, picked by headcount so
+    thin ones do not take up room, then sorted back into TIME order. Sorting
+    the display by headcount makes the reader jump around the week to work
+    out what comes next.
+    """
+    from features.availability import AvailabilityManager
+
+    m = AvailabilityManager.__new__(AvailabilityManager)
+    slots = [('02:00', '06:00'), ('06:00', '10:00'), ('10:00', '14:00'),
+             ('14:00', '18:00'), ('18:00', '22:00'), ('22:00', '02:00')]
+    labels = 'ABCDEFGHIJKLMNOPQRSTUVWX'
+    blocks, bid = [], 0
+    for day in ('25-10-2026', '26-10-2026', '27-10-2026', '28-10-2026'):
+        for st, en in slots:
+            blocks.append({'id': bid, 'label': labels[bid], 'date': day,
+                           'start_time': st, 'end_time': en})
+            bid += 1
+
+    # Deliberately: the biggest block is LAST in time, so a display sorted by
+    # headcount would put it first and the clock order check would catch it.
+    counts = [0] * len(blocks)
+    counts[2] = 2     # 25-10 10:00
+    counts[9] = 4     # 26-10 06:00
+    counts[16] = 3    # 27-10 10:00
+    counts[22] = 9    # 28-10 22:00  <- biggest, latest
+    m.polls = {'p': {'blocks': blocks}}
+    m.data = {'p': {str(b['id']): [str(900 + j) for j in range(counts[b['id']])]
+                    for b in blocks}}
+
+    class G:
+        def get_member(self, uid):
+            class M:
+                display_name = f'M{uid}'
+            return M()
+
+    out = m.build_roster('p', G(), max_chars=4000)
+    rows = [r for r in out.splitlines() if r.startswith('**')]
+    assert len(rows) == 4, f'only blocks with answers appear: {out}'
+
+    dates = [r.split('`')[1] for r in rows]
+    assert dates == sorted(dates), (
+        f'blocks must read in clock order, not by headcount: {dates}')
+    assert dates[0].startswith('25-10') and dates[-1].startswith('28-10'), dates
+    assert '**9**' in rows[-1], (
+        'the busiest block is last here, which is what proves the sort is by '
+        'time rather than by count')
+
+    # Blocks nobody picked are summarised, never listed one by one.
+    assert 'with nobody' in out, out
+    assert 'nobody yet' not in out, (
+        'empty blocks must not each get their own line again')
+
+    # Nothing answered at all reads as such instead of an empty string.
+    m.data = {'p': {}}
+    assert 'Nobody has answered' in m.build_roster('p', G())
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -5803,4 +5875,5 @@ if __name__ == '__main__':
     test_poll_restore_defaults_to_the_layout_it_was_posted_with()
     test_chain_event_scheduling_counts_from_when_it_was_meant_to_start()
     test_chain_event_member_view_and_late_joiner_exemption()
+    test_poll_summary_shows_best_blocks_in_clock_order()
     print('All smoke tests passed.')

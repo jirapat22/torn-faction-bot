@@ -268,40 +268,84 @@ class AvailabilityManager:
 
     ROSTER_FIELD = "\U0001f9cd Who's in"
 
-    def build_roster(self, poll_id: str, guild, max_chars: int = 1000) -> str:
-        """Per-block list of who has picked that block, for the poll message.
+    # How many blocks the summary shows. A 24-block poll listing every block
+    # and everyone in it ran to 24 dense lines, which is where the readability
+    # went: the answer to "when do we chain" was buried in a wall.
+    SUMMARY_BLOCKS = 6
+    # Bar length for the busiest block shown; everything else scales
+    # against it, so the bars compare without ever running long.
+    BAR_WIDTH = 8
 
-        Counts alone tell you a block is thin but not who to chase, which is the
-        whole point of running the poll. Truncates per block rather than
-        dropping blocks, so a popular early block can never hide a later one
-        with nobody in it - the empty ones are the entire signal.
+    def build_roster(self, poll_id: str, guild, max_chars: int = 1000) -> str:
+        """
+        The blocks worth calling, in TIME order.
+
+        Picked by headcount so thin blocks do not take up room, then sorted
+        chronologically so it reads like a timetable rather than a league
+        table. Sorting by headcount makes the reader jump around the week to
+        work out what comes next, which is the actual question.
+
+        Names are kept because counts alone tell you a block is thin but not
+        who to chase, which is the whole point of running the poll.
         """
         poll = self.polls.get(poll_id)
         if not poll:
             return ''
         data = self.data.get(poll_id, {})
+        blocks = poll.get('blocks', [])
 
         def name_for(uid):
             member = guild.get_member(int(uid)) if guild else None
             return member.display_name if member else f'<@{uid}>'
 
-        lines = []
-        for block in poll.get('blocks', []):
+        counted = []
+        for i, block in enumerate(blocks):
             uids = data.get(str(block['id']), [])
-            if not uids:
-                lines.append(f"**{block['label']}** (0): nobody yet")
-                continue
+            if uids:
+                counted.append((len(uids), i, block, uids))
+        if not counted:
+            return '-# Nobody has answered yet.'
+
+        # Best by headcount, then back into clock order for display.
+        top = sorted(counted, key=lambda c: -c[0])[:self.SUMMARY_BLOCKS]
+        top.sort(key=lambda c: c[1])
+        most = top[0][0] if top else 0
+        most = max(most, max(c[0] for c in top))
+
+        lines = []
+        for n, _i, block, uids in top:
             names = [name_for(u) for u in uids]
             shown, used = [], 0
-            for n in names:
-                if used + len(n) + 2 > 90:
+            for nm in names:
+                if used + len(nm) + 2 > 60:
                     break
-                shown.append(n)
-                used += len(n) + 2
+                shown.append(nm)
+                used += len(nm) + 2
             text = ', '.join(shown)
             if len(shown) < len(names):
                 text += f' +{len(names) - len(shown)} more'
-            lines.append(f"**{block['label']}** ({len(names)}): {text}")
+            # Scaled to the busiest block shown, not one character per head.
+            # A 26 member faction would otherwise draw a 26 character bar and
+            # push the names off the line, which is the problem this whole
+            # summary exists to fix.
+            filled = max(1, round(n / most * self.BAR_WIDTH)) if most else 1
+            bar = '█' * filled
+            # The letter stays: it is how a member finds the block in the
+            # dropdown, so a summary without it cannot be acted on.
+            lines.append(f"**{block['label']}** `{block['date'][:5]} "
+                         f"{block['start_time']}-{block['end_time']}` "
+                         f"{bar} **{n}** {text}")
+
+        hidden = len(counted) - len(top)
+        empty = len(blocks) - len(counted)
+        tail = []
+        if hidden:
+            tail.append(f'{hidden} quieter block{"s" if hidden != 1 else ""}')
+        if empty:
+            tail.append(f'{empty} with nobody')
+        if tail:
+            lines.append(f'-# Not shown: {", ".join(tail)}. '
+                         f'Use `/avail action:Summary` for all of them.')
 
         out = '\n'.join(lines)
         return out[:max_chars] if len(out) > max_chars else out
