@@ -36,6 +36,7 @@ MODULES = [
     'features.inactivity',
     'features.roles',
     'features.stakeout',
+    'features.targets',
     'features.verification',
     'features.wars',
 ]
@@ -5065,6 +5066,111 @@ def test_timezone_picker_fits_discord_and_the_clocks_match():
     assert sparkline({}) == '' and sparkline(None) == ''
 
 
+def test_targets_and_retals_decide_what_to_post():
+    """
+    The retal feed answers one question every 30s: who hit us that we can
+    still hit back? Getting it wrong either way is visible: a stealthed or
+    failed attack posted is noise, a real one missed is a lost bonus. Records
+    below copy the live attack log's shape, ids as ints, a stealthed attacker
+    as "".
+    """
+    from features.targets import (parse_torn_id, landed_hits, merge_hit,
+                                  find_retaliation, status_line, stats_line,
+                                  prune_targets, count_added_by,
+                                  build_board_embed, build_retal_embed,
+                                  RETAL_WINDOW, BOARD_MAX, RETALIATED_PREFIX)
+    us = 45635
+
+    # whatever members paste
+    assert parse_torn_id('2345678') == 2345678
+    assert parse_torn_id('https://www.torn.com/profiles.php?XID=2345678') == 2345678
+    assert parse_torn_id('torn.com/loader.php?sid=attack&user2ID=2345678') == 2345678
+    assert parse_torn_id('SomeBully [2345678]') == 2345678
+    assert parse_torn_id('SomeBully') is None and parse_torn_id('') is None
+
+    def hit(code, attacker, result='Mugged', ended=1000, stealthed=0,
+            attacker_faction=999, defender_faction=us):
+        return code, {'code': code, 'attacker_id': attacker, 'attacker_name': f'A{attacker}',
+                      'attacker_faction': attacker_faction, 'defender_id': 1,
+                      'defender_name': 'PATTO', 'defender_faction': defender_faction,
+                      'result': result, 'stealthed': stealthed,
+                      'timestamp_ended': ended}
+    attacks = dict([
+        hit('ok', 77),
+        hit('stealth', '', stealthed=1),                  # cannot aim at "someone"
+        hit('lost', 78, result='Lost'),                   # they took nothing
+        hit('spar', 79, attacker_faction=us),             # our own members
+        hit('other', 80, defender_faction=123),           # not our member
+    ])
+    hits = landed_hits(attacks, us)
+    assert [h['code'] for h in hits] == ['ok'], hits
+    assert hits[0]['attacker_id'] == '77', 'ids normalised to str for keys'
+
+    # one message per attacker, window from their LATEST hit
+    retals = {}
+    assert merge_hit(retals, hits[0])
+    second = dict(hits[0], code='ok2', ended=1100, defender_name='Gdawng')
+    assert merge_hit(retals, second)
+    assert not merge_hit(retals, second), 'same hit twice is not news'
+    r = retals['77']
+    assert len(retals) == 1 and len(r['hits']) == 2
+    assert r['expires'] == 1100 + RETAL_WINDOW
+
+    # who hit them back: our member, a landed hit, after their last hit
+    back = dict([
+        ('b1', {'attacker_faction': us, 'attacker_name': 'Early', 'defender_id': 77,
+                'result': 'Hospitalized', 'timestamp_ended': 1050}),   # before the 2nd hit
+        ('b2', {'attacker_faction': us, 'attacker_name': 'Miss', 'defender_id': 77,
+                'result': 'Lost', 'timestamp_ended': 1150}),
+        ('b3', {'attacker_faction': us, 'attacker_name': 'PATTO', 'defender_id': 77,
+                'result': 'Hospitalized', 'timestamp_ended': 1160}),
+    ])
+    assert find_retaliation(back, us, '77', 1100) == 'PATTO'
+    assert find_retaliation(back, us, '77', 1200) is None
+    r['retaliated_by'] = 'PATTO'
+    assert build_retal_embed(r, None, 1170).title.startswith(RETALIATED_PREFIX)
+    # ...and hitting us again re-opens it
+    assert merge_hit(retals, dict(hits[0], code='ok3', ended=1300))
+    assert retals['77']['retaliated_by'] is None
+
+    # board order: hittable first
+    now = 10_000
+    states = {
+        'jail': {'status': {'state': 'Jail', 'until': now + 60}},
+        'later': {'status': {'state': 'Hospital', 'until': now + 900}},
+        'okay': {'status': {'state': 'Okay'}},
+        'unknown': None,
+        'soon': {'status': {'state': 'Hospital', 'until': now + 60}},
+        'abroad': {'status': {'state': 'Abroad', 'description': 'In Mexico'}},
+    }
+    order = sorted(states, key=lambda k: status_line(states[k], now)[0])
+    assert order == ['okay', 'soon', 'later', 'abroad', 'jail', 'unknown'], order
+
+    # stats: never a made-up number
+    assert stats_line(None, now) == 'stats unknown'
+    assert stats_line({'bs_estimate': 0}, now) == 'stats unknown'
+    assert stats_line({'bs_estimate': 1_200_000, 'bs_estimate_human': '1.2m',
+                       'last_updated': now - 3 * 86400}, now) == '~1.2m stats (est. 3 days ago)'
+    assert 'today' in stats_line({'bs_estimate': 5, 'last_updated': now}, now)
+
+    # 7-day expiry and the per-member cap count
+    targets = {'old': {'added_at': now - 8 * 86400, 'name': 'Old', 'added_by': 1},
+               'new': {'added_at': now - 86400, 'name': 'New', 'added_by': 1}}
+    assert prune_targets(targets, now) == ['Old'] and list(targets) == ['new']
+    assert count_added_by(targets, 1) == 1 and count_added_by(targets, '2') == 0
+
+    # a full board must still fit one Discord message (25 fields, 6000 chars)
+    many = {str(1000000 + i): {'name': 'X' * 20, 'level': 99, 'reason': 'r' * 80,
+                               'added_by': i, 'added_by_name': 'N' * 32,
+                               'added_at': now} for i in range(BOARD_MAX + 5)}
+    embed = build_board_embed(many, {}, {}, now)
+    assert len(embed.fields) == BOARD_MAX
+    assert len(embed) <= 6000, len(embed)
+    assert '5 more not shown' in embed.footer.text
+    # an empty board says so instead of rendering nothing
+    assert build_board_embed({}, {}, {}, now).fields[0].name == 'Nobody yet'
+
+
 def test_notices_never_turn_an_unreadable_channel_into_an_accusation():
     """
     Three faction rules say "without a notice", so this decides whether an
@@ -6383,4 +6489,5 @@ if __name__ == '__main__':
     test_easter_and_major_event_classification()
     test_chain_report_and_board_do_not_overstate_what_they_know()
     test_poll_names_who_did_not_answer()
+    test_targets_and_retals_decide_what_to_post()
     print('All smoke tests passed.')

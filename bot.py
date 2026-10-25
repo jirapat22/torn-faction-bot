@@ -88,6 +88,7 @@ event_reminder_manager = None
 stakeout_manager = None
 fly_tracker = None
 chain_event_manager = None
+target_manager = None
 _initialized = False  # Prevent re-initialization on reconnect
 
 
@@ -119,6 +120,7 @@ async def _start_healthcheck_server():
             daily_inactivity_check, chain_update_check, war_update_check,
             role_sync_check, enemy_status_check, event_reminder_check,
             stakeout_check, fly_check, poll_end_check,
+            retal_check, target_board_check,
         ]
         all_running = bot.is_ready() and all(loop.is_running() for loop in loops)
         body = {
@@ -146,7 +148,7 @@ async def on_ready():
     global inactivity_tracker, chain_tracker, war_tracker, verification_system
     global role_sync_manager, activity_profile_manager, enemy_watchlist, availability_manager
     global event_reminder_manager, stakeout_manager, fly_tracker, _initialized
-    global strike_manager, chain_event_manager
+    global strike_manager, chain_event_manager, target_manager
 
     try:
         logger.info(f'Bot logged in as {bot.user.name} (ID: {bot.user.id})')
@@ -307,6 +309,17 @@ async def on_ready():
         fly_tracker.verification_system = verification_system
         await fly_tracker.load_data()
 
+        # Target board and retals. Needs verification for the verified role
+        # (who may add targets, and who can see the channel it creates).
+        from features.targets import TargetManager, RetalView, setup_target_commands
+        target_manager = TargetManager(bot)
+        target_manager.verification_system = verification_system
+        await target_manager.load()
+        # One fixed custom_id, so this single registration keeps the
+        # "Add to targets" button working on every retal posted before a restart.
+        bot.add_view(RetalView(target_manager))
+        await setup_target_commands(bot, target_manager)
+
         # Initialize faction tools
         await setup_faction_commands(bot)
 
@@ -367,6 +380,12 @@ async def on_ready():
         if not poll_end_check.is_running():
             poll_end_check.start()
 
+        if not retal_check.is_running():
+            retal_check.start()
+
+        if not target_board_check.is_running():
+            target_board_check.start()
+
         if not loop_watchdog.is_running():
             loop_watchdog.start()
 
@@ -411,6 +430,12 @@ async def on_ready():
             result = await refresh_board(bot, profile=activity_profile_manager)
             if result:
                 logger.info(f'Timezone board: {result}')
+
+            # Retal messages left over from before the restart, which the
+            # store lost track of, would otherwise never be deleted.
+            removed = await target_manager.sweep_stray_retals()
+            if removed:
+                logger.info(f'Targets: removed {removed} stray retal message(s)')
         except Exception as e:
             logger.error(f'Startup boards failed: {e}')
 
@@ -757,6 +782,39 @@ async def before_poll_end_check():
     logger.info('Poll end checker started (checks every minute)')
 
 
+@tasks.loop(seconds=30)
+async def retal_check():
+    """Post, update and delete retal messages. 30s because the retal window is
+    only 5 minutes, and Torn refreshes the attack log about that often anyway."""
+    try:
+        if target_manager:
+            await target_manager.retal_tick()
+    except Exception as e:
+        logger.error(f'Error in retal check: {e}')
+
+
+@retal_check.before_loop
+async def before_retal_check():
+    await bot.wait_until_ready()
+    logger.info('Retal checker started (checks every 30 seconds)')
+
+
+@tasks.loop(minutes=2)
+async def target_board_check():
+    """Refresh the pinned target board: statuses, stats, 7-day expiry."""
+    try:
+        if target_manager:
+            await target_manager.refresh_board()
+    except Exception as e:
+        logger.error(f'Error in target board check: {e}')
+
+
+@target_board_check.before_loop
+async def before_target_board_check():
+    await bot.wait_until_ready()
+    logger.info('Target board started (refreshes every 2 minutes)')
+
+
 @tasks.loop(minutes=5)
 async def loop_watchdog():
     """Restart any background task loop that has stopped unexpectedly."""
@@ -770,6 +828,8 @@ async def loop_watchdog():
         'stakeout_check': stakeout_check,
         'fly_check': fly_check,
         'poll_end_check': poll_end_check,
+        'retal_check': retal_check,
+        'target_board_check': target_board_check,
     }
     for name, loop in loops.items():
         if not loop.is_running():

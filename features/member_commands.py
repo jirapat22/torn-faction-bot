@@ -59,6 +59,13 @@ SECTIONS = [
          'Who is in the air or abroad right now, ours and theirs.',
          [WAR_CHANNEL_ID]),
     ]),
+    ('\U0001f3af Targets', [
+        ('/target action:Add who:<id or profile link>',
+         'Puts someone on the target board in #targets-and-retals for 7 days. '
+         'Add a reason if you like. Up to 5 each.', []),
+        ('/target action:Remove who:<id>',
+         'Takes one of yours off the board.', []),
+    ]),
     ('⛓️ Chains', [
         ('/chain view:Status',
          'The live chain: hits on it, and the time left before it drops.',
