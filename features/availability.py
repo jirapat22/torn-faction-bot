@@ -770,6 +770,11 @@ class AvailabilityManager:
                         if chunk.strip('`\n '):
                             chunk += "```"
                             await channel.send(content=chunk)
+                    # Sent on its own here. It only lived on `combined`, so
+                    # a poll long enough to split lost the one part of this
+                    # post anybody has to act on.
+                    await channel.send(
+                        content=self.non_voter_line(poll_id, guild).lstrip())
 
                 # Edit original poll message to mark as closed
                 message_id = poll.get('message_id')
@@ -1450,6 +1455,11 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
                     if chunk.strip('`\n '):
                         chunk += "```"
                         await interaction.followup.send(content=chunk)
+                # Same reason as the closing post: it only lived on
+                # `combined`, so splitting dropped it.
+                await interaction.followup.send(
+                    content=manager.non_voter_line(
+                        poll_id, interaction.guild).lstrip())
 
         # ── Mine ──
         elif action_value == 'mine':

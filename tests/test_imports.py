@@ -6228,6 +6228,27 @@ def test_poll_names_who_did_not_answer():
     mgr.data = {'p': {'0': ['1', '2', '3', '4']}}
     assert 'Everyone answered' in mgr.non_voter_line('p', Guild())
 
+    # The real list is everyone verified who did not answer, which on a
+    # 26 member roster with 11 answers is 15 people, not a handful.
+    many = [M(i, f'Member{i}') for i in range(10, 36)]
+    class BigRole:
+        name = 'Ascended punks'
+        members = many
+    class BigGuild:
+        roles = [BigRole()]
+    mgr.data = {'p': {'0': [str(m.id) for m in many[:11]]}}
+    missing = mgr.non_voters('p', BigGuild())
+    assert len(missing) == 15, (
+        f'26 verified minus 11 who answered is 15, got {len(missing)}')
+
+    # The footer must survive the long-poll path, where the post is split
+    # into separate chart and grid messages. It used to live only on the
+    # combined string, so a long poll silently dropped the one part of the
+    # post anybody acts on.
+    line = mgr.non_voter_line('p', BigGuild())
+    assert line.lstrip().startswith('❌'), line
+    assert 'Did not answer (15)' in line, line
+
     # No guild, or no such role, skips rather than guessing a pool.
     assert mgr.non_voters('p', None) == []
 
