@@ -21,6 +21,11 @@ import logging
 from datetime import datetime, date, timedelta, timezone
 
 from utils.helpers import load_json, save_json
+from config import (
+    CHAINING_CHANNEL_ID,
+    WAR_CHANNEL_ID,
+    GENERAL_CHANNEL_ID,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -46,11 +51,14 @@ DEFAULT_TORN_EVENT_DAYS = 2
 
 
 def resolve_date(year, month, day):
-    """day=None resolves to the first Friday of that month."""
-    if day is not None:
-        return date(year, month, day)
-    first = date(year, month, 1)
-    return first + timedelta(days=(4 - first.weekday()) % 7)
+    """
+    Delegates to the reminders module so there is exactly one answer to
+    "when is this event". Two copies of this rule would eventually disagree,
+    and then the Events tab and the reminder would name different days for
+    the same thing.
+    """
+    from features.event_reminders import resolve_calendar_date
+    return resolve_calendar_date(year, month, day)
 
 
 def torn_event_window(name, month, day, now):
@@ -131,6 +139,15 @@ def desired(now, calendar_events, chain_event=None, upcoming_war=None,
     return out
 
 
+def channel_for(key):
+    """Where a newly created event gets announced, by key prefix."""
+    if key.startswith('chain:'):
+        return CHAINING_CHANNEL_ID
+    if key.startswith('war:'):
+        return WAR_CHANNEL_ID
+    return GENERAL_CHANNEL_ID
+
+
 def changed(existing, want):
     """Does a tracked event need editing? Compared on what we set."""
     return (existing.get('name') != want['name']
@@ -197,6 +214,23 @@ async def sync(bot, guild, chain_event_manager=None, war_tracker=None,
                     privacy_level=discord.PrivacyLevel.guild_only,
                     reason='Faction calendar')
                 created += 1
+                # Say it once, with the link. Creating an event is otherwise
+                # completely silent, and the 35 hour reminder only fires in a
+                # 33 to 37 hour window, so anything set up the night before
+                # would never be announced at all.
+                try:
+                    ch = bot.get_channel(channel_for(key))
+                    if ch:
+                        link = (f'https://discord.com/events/'
+                                f'{guild.id}/{event.id}')
+                        await ch.send(
+                            f"\U0001f4c5 **{w['name']}** is on the calendar."
+                            + '\n' + link + '\n'
+                            + '-# Click **Interested** and Discord will '
+                              'remind you when it starts.')
+                except Exception as e:
+                    logger.error(f'Calendar sync: created but could not '
+                                 f'announce "{w["name"]}": {e}')
             except Exception as e:
                 logger.error(f'Calendar sync: could not create "{w["name"]}": {e}')
                 continue

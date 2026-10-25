@@ -6025,6 +6025,57 @@ def test_flytrack_ratio_pruning_keeps_what_is_still_useful():
     assert prune_ratios(None, now=now) == ({}, 0)
 
 
+def test_easter_and_major_event_classification():
+    """
+    Easter was missing from the calendar entirely, so one of the faction's
+    own "big four" never got a reminder. It is the only event whose date
+    moves with the lunar calendar, which is presumably why it was skipped.
+
+    The date rule also lived in two places, the reminders and the Events tab.
+    Two copies eventually disagree, and then the tab and the reminder name
+    different days for the same event.
+    """
+    from features.event_reminders import (easter_sunday, resolve_calendar_date,
+                                          CALENDAR_EVENTS, MAJOR_EVENTS,
+                                          STACKING_EVENTS, EASTER)
+    from features.calendar_sync import resolve_date
+    from datetime import date
+
+    # Checked against the public record, not against the algorithm itself.
+    for year, expect in ((2026, '2026-04-05'), (2027, '2027-03-28'),
+                         (2028, '2028-04-16'), (2030, '2030-04-21'),
+                         (2024, '2024-03-31')):
+        assert easter_sunday(year).isoformat() == expect, (
+            f'Easter {year}: got {easter_sunday(year)}, expected {expect}')
+
+    # Easter is on the calendar now.
+    names = [n for n, _m, _d in CALENDAR_EVENTS]
+    assert 'Easter Egg Hunt' in names, names
+    assert any(d == EASTER for _n, _m, d in CALENDAR_EVENTS)
+
+    # One rule, shared. Both entry points must agree on every shape.
+    for year, month, day in ((2026, 4, EASTER), (2026, 8, None),
+                             (2026, 10, 25)):
+        assert resolve_calendar_date(year, month, day) == resolve_date(
+            year, month, day), (year, month, day)
+
+    assert resolve_calendar_date(2026, 4, EASTER) == date(2026, 4, 5)
+    first_friday = resolve_calendar_date(2026, 8, None)
+    assert first_friday.weekday() == 4 and first_friday.day <= 7
+
+    # --- classification ---
+    assert MAJOR_EVENTS == {'Trick or Treat', 'Christmas Town',
+                            'Easter Egg Hunt'}, MAJOR_EVENTS
+    # Stacking is only claimed where energy actually pays. Christmas Town is
+    # collecting and Easter is searching pages; telling people to burn Xanax
+    # for those makes the line easier to ignore where it matters.
+    assert STACKING_EVENTS == {'Trick or Treat'}, STACKING_EVENTS
+    assert STACKING_EVENTS <= MAJOR_EVENTS, (
+        'anything worth stacking for is worth pinging for')
+    for name in MAJOR_EVENTS:
+        assert name in names, f'{name} must exist on the calendar to be major'
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -6133,4 +6184,5 @@ if __name__ == '__main__':
     test_chain_event_second_audit_findings()
     test_calendar_sync_keeps_stable_keys_and_leaves_human_events_alone()
     test_flytrack_ratio_pruning_keeps_what_is_still_useful()
+    test_easter_and_major_event_classification()
     print('All smoke tests passed.')
