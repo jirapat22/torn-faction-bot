@@ -36,7 +36,9 @@ Runs on Pat's home **Mac mini** in Docker Compose (`~/Projects/mac-server`, serv
   (or `git -C ~/Projects/ApexPunk pull && docker compose up -d --build apexpunk`). **Pushing alone deploys nothing.**
 - **Settings/secrets:** `~/Projects/mac-server/env/apexpunk.env` (never committed). **Data:** `~/Projects/mac-server/data/apexpunk/`
   (mounted as `/app/data`), backed up nightly with the other apps.
-- **Logs:** `docker compose logs -f apexpunk` (kept across restarts, unlike Railway's).
+- **Logs:** `~/Projects/mac-server/data/apexpunk/logs/bot.log` is the one that lasts (rotates at 2 MB, 5 kept,
+  ~3 weeks; health-check requests left out). `docker compose logs -f apexpunk` is live only: every deploy
+  rebuilds the container and wipes it, so it never reaches back past the last deploy.
 - **Live state:** `docker compose exec apexpunk cat data/<file>.json` is the way to see what the bot actually believes,
   far more reliable than reasoning about persisted state from the code.
 - **Health:** `curl http://127.0.0.1:3108/health` on the Mac.

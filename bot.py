@@ -35,6 +35,7 @@ from utils.helpers import ensure_data_directories
 from utils.torn_api import verify_api_key, close_session
 
 import logging
+from logging.handlers import RotatingFileHandler
 
 # Configure root logger: timestamped, levelled output to stdout
 logging.basicConfig(
@@ -48,6 +49,33 @@ logging.getLogger('discord').setLevel(logging.WARNING)
 logging.getLogger('discord.http').setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
+
+
+def _add_file_log():
+    """
+    Also write the log to data/logs/bot.log. On the Mac, data/ is a mounted
+    folder, so this survives deploys; Docker's own log does not, because every
+    deploy rebuilds the container and its log goes with it. That left a
+    health check able to see only the 2 minutes since the last deploy.
+
+    Rotates at 2 MB keeping 5 old files (~3 weeks, ~12 MB at most), and leaves
+    out the once-a-minute health check requests, which were most of the noise.
+    """
+    try:
+        os.makedirs('data/logs', exist_ok=True)
+        handler = RotatingFileHandler('data/logs/bot.log', maxBytes=2_000_000,
+                                      backupCount=5, encoding='utf-8')
+        handler.setFormatter(logging.Formatter(
+            '%(asctime)s %(levelname)-7s [%(name)s] %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'))
+        handler.addFilter(lambda record: record.name != 'aiohttp.access')
+        logging.getLogger().addHandler(handler)
+    except OSError as e:
+        # A log file is a convenience; never the reason the bot won't start.
+        logger.warning(f'File log disabled: {e}')
+
+
+_add_file_log()
 
 # Set up intents (permissions for what the bot can see)
 intents = discord.Intents.default()
