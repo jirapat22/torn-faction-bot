@@ -5775,6 +5775,83 @@ def test_poll_summary_shows_best_blocks_in_clock_order():
     assert 'Nobody has answered' in mgr.build_roster('p', G())
 
 
+def test_chain_event_audit_findings():
+    """
+    Four faults found re-auditing the chain features, none of which any
+    existing test caught.
+
+    1. The paginator's `from` is INCLUSIVE and it dedupes by attack id only
+       within a single call. Counting [start, T] then [T, T2] therefore
+       counted every hit landing exactly on T twice, and every /chain Event
+       made a new boundary, so totals drifted upward the more people checked
+       them.
+    2. Nothing marks an event whose window has closed, so it read "Day 7 of
+       7" forever and blocked the next event from starting.
+    3. A scheduled event was invisible to every command: not running, not
+       ended, so the bot said none had ever been run while one sat scheduled
+       for tomorrow, and cancel would have hit the wrong event.
+    4. Ending an event that has not begun is a cancel, not a finalise.
+    """
+    from features.chain_events import (chain_hits_by_member, is_over,
+                                       ChainEventManager)
+
+    OURS = '45635'
+    # Two hits exactly on the boundary second, one after it.
+    attacks = {
+        'a': {'attacker_id': '1', 'attacker_faction': OURS, 'chain': 4,
+              'timestamp_started': 1000},
+        'b': {'attacker_id': '1', 'attacker_faction': OURS, 'chain': 5,
+              'timestamp_started': 1000},
+        'c': {'attacker_id': '1', 'attacker_faction': OURS, 'chain': 6,
+              'timestamp_started': 1001},
+    }
+    assert chain_hits_by_member(attacks, OURS) == {'1': 3}, 'first slice'
+    assert chain_hits_by_member(attacks, OURS, after=1000) == {'1': 1}, (
+        'a later slice re-reads the boundary second and must drop it, or '
+        'those hits are counted twice')
+    assert chain_hits_by_member(attacks, OURS, after=1001) == {}, (
+        'nothing new past the last timestamp')
+    assert chain_hits_by_member(None, OURS, after=1000) is None, (
+        'the None contract survives the new filter')
+
+    # A hit with no timestamp must be KEPT by the filter, not dropped.
+    # Both outcomes are wrong, but dropping it undercounts, which pushes
+    # somebody below the minimum and toward a strike they did not earn,
+    # while keeping it can only inflate a total nobody is punished for.
+    no_ts = {'a': {'attacker_id': '1', 'attacker_faction': OURS, 'chain': 2}}
+    assert chain_hits_by_member(no_ts, OURS) == {'1': 1}
+    assert chain_hits_by_member(no_ts, OURS, after=5000) == {'1': 1}, (
+        'a record with no timestamp must fail toward counting, not toward '
+        'a strike')
+
+    # --- 2: a closed window is visible as closed ---
+    ev = {'id': '1', 'name': 'Done', 'start': 100, 'end': 200,
+          'status': 'running', 'totals': {}, 'minimum': 10}
+    assert is_over(ev, now=250) is True
+    assert is_over(ev, now=150) is False
+    assert is_over(ev, now=200) is True, 'the end second counts as over'
+
+    # --- 3: current() prefers running, then scheduled, then last ended ---
+    mgr = ChainEventManager.__new__(ChainEventManager)
+    mgr.events = {}
+    assert mgr.current() is None
+
+    mgr.events = {'old': {'id': 'old', 'status': 'ended', 'end': 100},
+                  'soon': {'id': 'soon', 'status': 'scheduled', 'end': 900,
+                           'start': 800}}
+    assert mgr.current()['id'] == 'soon', (
+        'a scheduled event must be found, or the bot reports none exists '
+        'while one is waiting and cancel hits the wrong one')
+
+    mgr.events['live'] = {'id': 'live', 'status': 'running', 'end': 500}
+    assert mgr.current()['id'] == 'live', 'running beats scheduled'
+
+    del mgr.events['live']
+    del mgr.events['soon']
+    mgr.events['older'] = {'id': 'older', 'status': 'ended', 'end': 50}
+    assert mgr.current()['id'] == 'old', 'the most recently ended one'
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -5879,4 +5956,5 @@ if __name__ == '__main__':
     test_chain_event_scheduling_counts_from_when_it_was_meant_to_start()
     test_chain_event_member_view_and_late_joiner_exemption()
     test_poll_summary_shows_best_blocks_in_clock_order()
+    test_chain_event_audit_findings()
     print('All smoke tests passed.')

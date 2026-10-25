@@ -396,11 +396,11 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
 
         # Everything else needs an event to talk about. A just-ended one still
         # counts, so `end` can be re-run after a restart.
-        event = chain_event_manager.active()
-        if not event:
-            ended = [e for e in chain_event_manager.events.values()
-                     if e.get('status') == 'ended']
-            event = max(ended, key=lambda e: e['end']) if ended else None
+        # Running, else scheduled, else the last one that finished. A
+        # scheduled event was invisible here: Halloween could be set for
+        # tomorrow and the bot would still answer "none has been run yet",
+        # and Event cancel would cancel the wrong one.
+        event = chain_event_manager.current()
         if not event:
             await interaction.response.send_message(
                 'No chain event has been run yet. Start one with '
@@ -416,6 +416,13 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
 
         # The member view is private: 26 people checking should not fill the
         # channel, and their standing is not everyone else's business.
+        if event.get('status') == 'scheduled' and action == 'event_end':
+            await interaction.response.send_message(
+                f'**{event["name"]}** has not started yet, so there is '
+                f'nothing to finalise. Use `/chain` → **Event cancel** to '
+                f'call it off.', ephemeral=True)
+            return
+
         await interaction.response.defer(ephemeral=(action == 'event'))
         full = (action == 'event_end')
         totals, ok = await chain_event_manager.tally(event, full=full)

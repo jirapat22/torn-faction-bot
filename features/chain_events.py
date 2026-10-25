@@ -60,9 +60,17 @@ EVENT_EARLIEST_TCT_HOUR = 10
 # ---------------------------------------------------------------- pure logic
 # Everything below is pure so it can be tested without Discord or the Torn API.
 
-def chain_hits_by_member(attacks, our_faction_id):
+def chain_hits_by_member(attacks, our_faction_id, after=None):
     """
     {torn_id: hits} for attacks that advanced a chain.
+
+    `after` drops anything at or before that timestamp. The paginator's
+    `from` is INCLUSIVE and it dedupes by attack id only within a single
+    call, so counting [start, T] and then [T, T2] counts every hit landing
+    exactly on T twice. During a chain that is several hits, and every
+    `/chain Event` makes a new boundary, so the totals drift upward the more
+    people check them. Filtering past the boundary is what keeps the slices
+    disjoint without having to remember every attack id for a week.
 
     Returns None when `attacks` is None, preserving the repo's None-vs-empty
     contract: an unreadable log must not read as "nobody hit anything", which
@@ -74,6 +82,17 @@ def chain_hits_by_member(attacks, our_faction_id):
     for _attack_id, a in attacks.items():
         if not isinstance(a, dict):
             continue
+        if after is not None:
+            # Paged on timestamp_started, so the boundary is judged on the
+            # same field the paginator used to get here.
+            ts = a.get('timestamp_started') or a.get('timestamp_ended')
+            # A record with no timestamp is KEPT. Both failures are wrong,
+            # but they are not equally wrong: dropping it undercounts, which
+            # pushes somebody below the minimum and toward a strike they did
+            # not earn, while keeping it can only inflate a total nobody is
+            # punished for. Fail toward not striking.
+            if ts and int(ts) <= int(after):
+                continue
         # Our side only. The log contains incoming attacks too, and counting
         # those would credit the enemy's hits to nobody and inflate nothing -
         # but it would also let a defender's id leak into the totals.
@@ -161,6 +180,18 @@ def met_minimum(totals, roster, minimum):
         return None
     return sum(1 for tid in (roster or {})
                if totals.get(str(tid), 0) >= minimum)
+
+
+def is_over(event, now=None):
+    """
+    Has the window closed, whatever the status still says?
+
+    Nothing auto-finishes an event, on purpose: finishing is what produces
+    the shortfall list, and that needs a human. But a closed event left
+    "running" blocks the next one from starting and keeps reading "Day 7 of
+    7" as though it were live, so every view has to be able to tell.
+    """
+    return (now or time.time()) >= int(event['end'])
 
 
 def day_of(event, now=None):
@@ -266,6 +297,24 @@ class ChainEventManager:
             if ev.get('status') == 'scheduled':
                 return ev
         return None
+
+    def current(self):
+        """
+        The event any command should be talking about.
+
+        Running first, then one waiting to start, then the last one that
+        finished. Without the middle step a scheduled event is invisible:
+        `active()` skips it and it is not in the ended list, so the bot would
+        answer "no chain event has been run yet" with Halloween sitting
+        scheduled for tomorrow, and `Event cancel` would cancel the wrong
+        one.
+        """
+        ev = self.active() or self.pending()
+        if ev:
+            return ev
+        ended = [e for e in self.events.values()
+                 if e.get('status') == 'ended']
+        return max(ended, key=lambda e: e['end']) if ended else None
 
     def due(self, now=None):
         """
@@ -381,7 +430,12 @@ class ChainEventManager:
             return event.get('totals', {}), True
 
         attacks = await self.war_tracker._fetch_all_attacks_since(cursor, until)
-        counted = chain_hits_by_member(attacks, self.faction_id)
+        # Only the FIRST slice may count the boundary second, because the
+        # window itself includes its start. Every later slice re-reads that
+        # second (the paginator's `from` is inclusive) and must drop it, or
+        # the same hits are added again.
+        after = cursor if cursor > int(event['start']) else None
+        counted = chain_hits_by_member(attacks, self.faction_id, after=after)
         merged, ok = merge_totals(event.get('totals', {}), counted)
         if not ok:
             logger.warning(f'Chain event "{event["name"]}": top-up failed, '
@@ -469,7 +523,19 @@ def progress_embed(event, totals, roster, ok, now=None):
     met = met_minimum(totals, judged, minimum)
     hits = sum((totals or {}).values())
 
-    lines = [f"**Day {day} of {days}** · minimum **{minimum}** hits each"]
+    if event.get('status') == 'scheduled':
+        lines = [f"⏳ **Not started yet.** Counting begins "
+                 f"<t:{int(event['start'])}:R>."]
+        lines.extend(faction_lines(event, totals))
+        from utils.helpers import create_embed as _ce
+        from config import EMBED_COLOR_INFO as _ci
+        return _ce(title=f"⛓️ {event['name']}",
+                   description=chr(10).join(lines), color=_ci)
+    head = f"**Day {day} of {days}** · minimum **{minimum}** hits each"
+    if is_over(event, now=now) and event.get('status') == 'running':
+        head = (f"✅ **Window closed.** Run `/chain` → **Event end** to "
+                f"finalise it and see who fell short." + chr(10) + head)
+    lines = [head]
     lines.extend(faction_lines(event, totals))
 
     if not ok:
@@ -779,7 +845,17 @@ def member_embed(event, totals, roster, ok, torn_id, now=None):
     day, days = day_of(event, now=now)
     mn = event['minimum']
     hits_total = sum((totals or {}).values())
-    lines = [f'**Day {day} of {days}**']
+    if event.get('status') == 'scheduled':
+        lines = [f"⏳ **Starts <t:{int(event['start'])}:R>.** "
+                 f"Nothing is being counted yet.",
+                 f"You will need **{mn}** chain hits once it begins."]
+        from utils.helpers import create_embed as _ce
+        from config import EMBED_COLOR_INFO as _ci
+        return _ce(title=f"⛓️ {event['name']}",
+                   description=chr(10).join(lines), color=_ci)
+    lines = [f'**Day {day} of {days}**'
+             + ('  ·  **window closed**' if is_over(event, now=now)
+                else '')]
     lines.extend(faction_lines(event, totals))
 
     if not ok:
