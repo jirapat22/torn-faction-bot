@@ -501,6 +501,51 @@ def test_chain_complete_posts_when_the_cooldown_starts():
     assert 'Chain over' in embed.title and 'cooldown' in embed.description
 
 
+def test_chain_timeout_is_a_countdown_not_a_clock_time():
+    """
+    Torn's chain `timeout` is "Seconds until chain breaks" (its OpenAPI spec).
+    Read as a timestamp, `timeout - now` was always hugely negative: the
+    "chain dying" warning never fired once in 650+ messages over several
+    broken chains, and /chain status never showed the timer.
+    """
+    import asyncio
+    import features.chains as chains_mod
+    from features.chains import ChainTracker, chain_seconds_left
+
+    now = 1_792_967_000
+    assert chain_seconds_left(20, now) == 20, 'a countdown is taken as is'
+    assert chain_seconds_left(now + 45, now) == 45, 'a timestamp still converts'
+    assert chain_seconds_left(0, now) == 0 and chain_seconds_left(None, now) == 0
+
+    posted = []
+
+    class FakeChannel:
+        async def send(self, content=None, embed=None):
+            posted.append(content)
+
+    chains_mod.save_json = lambda *a, **kw: None
+    t = ChainTracker(bot=None)
+    t.bot = type('FakeBot', (), {'get_channel': lambda self, cid: FakeChannel()})()
+    t.was_chain_active, t.last_chain_count, t.last_chain_start = True, 100, 7000
+
+    async def dying():
+        return {'current': 100, 'max': 250, 'timeout': 20, 'modifier': 1,
+                'cooldown': 0, 'start': 7000}
+
+    async def nothing():
+        return None
+    t.get_current_chain = dying
+    t.save_chain_history = nothing
+    asyncio.run(t.check_chain_update())
+    assert any('Chain dying' in (p or '') and '20s left' in p for p in posted), posted
+
+    # the status view shows when it breaks, instead of hiding the timer
+    embed = asyncio.run(t.format_chain_embed({'current': 100, 'timeout': 120,
+                                              'modifier': 1, 'cooldown': 0}))
+    assert any(f.name == 'Breaks' for f in embed.fields)
+    assert 'about to timeout' not in embed.description, '120s is not critical'
+
+
 def test_flytrack_autostop_trusts_war_tracker_not_raw_none():
     """
     Regression test for a real production incident: fly-tracking silently
@@ -6633,6 +6678,7 @@ if __name__ == '__main__':
     test_flytrack_autostop_trusts_war_tracker_not_raw_none()
     test_chain_milestone_picks_highest_on_jump()
     test_chain_complete_posts_when_the_cooldown_starts()
+    test_chain_timeout_is_a_countdown_not_a_clock_time()
     test_war_report_v2_shape_normalised()
     test_war_report_rejects_another_factions_war()
     test_xan_counts_friendly_hosps()

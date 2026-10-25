@@ -39,6 +39,23 @@ CHAIN_ALERT_MIN_COUNT = 25
 CHAIN_ALERT_SECONDS_LEFT = 30
 CHAIN_ALERT_COOLDOWN = 300
 
+def chain_seconds_left(timeout, now):
+    """
+    Seconds until the chain breaks, from the API's `timeout` field.
+
+    Torn sends a COUNTDOWN in seconds ("Seconds until chain breaks", per its
+    own OpenAPI spec), not a clock time. Treating it as a timestamp made
+    `timeout - now` hugely negative, so the "chain dying" warning never fired
+    once in 650+ messages, and the status view rendered the timer as "56 years
+    ago" (245 seconds after 1970) before a guard hid it. A value that does look
+    like a timestamp is still converted, in case Torn ever switches to one.
+    """
+    timeout = int(timeout or 0)
+    if timeout > 1_000_000_000:
+        return timeout - int(now)
+    return timeout
+
+
 class ChainTracker:
     """Tracks faction chains and provides statistics"""
 
@@ -331,12 +348,12 @@ class ChainTracker:
         timeout = chain_data.get('timeout', 0)
         modifier = float(chain_data.get('modifier', 1.0))
 
-        # Determine color based on timeout
+        # Determine color based on time left before the chain breaks
         now = get_current_timestamp()
-        time_remaining = timeout - now if timeout > 0 else 0
-
-        # Check if timeout is valid (should be in the future, not 56 years ago)
-        timeout_valid = timeout > now and timeout < (now + 86400)  # Within 24 hours
+        time_remaining = chain_seconds_left(timeout, now)
+        # A live chain's timer is 0-300s (every hit resets it to 5:00);
+        # anything else is not a number worth showing.
+        timeout_valid = 0 < time_remaining <= 300
 
         if time_remaining < 60 and timeout_valid:  # Less than 1 minute
             color = EMBED_COLOR_CRITICAL
@@ -356,7 +373,7 @@ class ChainTracker:
 
         # Only show timeout if it's valid
         if timeout_valid:
-            fields.append({'name': 'Timeout', 'value': format_timestamp(timeout, 'R'), 'inline': True})
+            fields.append({'name': 'Breaks', 'value': format_timestamp(now + time_remaining, 'R'), 'inline': True})
 
         # Build embed
         embed = create_embed(
@@ -780,8 +797,8 @@ class ChainTracker:
         # a dying chain is never queued behind a milestone announcement.
         timeout = chain.get('timeout', 0)
         now_ts = get_current_timestamp()
-        seconds_left = timeout - now_ts if timeout else 0
-        # A timeout in the past or absurdly far ahead is Torn glitching, not a
+        seconds_left = chain_seconds_left(timeout, now_ts)
+        # A timeout of 0 or past the 5:00 maximum is Torn glitching, not a
         # chain on its last legs - the status embed guards the same way.
         timeout_sane = 0 < seconds_left <= 300
         if (timeout_sane
