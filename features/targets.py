@@ -349,6 +349,10 @@ class TargetManager:
         # runs never post two boards or two copies of a retal.
         self._board_lock = asyncio.Lock()
         self._retal_lock = asyncio.Lock()
+        # Both loops start together on boot and both call ensure_channel; on
+        # the first deploy each saw no channel and each created one, leaving
+        # two. Creation has to be one-at-a-time.
+        self._channel_lock = asyncio.Lock()
 
     # ---- persistence
 
@@ -378,6 +382,10 @@ class TargetManager:
         to verified members only. Returns None (and logs why) when it cannot,
         rather than creating something visible to the whole server.
         """
+        async with self._channel_lock:
+            return await self._ensure_channel()
+
+    async def _ensure_channel(self):
         ch = self.bot.get_channel(self.data.get('channel_id') or 0)
         if ch is not None:
             return ch

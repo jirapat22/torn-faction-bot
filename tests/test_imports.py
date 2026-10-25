@@ -5171,6 +5171,61 @@ def test_targets_and_retals_decide_what_to_post():
     assert build_board_embed({}, {}, {}, now).fields[0].name == 'Nobody yet'
 
 
+def test_targets_channel_is_created_once_when_both_loops_start_together():
+    """
+    The retal loop and the board loop start in the same second on boot and
+    both ask for the channel. On the first deploy each saw none and each made
+    one, so the server got two #targets-and-retals. Two concurrent calls must
+    produce exactly one channel.
+    """
+    import asyncio
+    from features import targets as T
+
+    class Role:
+        def __init__(self, name):
+            self.name = name
+
+    class Channel:
+        def __init__(self, cid, name):
+            self.id, self.name = cid, name
+
+    class Guild:
+        def __init__(self):
+            self.text_channels = []
+            self.roles = [Role(T.VERIFIED_ROLE_NAME)]
+            self.default_role = Role('@everyone')
+            self.me = Role('bot')
+            self.created = 0
+
+        def get_role(self, _rid):
+            return None
+
+        async def create_text_channel(self, name, **_kw):
+            await asyncio.sleep(0)      # yield, as the real HTTP call does
+            self.created += 1
+            ch = Channel(1000 + self.created, name)
+            self.text_channels.append(ch)
+            return ch
+
+    guild = Guild()
+
+    class Bot:
+        def get_channel(self, cid):
+            return next((c for c in guild.text_channels if c.id == cid), None)
+
+        def get_guild(self, _gid):
+            return guild
+
+    manager = T.TargetManager(Bot())
+    manager.save = lambda: None         # never touch the real data/ folder
+
+    async def both():
+        return await asyncio.gather(manager.ensure_channel(), manager.ensure_channel())
+    a, b = asyncio.run(both())
+    assert guild.created == 1, f'{guild.created} channels created'
+    assert a is b
+
+
 def test_notices_never_turn_an_unreadable_channel_into_an_accusation():
     """
     Three faction rules say "without a notice", so this decides whether an
@@ -6490,4 +6545,5 @@ if __name__ == '__main__':
     test_chain_report_and_board_do_not_overstate_what_they_know()
     test_poll_names_who_did_not_answer()
     test_targets_and_retals_decide_what_to_post()
+    test_targets_channel_is_created_once_when_both_loops_start_together()
     print('All smoke tests passed.')
