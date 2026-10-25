@@ -13,10 +13,12 @@ A Discord bot for a Torn.com faction (Ascended Punks), running on Pat's home Mac
 <py> bot.py                       # run locally (needs .env)
 ```
 
-**`<py>` is `py -3` on Windows and `python3` on macOS or Linux.** On the
+**`<py>` is `py -3` on Windows and `venv/bin/python` on the Mac.** On the
 Windows machine, plain `python` resolves to a broken Windows Store shim, so
-never use it there. This repo gets worked on from both, so check which you
-are on before assuming.
+never use it there. On the Mac, plain `python3` is Apple's 3.9 with no packages,
+so use the gitignored `venv/` (Python 3.11, matching the Docker image). Recreate it with
+`uv venv --python 3.11 venv && uv pip install --python venv/bin/python -r requirements.txt pytest`.
+This repo gets worked on from both, so check which you are on before assuming.
 
 Testing gotchas, both of which have caused tests to silently not run:
 
@@ -123,7 +125,7 @@ The cooldown is stamped only when a warning actually goes out, so an outage or a
 
 ### State and persistence
 
-`data/*.json` is gitignored and lives on a Railway volume (it survives redeploys). Files are written atomically via `utils/helpers.py`. There is no migration system, new fields must be read defensively with `.get(...)` and backfilled on write, because live records predate them.
+`data/*.json` is gitignored and lives in `~/Projects/mac-server/data/apexpunk/` on the Mac, mounted into the container (it survives rebuilds). Files are written atomically via `utils/helpers.py`. There is no migration system, new fields must be read defensively with `.get(...)` and backfilled on write, because live records predate them.
 
 Anything accumulating per-player needs an explicit retention policy; several files grow forever otherwise. Current ones: activity profiles prune after 7 days absent from the roster, chain history caps at 100.
 

@@ -586,7 +586,10 @@ def test_activity_profile_chunk_detection():
     assert find_active_chunks({h: 0.1 for h in range(24)}, threshold=0.3, max_chunks=5) == []
 
     # Always active -> one all-day window, not 24 tiny ones
-    assert find_active_chunks({h: 0.9 for h in range(24)}, threshold=0.3, max_chunks=5) == [(0, 24, 0.9)]
+    # Tolerance, not ==: summing 24 x 0.9 lands on 0.8999999999999998 on Python
+    # 3.11 (the Docker image) but exactly 0.9 on 3.12+, whose sum() is more precise.
+    [(start, end, avg)] = find_active_chunks({h: 0.9 for h in range(24)}, threshold=0.3, max_chunks=5)
+    assert (start, end) == (0, 24) and abs(avg - 0.9) < 1e-9
 
     # 6 separate single-hour bursts, capped at 5 -> weakest dropped, rest kept in start order
     probs_many = {h: 0.0 for h in range(24)}
