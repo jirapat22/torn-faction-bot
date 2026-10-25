@@ -622,6 +622,17 @@ async def role_sync_check():
 
         if role_sync_manager:
             await role_sync_manager.sync_all_members(faction_members=faction_members)
+
+        # Discord's own Events tab, so "what is coming up" has an answer that
+        # does not scroll away. Hourly rather than daily: an event scheduled
+        # now should show up within the hour, not at the next midnight.
+        try:
+            from features.calendar_sync import sync as calendar_sync
+            from config import GUILD_ID as _gid
+            await calendar_sync(bot, bot.get_guild(_gid),
+                                chain_event_manager, war_tracker)
+        except Exception as e:
+            logger.error(f'Calendar sync failed: {e}')
         if activity_profile_manager and faction_members:
             await activity_profile_manager.record_snapshot(faction_members)
         # The timezone board rides this tick too: the roster it needs for

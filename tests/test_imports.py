@@ -5907,6 +5907,81 @@ def test_chain_event_second_audit_findings():
         'and must not tell them they are short on the strength of it')
 
 
+def test_calendar_sync_keeps_stable_keys_and_leaves_human_events_alone():
+    """
+    Fills Discord's Events tab so "what is on this week" has an answer that
+    does not scroll away.
+
+    The keys have to be stable across runs. Recreating an event instead of
+    recognising it would drop everybody's Interested mark every time the bot
+    restarted, which is the only reason a member would get their own alert.
+
+    And it must only ever manage what it created. The tab is shared, and
+    silently deleting somebody's own event is worse than a missing one.
+    """
+    from features.calendar_sync import (desired, changed, torn_event_window,
+                                        resolve_date, HORIZON_DAYS,
+                                        TORN_EVENT_DAYS)
+    from datetime import datetime, timezone
+
+    CAL = [('Trick or Treat', 10, 25), ('Christmas Town', 12, 19),
+           ('International Beer Day', 8, None)]
+    now = datetime(2026, 10, 24, 2, 0, tzinfo=timezone.utc)
+
+    want = desired(now, CAL)
+    assert 'torn:Trick or Treat:2026' in want, want.keys()
+    # Christmas is 56 days out, past the 14 day horizon.
+    assert 'torn:Christmas Town:2026' not in want, (
+        f'past the {HORIZON_DAYS} day horizon: {want.keys()}')
+
+    tot = want['torn:Trick or Treat:2026']
+    assert tot['end'] - tot['start'] == TORN_EVENT_DAYS['Trick or Treat'] * 86400
+    assert 'approximate' in tot['description'], (
+        'Torn staggers the start per player, so the tab must not look precise')
+
+    # Same inputs, same keys: nothing is recreated on a restart.
+    assert set(desired(now, CAL)) == set(want), 'keys must be stable'
+
+    # day=None is the first Friday.
+    d = resolve_date(2026, 8, None)
+    assert d.weekday() == 4 and d.day <= 7, d
+
+    # An occurrence that has finished rolls forward to next year rather than
+    # lingering. Asserted on the WINDOW, because asserting the 2026 key is
+    # absent passes either way and hides whether the roll-forward happened.
+    after = datetime(2026, 11, 3, 2, 0, tzinfo=timezone.utc)
+    nxt_start, nxt_end = torn_event_window('Trick or Treat', 10, 25, after)
+    assert nxt_start.year == 2027, (
+        f'a finished occurrence must roll to next year, got {nxt_start}')
+    assert nxt_end > after, 'and the window it returns always ends ahead'
+    assert 'torn:Trick or Treat:2026' not in desired(after, CAL)
+    # 2027 is far past the horizon, so nothing Halloween is listed at all.
+    assert not [k for k in desired(after, CAL) if 'Trick or Treat' in k]
+
+    # --- chain events and wars ---
+    ev = {'id': '99', 'name': 'Halloween', 'start': int(now.timestamp()) + 3600,
+          'end': int(now.timestamp()) + 7 * 86400, 'minimum': 10,
+          'target': 500, 'status': 'scheduled'}
+    war = {'war_id': '50338', 'start': int(now.timestamp()) + 2 * 86400}
+    want2 = desired(now, CAL, chain_event=ev, upcoming_war=war)
+    assert 'chain:99' in want2 and 'war:50338' in want2, want2.keys()
+    assert 'Minimum 10' in want2['chain:99']['description']
+    assert want2['war:50338']['end'] > want2['war:50338']['start'], (
+        'a war has no published end, so it still needs a sane block')
+
+    # A cancelled event drops out, which is what triggers its removal.
+    ev_cancelled = dict(ev, status='cancelled')
+    assert 'chain:99' not in desired(now, CAL, chain_event=ev_cancelled)
+
+    # --- changed() drives edits, and must notice each field ---
+    tracked = dict(want2['chain:99'])
+    assert changed(tracked, want2['chain:99']) is False, 'identical is no edit'
+    for field, value in (('name', 'Other'), ('start', 1), ('end', 2),
+                         ('description', 'x')):
+        assert changed(dict(tracked, **{field: value}), want2['chain:99']), (
+            f'a changed {field} must trigger an edit')
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -6013,4 +6088,5 @@ if __name__ == '__main__':
     test_poll_summary_shows_best_blocks_in_clock_order()
     test_chain_event_audit_findings()
     test_chain_event_second_audit_findings()
+    test_calendar_sync_keeps_stable_keys_and_leaves_human_events_alone()
     print('All smoke tests passed.')
