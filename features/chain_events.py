@@ -163,10 +163,19 @@ def shortfall(totals, roster, minimum):
     case the rule exists for, and a member missing from the attacks log is
     exactly that.
     """
-    if totals is None:
+    # An unreadable ROSTER is just as unknowable as unreadable totals, and
+    # returning [] for it says "nobody is short" - which at event end closes
+    # the event and declares the whole faction passed on the strength of a
+    # failed API call. Both inputs have to be present to answer at all.
+    if totals is None or roster is None:
         return None
+    # Accepts either roster shape. The manager returns {id: {name, days}} and
+    # eligible() returns {id: name}; a dict landing here used to reach
+    # .lower() and raise, which would have crashed the one command that files
+    # strikes the moment anybody was short.
+    names = names_of(roster)
     out = []
-    for tid, name in (roster or {}).items():
+    for tid, name in names.items():
         hits = totals.get(str(tid), 0)
         if hits < minimum:
             out.append({'torn_id': str(tid), 'name': name, 'hits': hits})
@@ -176,9 +185,9 @@ def shortfall(totals, roster, minimum):
 
 def met_minimum(totals, roster, minimum):
     """Count of members at or over the minimum; None when unreadable."""
-    if totals is None:
+    if totals is None or roster is None:
         return None
-    return sum(1 for tid in (roster or {})
+    return sum(1 for tid in names_of(roster)
                if totals.get(str(tid), 0) >= minimum)
 
 
@@ -858,9 +867,17 @@ def member_embed(event, totals, roster, ok, torn_id, now=None):
                 else '')]
     lines.extend(faction_lines(event, totals))
 
-    if not ok:
-        lines.append('\n⚠️ The attacks log could not be read, so '
-                     'these numbers are not current.')
+    if not ok or roster is None:
+        # Without the roster there is no leaderboard and no rank, and
+        # falling through would tell a member with 48 hits "You: 0 hits, 10
+        # more to clear the minimum" - which reads as about to be struck when
+        # they are top of the board. Say we could not look.
+        lines.append('\n⚠️ '
+                     + ('The attacks log could not be read, so these numbers '
+                        'are not current.' if not ok else
+                        'The faction roster could not be read, so your own '
+                        'total and rank are not available right now. Nothing '
+                        'is wrong with your hits.'))
         return create_embed(title=f"⛓️ {event['name']}",
                             description='\n'.join(lines),
                             color=EMBED_COLOR_WARNING)

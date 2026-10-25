@@ -5852,6 +5852,61 @@ def test_chain_event_audit_findings():
     assert mgr.current()['id'] == 'old', 'the most recently ended one'
 
 
+def test_chain_event_second_audit_findings():
+    """
+    Three more faults from a second pass, all on the path that files strikes
+    or tells a member where they stand.
+
+    1. shortfall() returned [] for an unreadable ROSTER, meaning "nobody is
+       short". At event end that closes the event and declares the whole
+       faction passed on the strength of a failed API call.
+    2. It was also being handed the manager's roster shape, {id: {name,
+       days}}, so the name was a dict and the sort reached .lower() on it.
+       That crashed the one command that files strikes, the moment anybody
+       was short.
+    3. The member view with no roster told somebody with 48 hits "You: 0
+       hits, 10 more to clear the minimum", which reads as about to be struck
+       while they are top of the board.
+    """
+    from features.chain_events import (shortfall, met_minimum, member_embed,
+                                       names_of)
+
+    totals = {'1': 48, '2': 3}
+
+    # --- 1: an unreadable roster is unknowable, not "nobody short" ---
+    assert shortfall(totals, None, 10) is None, (
+        'an unreadable roster must not read as nobody being short; at event '
+        'end that closes the event and passes the whole faction')
+    assert met_minimum(totals, None, 10) is None
+    assert shortfall(None, {'1': 'A'}, 10) is None, 'totals still guarded'
+
+    # An empty roster is a real answer and stays empty.
+    assert shortfall(totals, {}, 10) == []
+
+    # --- 2: either roster shape works, and neither reaches .lower() ---
+    plain = {'1': 'Ikaros22', '2': 'Lagger'}
+    rich = {'1': {'name': 'Ikaros22', 'days_in_faction': 800},
+            '2': {'name': 'Lagger', 'days_in_faction': 700}}
+    a = shortfall(totals, plain, 10)
+    b = shortfall(totals, rich, 10)
+    assert a == b, f'both roster shapes must give the same answer: {a} vs {b}'
+    assert [m['name'] for m in a] == ['Lagger']
+    assert isinstance(a[0]['name'], str), 'a dict must never reach the sort'
+    assert names_of(rich) == plain
+
+    # --- 3: no roster means no rank, said out loud ---
+    ev = {'name': 'H', 'start': 1000, 'end': 1000 + 7 * 86400, 'minimum': 10,
+          'target': 500, 'status': 'running', 'longest': 287}
+    text = member_embed(ev, {'7': 48}, None, True, '7',
+                        now=1000 + 2 * 86400).description
+    assert 'could not be read' in text, text
+    assert 'You: 0 hits' not in text, (
+        'a failed roster fetch must not be reported as the member having '
+        'made no hits')
+    assert 'more** to clear' not in text, (
+        'and must not tell them they are short on the strength of it')
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -5957,4 +6012,5 @@ if __name__ == '__main__':
     test_chain_event_member_view_and_late_joiner_exemption()
     test_poll_summary_shows_best_blocks_in_clock_order()
     test_chain_event_audit_findings()
+    test_chain_event_second_audit_findings()
     print('All smoke tests passed.')

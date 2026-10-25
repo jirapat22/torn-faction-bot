@@ -447,7 +447,13 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
             return
 
         # ---- end ----
-        short = shortfall(totals, roster, event['minimum'])
+        # eligible(), not the raw roster: the late joiner exemption has to
+        # apply where strikes are actually filed, not only on the board that
+        # displays them. Passing the raw roster also fed dict-shaped names
+        # into the sort.
+        from features.chain_events import eligible as _eligible
+        judged = _eligible(roster, event) if roster else None
+        short = shortfall(totals, judged, event['minimum'])
         if not ok or short is None:
             # Refuse to close on numbers we could not verify: ending stamps
             # the totals the shortfall list is built from, and a strike filed
