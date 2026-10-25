@@ -126,11 +126,33 @@ class ChainTracker:
         await self.save_chain_session()
         logger.info(f'Saved chain #{chain_id} member data to session ({len(members)} members)')
 
+    @staticmethod
+    def contributors_of(sorted_members):
+        """
+        Who to list under "Top Contributors".
+
+        Only people who hit. The list used to fill five slots regardless, so
+        chain #13, which was 13 hits between two members, printed three more
+        at 0 hits each under that heading - which says they took part when
+        they did not.
+
+        A separate function rather than an inline filter so the rule can be
+        tested against the real code instead of a copy of it.
+        """
+        return [m for m in (sorted_members or []) if m.get('hits', 0) > 0]
+
     async def _fetch_chains_list(self):
-        """Fetch list of completed chains from Torn API."""
+        """
+        Completed chains from Torn, or None when the API could not be read.
+
+        None rather than {}: an empty dict means "there were no other chains"
+        and silently lowers the respect total on the board, with nothing
+        saying the number is short. The same None-vs-empty rule the rest of
+        this repo runs on.
+        """
         data = await fetch_faction_data('chains')
         if not data:
-            return {}
+            return None
         return data.get('chains', {})
 
     async def get_aggregated_chain_data(self):
@@ -169,8 +191,13 @@ class ChainTracker:
 
         # Fetch chains list to find other chains in last 24h (totals only, no per-member)
         chains_list = await self._fetch_chains_list()
+        # None means the call failed. The per-member chains we already saved
+        # are still good, so the board is still worth showing; it just has to
+        # say the respect total may be short rather than present it as the
+        # whole picture.
+        chains_list_ok = chains_list is not None
         other_chains = []
-        for cid, cdata in chains_list.items():
+        for cid, cdata in (chains_list or {}).items():
             end_time = cdata.get('end', 0)
             chain_num = cdata.get('chain', int(cid))
             if end_time and now - end_time < 86400:
@@ -224,7 +251,10 @@ class ChainTracker:
             'chain_count': len(saved_chains) + len(other_chains),
             'chains_with_data': len(saved_chains),
             'total_respect': total_respect,
-            'chains': chain_summaries
+            'chains': chain_summaries,
+            # False means Torn's chain list could not be read, so any chain
+            # without saved per-member data is missing from these totals.
+            'chains_list_ok': chains_list_ok,
         }
 
     async def get_current_chain(self):
@@ -394,11 +424,15 @@ class ChainTracker:
             ]
         )
 
-        # Add top contributors (max 5)
-        if sorted_members:
+        # Add top contributors (max 5). Only people who actually hit:
+        # the list used to fill five slots regardless, so a 13 hit chain
+        # between two members printed three more under the heading "Top
+        # Contributors" with 0 hits each, which reads as having taken part.
+        contributors = self.contributors_of(sorted_members)
+        if contributors:
             top_contributors = '\n'.join([
                 f'{i+1}. **{m["name"]}**: {m["hits"]} hits' + (f' ({m["respect"]:.2f} respect)' if m["respect"] > 0 else '')
-                for i, m in enumerate(sorted_members[:5])
+                for i, m in enumerate(contributors[:5])
             ])
             embed.add_field(
                 name='Top Contributors',
@@ -478,6 +512,12 @@ class ChainTracker:
             header = f'**{chain_count} Chains (last 24h)**'
             if chains_with_data < chain_count:
                 header += f'\nMember breakdown from {chains_with_data} chain(s) · older chains only show totals'
+            if not aggregated_data.get('chains_list_ok', True):
+                # Say the total is short rather than present a quietly low
+                # number as the whole picture.
+                header += ('\n⚠️ Torn\'s chain list could not be read, '
+                           'so any chain without saved member data is missing '
+                           'from these totals.')
             desc = header + '\n' + '\n'.join(chain_lines)
 
         # Build embeds

@@ -6112,6 +6112,74 @@ def test_easter_and_major_event_classification():
         assert name in names, f'{name} must exist on the calendar to be major'
 
 
+def test_chain_report_and_board_do_not_overstate_what_they_know():
+    """
+    Two small honesty fixes in the chain display.
+
+    The report filled five "Top Contributors" slots regardless, so chain #13,
+    which was 13 hits between two people, listed three more members at 0 hits
+    each under that heading. Printing somebody with no hits as a top
+    contributor says the opposite of what happened.
+
+    And the chains list returned {} when Torn could not be read, which is the
+    same as "there were no other chains". That quietly lowers the respect
+    total on the board with nothing saying the number is short.
+    """
+    from features.chains import ChainTracker
+
+    # --- only real contributors are listed ---
+    sorted_members = [
+        {'name': 'Blazingdragon6', 'hits': 11, 'respect': 29.41},
+        {'name': 'Ellanna', 'hits': 2, 'respect': 3.94},
+        {'name': 'LaneEndzMafia', 'hits': 0, 'respect': 0},
+        {'name': 'GDawng', 'hits': 0, 'respect': 0},
+        {'name': 'TrevorLahey420', 'hits': 0, 'respect': 0},
+    ]
+    # Calls the real rule, not a copy of it. The first version of this test
+    # reimplemented the filter inline and passed whatever chains.py did.
+    contributors = ChainTracker.contributors_of(sorted_members)
+    assert len(contributors) == 2, contributors
+    assert [m['name'] for m in contributors] == ['Blazingdragon6', 'Ellanna']
+    assert ChainTracker.contributors_of([]) == []
+    assert ChainTracker.contributors_of(None) == []
+    assert ChainTracker.contributors_of(
+        [{'name': 'Nobody', 'hits': 0}]) == [], (
+        'a chain where nobody hit lists nobody, rather than everybody')
+    assert sum(m['hits'] for m in contributors) == 13, (
+        'the two of them are the whole chain, which is why the other three '
+        'had no business being on the list')
+    assert all(m['hits'] > 0 for m in contributors)
+
+    # --- the fetch reports failure as failure ---
+    import asyncio
+
+    class FakeAPI:
+        def __init__(self, result):
+            self.result = result
+        async def __call__(self, selection):
+            return self.result
+
+    import features.chains as chains_mod
+    original = chains_mod.fetch_faction_data
+    try:
+        tracker = ChainTracker.__new__(ChainTracker)
+
+        chains_mod.fetch_faction_data = FakeAPI(None)
+        assert asyncio.run(tracker._fetch_chains_list()) is None, (
+            'an unreadable chain list must be None, not an empty dict; {} '
+            'reads as "there were no chains" and shrinks the respect total')
+
+        chains_mod.fetch_faction_data = FakeAPI({'chains': {}})
+        assert asyncio.run(tracker._fetch_chains_list()) == {}, (
+            'a genuinely empty list is a real answer and stays empty')
+
+        chains_mod.fetch_faction_data = FakeAPI({'chains': {'1': {'respect': 5}}})
+        got = asyncio.run(tracker._fetch_chains_list())
+        assert got == {'1': {'respect': 5}}, got
+    finally:
+        chains_mod.fetch_faction_data = original
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -6221,4 +6289,5 @@ if __name__ == '__main__':
     test_calendar_sync_keeps_stable_keys_and_leaves_human_events_alone()
     test_flytrack_ratio_pruning_keeps_what_is_still_useful()
     test_easter_and_major_event_classification()
+    test_chain_report_and_board_do_not_overstate_what_they_know()
     print('All smoke tests passed.')
