@@ -5078,7 +5078,7 @@ def test_targets_and_retals_decide_what_to_post():
                                   find_retaliation, status_line, stats_line,
                                   prune_targets, count_added_by,
                                   build_board_embed, build_retal_embed,
-                                  RETAL_WINDOW, BOARD_MAX, RETALIATED_PREFIX)
+                                  RETAL_WINDOW, RETALIATED_PREFIX)
     us = 45635
 
     # whatever members paste
@@ -5167,16 +5167,31 @@ def test_targets_and_retals_decide_what_to_post():
     assert prune_targets(targets, now) == ['Old'] and list(targets) == ['new']
     assert count_added_by(targets, 1) == 1 and count_added_by(targets, '2') == 0
 
-    # a full board must still fit one Discord message (25 fields, 6000 chars)
-    many = {str(1000000 + i): {'name': 'X' * 20, 'level': 99, 'reason': 'r' * 80,
-                               'added_by': i, 'added_by_name': 'N' * 32,
-                               'added_at': now} for i in range(BOARD_MAX + 5)}
+    # grouped one line each: hit-now block first, weakest first inside it,
+    # unknown stats last (never mistaken for "weakest"); hospital by soonest out
+    board = {'a': {'name': 'Strong'}, 'b': {'name': 'Weak'}, 'c': {'name': 'NoStats'},
+             'd': {'name': 'HospLate'}, 'e': {'name': 'HospSoon'}}
+    profs = {'a': states['okay'], 'b': states['okay'], 'c': states['okay'],
+             'd': states['later'], 'e': states['soon']}
+    est = {'a': {'bs_estimate': 9_000_000, 'bs_estimate_human': '9m'},
+           'b': {'bs_estimate': 50_000, 'bs_estimate_human': '50k'},
+           'd': {'bs_estimate': 1, 'bs_estimate_human': '1'},
+           'e': {'bs_estimate': 9, 'bs_estimate_human': '9'}}
+    text = build_board_embed(board, profs, est, now).description
+    order = [n for n in ('Weak', 'Strong', 'NoStats', 'HospSoon', 'HospLate')]
+    positions = [text.index(f'[{n}]') for n in order]
+    assert positions == sorted(positions), text
+    assert text.index('Hit now') < text.index('Weak') < text.index('Hospital')
+    assert 'stats ?' in text and 'out <t:' in text
+
+    # a huge board must still fit one Discord message (description 4096)
+    many = {str(1000000 + i): {'name': 'X' * 20, 'level': 99,
+                               'added_at': now} for i in range(80)}
     embed = build_board_embed(many, {}, {}, now)
-    assert len(embed.fields) == BOARD_MAX
-    assert len(embed) <= 6000, len(embed)
-    assert '5 more not shown' in embed.footer.text
+    assert len(embed.description) <= 4096 and len(embed) <= 6000, len(embed)
+    assert 'more not shown' in embed.footer.text
     # an empty board says so instead of rendering nothing
-    assert build_board_embed({}, {}, {}, now).fields[0].name == 'Nobody yet'
+    assert 'Nobody yet' in build_board_embed({}, {}, {}, now).description
 
 
 def test_targets_channel_is_created_once_when_both_loops_start_together():

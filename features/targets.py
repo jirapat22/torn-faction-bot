@@ -50,12 +50,6 @@ CHANNEL_NAME = 'targets-and-retals'
 RETAL_WINDOW = 300          # Torn's retaliation bonus lasts 5 minutes
 TARGET_DAYS = 7
 PER_MEMBER_CAP = 5
-# One embed holds 25 fields and 6000 characters in total, and Discord rejects
-# the whole edit past that, freezing the board. 15 entries at the longest
-# allowed reason and name come to about 5,000 (the test builds that worst
-# case); build_board_embed also trims as a backstop.
-BOARD_MAX = 15
-EMBED_LIMIT = 6000
 REASON_MAX = 80
 
 # Results where the attacker actually took something from us. 'Lost',
@@ -176,30 +170,44 @@ def find_retaliation(attacks, faction_id, attacker_id, since):
     return best[1] if best else None
 
 
+# Board sections, in the order they are shown: hittable first.
+SECTIONS = [
+    (0, '\U0001f7e2 Hit now'),
+    (1, '\U0001f534 Hospital'),
+    (2, '\U0001f535 Abroad'),
+    (3, '\u2708\ufe0f Flying'),
+    (4, '\u26d3\ufe0f Jail'),
+    (5, '\u26aa Status unavailable'),
+    (6, '\u26ab Fallen'),
+]
+
+
 def status_line(profile, now):
     """
-    (sort_key, text) for a target's Torn status. Sorted hittable-first: okay
-    now, then soonest out of hospital, then abroad, flying, jailed, unknown.
+    ((section, until), detail) for a target's Torn status. The section picks
+    the board group (see SECTIONS); `until` orders hospital and jail by who is
+    out soonest; `detail` is the short tail of the line ('' when there is
+    nothing to add, as for someone who is simply okay).
     """
     status = (profile or {}).get('status') or {}
     state = status.get('state')
     until = int(status.get('until') or 0)
-    desc = status.get('description') or state or 'Unknown'
+    desc = status.get('description') or ''
     if state == 'Okay':
-        return (0, 0), '\U0001f7e2 Okay, hit now'
+        return (0, 0), ''
     if state == 'Hospital':
         if until and until > now:
-            return (1, until), f'\U0001f534 Hospital, out <t:{until}:R>'
-        return (1, now), '\U0001f534 Hospital, out any moment'
+            return (1, until), f'out <t:{until}:R>'
+        return (1, now), 'out any moment'
     if state == 'Abroad':
-        return (2, 0), f'\U0001f535 {desc}'
+        return (2, 0), desc.replace('In ', 'in ', 1)
     if state == 'Traveling':
-        return (3, until), f'✈️ {desc}'
+        return (3, until), desc.replace('Traveling ', '', 1)
     if state in ('Jail', 'Federal'):
-        return (4, until), f'⛓️ {desc}'
+        return (4, until), f'out <t:{until}:R>' if until > now else desc
     if state == 'Fallen':
-        return (6, 0), '⚫ Fallen'
-    return (5, 0), '⚪ Status unavailable'
+        return (6, 0), ''
+    return (5, 0), ''
 
 
 def stats_line(ff, now):
@@ -229,51 +237,65 @@ def count_added_by(targets, user_id):
 
 def build_board_embed(targets, profiles, ff, now):
     """
-    The pinned board. `profiles` is {torn_id: profile or None}, `ff` the
-    FFScouter dict. Sorted hittable first; anything past BOARD_MAX is counted
-    rather than silently dropped.
+    The pinned board: one short line per target, grouped by status so "who
+    can I hit right now" is always the first block. Weakest first inside a
+    group (hospital and jail by who is out soonest). The name is the attack
+    link; who added it and why live in /target action:List, because mid-fight
+    nobody reads them and they doubled the board's height.
+
+    `profiles` is {torn_id: profile or None}, `ff` the FFScouter dict.
     """
-    rows = []
+    groups = {}
     for tid, t in targets.items():
         prof = profiles.get(tid)
-        key, status = status_line(prof, now)
-        rows.append((key, tid, t, prof, status))
-    rows.sort(key=lambda r: r[0])
-
-    embed = create_embed(
-        title=BOARD_TITLE,
-        description=('People the faction wants hit. Add your own with '
-                     '`/target action:Add`. Each entry drops off after '
-                     f'{TARGET_DAYS} days.'),
-        color=EMBED_COLOR_WARNING)
-    if not rows:
-        embed.add_field(name='Nobody yet',
-                        value='Add someone with `/target action:Add`, or tap '
-                              '"Add to targets" on a retal.', inline=False)
-    for key, tid, t, prof, status in rows[:BOARD_MAX]:
+        (section, until), detail = status_line(prof, now)
+        est = (ff.get(tid) or {}).get('bs_estimate')
+        # unknown stats sort after every known one, never as "weakest"
+        weak_key = (est is None, est or 0)
+        order = (until, weak_key) if section in (1, 4) else (weak_key,)
         name = (prof or {}).get('name') or t.get('name') or tid
         level = (prof or {}).get('level') or t.get('level')
-        days_left = max(0, int((int(t.get('added_at') or 0) + TARGET_DAYS * 86400 - now) // 86400))
-        left = 'last day' if days_left == 0 else f'{days_left} day{"s" if days_left != 1 else ""} left'
-        # Only the attack link: it is the one people need, and the profile is
-        # one tap away from the attack page. Two links cost ~70 chars a row.
-        lines = [f'{status} · {stats_line(ff.get(tid), now)}',
-                 f'[Attack]({attack_url(tid)})']
-        meta = f'added by {t.get("added_by_name") or "someone"} · {left}'
-        if t.get('reason'):
-            meta = f'"{t["reason"]}" · ' + meta
-        lines.append(f'-# {meta}')
-        embed.add_field(name=f'{name} [{tid}]' + (f' · Lvl {level}' if level else ''),
-                        value='\n'.join(lines)[:1024], inline=False)
-    # Backstop: drop from the bottom (least hittable) until it fits, so an
-    # oversized board degrades to a shorter one instead of never updating.
-    while len(embed) > EMBED_LIMIT - 200 and len(embed.fields) > 1:
-        embed.remove_field(len(embed.fields) - 1)
-    extra = len(rows) - len(embed.fields) if rows else 0
-    footer = f'{len(rows)} target{"s" if len(rows) != 1 else ""}'
-    if extra > 0:
-        footer += f' ({extra} more not shown, see /target action:List)'
-    embed.set_footer(text=footer + ' · Stats are FFScouter estimates, a rough guide only')
+        human = (ff.get(tid) or {}).get('bs_estimate_human') if est else None
+        parts = [f'[{name}]({attack_url(tid)})']
+        if level:
+            parts.append(f'Lv{level}')
+        parts.append(human or 'stats ?')
+        if detail:
+            parts.append(detail)
+        groups.setdefault(section, []).append((order, ' \u00b7 '.join(parts)))
+
+    blocks, shown = [], 0
+    # Discord caps the description at 4096 chars; stop adding lines well
+    # before that so an oversized board shortens instead of failing to post.
+    budget = 3800
+    for section, label in SECTIONS:
+        rows = sorted(groups.get(section, []), key=lambda r: r[0])
+        if not rows:
+            continue
+        lines = [f'**{label}**']
+        for _order, line in rows:
+            if budget - len(line) - 1 < 0:
+                break
+            budget -= len(line) + 1
+            lines.append(line)
+            shown += 1
+        if len(lines) > 1:
+            blocks.append('\n'.join(lines))
+
+    if not targets:
+        body = ('Nobody yet. Add someone with `/target action:Add`, '
+                'or tap "Add to targets" on a retal.')
+    else:
+        body = '\n\n'.join(blocks)
+    body += (f'\n\n-# Add your own with /target action:Add. '
+             f'Entries drop off after {TARGET_DAYS} days.')
+    embed = create_embed(title=BOARD_TITLE, description=body, color=EMBED_COLOR_WARNING)
+
+    total = len(targets)
+    footer = f'{total} target{"s" if total != 1 else ""} \u00b7 tap a name to attack'
+    if total > shown:
+        footer += f' \u00b7 {total - shown} more not shown, see /target action:List'
+    embed.set_footer(text=footer + ' \u00b7 stats are FFScouter estimates, a rough guide')
     embed.timestamp = discord.utils.utcnow()
     return embed
 
@@ -585,6 +607,7 @@ class TargetManager:
                     if who:
                         retal['retaliated_by'] = who
                         changed.add(key)
+                        logger.info(f"Retal: {retal['attacker_name']} hit back by {who}")
             # An outage (attacks is None) still lets expiry run below: closing
             # a retal needs only the clock, never the API.
 
@@ -609,6 +632,11 @@ class TargetManager:
                     try:
                         msg = await ch.send(embed=embed, view=view)
                         retal['message_id'] = msg.id
+                        # Logged so "did the bot see that hit?" is one grep,
+                        # not a reconstruction from the attack log.
+                        logger.info(f"Retal: posted {retal['attacker_name']} "
+                                    f"({len(retal['hits'])} hit(s), closes in "
+                                    f"{retal['expires'] - now}s)")
                     except discord.HTTPException as e:
                         logger.error(f'Targets: could not post retal: {e}')
 
