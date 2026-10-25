@@ -13,7 +13,7 @@ Three deliberate choices:
    half a stored-offset board is an hour wrong and nobody notices until
    somebody misses a chain. zoneinfo recomputes it from the zone every time.
 
-3. No image. An embed can be edited in place hourly for free, reflows on a
+3. No image. An embed can be edited in place every 5 minutes for free, reflows on a
    phone, and is searchable; an image is a fresh upload every refresh and a
    thumbnail you have to tap. The clock emoji carry the visual weight - they
    really do show the hour hand in the right position.
@@ -385,8 +385,8 @@ async def refresh_board(bot, channel_id=None, roster=None, profile=None):
     """
     Edit the board in place with the current clocks.
 
-    Edited, not re-posted: an hourly repost would bury the picker and spam
-    the channel. Returns 'edited', 'posted', or None.
+    Edited, not re-posted: reposting every 5 minutes would bury the picker
+    and spam the channel. Returns 'edited', 'posted', or None.
     """
     channel_id = channel_id or TIMEZONE_CHANNEL_ID
     if not channel_id or bot is None:

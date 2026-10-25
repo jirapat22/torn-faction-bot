@@ -148,7 +148,7 @@ async def _start_healthcheck_server():
             daily_inactivity_check, chain_update_check, war_update_check,
             role_sync_check, enemy_status_check, event_reminder_check,
             stakeout_check, fly_check, poll_end_check,
-            retal_check, target_board_check,
+            retal_check, target_board_check, timezone_board_check,
         ]
         all_running = bot.is_ready() and all(loop.is_running() for loop in loops)
         body = {
@@ -413,6 +413,9 @@ async def on_ready():
 
         if not target_board_check.is_running():
             target_board_check.start()
+
+        if not timezone_board_check.is_running():
+            timezone_board_check.start()
 
         if not loop_watchdog.is_running():
             loop_watchdog.start()
@@ -844,6 +847,25 @@ async def before_target_board_check():
 
 
 @tasks.loop(minutes=5)
+async def timezone_board_check():
+    """Keep the timezone board's clocks current. It shows exact times
+    ("6:44 pm"), and redrawn only hourly they were up to 59 minutes behind,
+    which is the very "pinged at 4am" mistake the board exists to prevent.
+    One cached roster lookup per redraw."""
+    try:
+        from features.timezones import refresh_board
+        await refresh_board(bot, profile=activity_profile_manager)
+    except Exception as e:
+        logger.error(f'Error in timezone board check: {e}')
+
+
+@timezone_board_check.before_loop
+async def before_timezone_board_check():
+    await bot.wait_until_ready()
+    logger.info('Timezone board started (refreshes every 5 minutes)')
+
+
+@tasks.loop(minutes=5)
 async def loop_watchdog():
     """Restart any background task loop that has stopped unexpectedly."""
     loops = {
@@ -858,6 +880,7 @@ async def loop_watchdog():
         'poll_end_check': poll_end_check,
         'retal_check': retal_check,
         'target_board_check': target_board_check,
+        'timezone_board_check': timezone_board_check,
     }
     for name, loop in loops.items():
         if not loop.is_running():
