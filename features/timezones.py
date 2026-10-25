@@ -42,6 +42,11 @@ REGIONS_WEST = [
     ('\U0001f1fa\U0001f1f8', 'Alaska', 'America/Anchorage'),
     ('\U0001f1fa\U0001f1f8', 'Hawaii', 'Pacific/Honolulu'),
     ('\U0001f1e8\U0001f1e6', 'Canada - Atlantic', 'America/Halifax'),
+    # UTC-4 all year. Bonaire, Curacao, Aruba and Puerto Rico match US Eastern
+    # in summer and drift an hour off it in winter, so neither "US - Eastern"
+    # nor "Canada - Atlantic" (both shift) is right for them. Kralendijk is a
+    # tzdata alias of Puerto_Rico, so one zone covers the lot.
+    ('\U0001f334', 'Caribbean (no DST)', 'America/Puerto_Rico'),
     ('\U0001f1f2\U0001f1fd', 'Mexico', 'America/Mexico_City'),
     ('\U0001f1e8\U0001f1f4', 'Colombia / Peru', 'America/Bogota'),
     ('\U0001f1e7\U0001f1f7', 'Brazil', 'America/Sao_Paulo'),
@@ -334,8 +339,12 @@ async def _bot_messages(channel, bot, title):
 
 async def post_picker(bot, channel_id=None, force=False):
     """
-    The pinned picker. Posted once and left alone - it never changes, so
-    re-posting it would only push the board down the channel.
+    The pinned picker. Posted once and left alone - re-posting it would only
+    push the board down the channel.
+
+    Its menus are stored by Discord with the message, though, so a region
+    added in code would never show up on the old post. On startup the existing
+    picker gets the current menus edited in place, which keeps its position.
     """
     channel_id = channel_id or TIMEZONE_CHANNEL_ID
     if not channel_id or bot is None:
@@ -352,6 +361,11 @@ async def post_picker(bot, channel_id=None, force=False):
         logger.error(f'Timezones: cannot read channel: {e}')
         return None
     if existing and not force:
+        try:
+            # history() is newest first, so this is the live picker
+            await existing[0].edit(view=TimezonePicker())
+        except Exception as e:
+            logger.error(f'Timezones: could not refresh the picker menus: {e}')
         return 'unchanged'
 
     message = await channel.send(embed=embed, view=TimezonePicker())

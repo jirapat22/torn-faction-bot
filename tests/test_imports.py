@@ -5038,6 +5038,17 @@ def test_timezone_picker_fits_discord_and_the_clocks_match():
     for zone in zones:
         ZoneInfo(zone)      # raises if the zone is not real
 
+    # A member in Bonaire is UTC-4 all year. US Eastern matches them only in
+    # summer, so there has to be an option that never shifts.
+    from datetime import datetime, timezone
+    summer = datetime(2026, 7, 1, 12, tzinfo=timezone.utc)
+    winter = datetime(2026, 1, 1, 12, tzinfo=timezone.utc)
+    carib = ZoneInfo('America/Puerto_Rico')
+    assert 'America/Puerto_Rico' in zones
+    assert summer.astimezone(carib).utcoffset() == winter.astimezone(carib).utcoffset()
+    assert (ZoneInfo('America/Kralendijk').utcoffset(winter)
+            == carib.utcoffset(winter)), 'Bonaire is the same clock'
+
     # the clock face has to match the hour, or the board lies in a way that
     # looks deliberate
     assert clock_emoji(3, 0) == '\U0001f552', 'three o clock'
