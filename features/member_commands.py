@@ -160,6 +160,28 @@ async def refresh(bot, channel_id=None, force=False):
             # stable, so anybody who bookmarked or linked it still lands on it.
             return 'unchanged'
 
+    # Edit the existing board rather than reposting it. The bot owns the
+    # message, so an edit is silent: no new message at the bottom of the
+    # channel, no notification, and it keeps its place and its id for anyone
+    # who linked it. Reposting on every wording change made the board look
+    # like news when nothing had happened.
+    if mine:
+        try:
+            await mine[0].edit(embed=embed)
+            for stale in mine[1:]:
+                try:
+                    await stale.delete()
+                except Exception as e:
+                    logger.debug(f'Member commands: could not delete a '
+                                 f'duplicate board: {e}')
+            logger.info('Member commands: board edited in place')
+            return 'edited'
+        except Exception as e:
+            # Fall through to posting a fresh one. An edit can fail on a
+            # message too old to edit, and a stale board is worse than a
+            # second one.
+            logger.warning(f'Member commands: edit failed, reposting: {e}')
+
     try:
         await channel.send(embed=embed)
     except Exception as e:

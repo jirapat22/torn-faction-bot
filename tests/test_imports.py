@@ -2516,12 +2516,13 @@ def test_fly_auto_start_retries_when_enable_fails():
 def test_poll_roster_names_who_picked_each_block():
     """
     Counts tell you a block is thin but not who to chase, which is the point
-    of running the poll at all, so names stay on every row.
+    of running the poll, so names must survive somewhere. They sit on the
+    best block rather than on every row: real nicknames carry the Torn id, so
+    three of them across 24 rows runs past Discord's 1024 character field
+    limit and the list gets cut off mid row.
 
-    Empty blocks used to get a line each, which is what made a 24 block poll
-    unreadable. They are now summarised as a count with a pointer to the full
-    view instead. That is a move, not a loss: the number of empty blocks is
-    still on the message, so a week with no coverage still says so.
+    Every block still gets a row, empty ones included, because an empty block
+    is the signal.
     """
     from features.availability import AvailabilityManager
 
@@ -2536,34 +2537,38 @@ def test_poll_roster_names_who_picked_each_block():
             return self._m.get(int(uid))
 
     mgr = AvailabilityManager(bot=None)
-    def blk(i, label, st):
-        return {'id': i, 'label': label, 'date': '25-10-2026',
-                'start_time': st, 'end_time': st}
 
-    mgr.polls = {'p1': {'blocks': [blk(0, 'A', '02:00'), blk(1, 'B', '06:00'),
-                                   blk(2, 'C', '10:00')]}}
+    def blk(i, label, st, en):
+        return {'id': i, 'label': label, 'date': '25-10-2026',
+                'start_time': st, 'end_time': en}
+
+    mgr.polls = {'p1': {'blocks': [blk(0, 'A', '02:00', '06:00'),
+                                   blk(1, 'B', '06:00', '10:00'),
+                                   blk(2, 'C', '10:00', '14:00')]}}
     mgr.data = {'p1': {'0': [1, 2], '1': [], '2': [3]}}
     guild = FakeGuild({1: FakeMember('Ikaros22'), 2: FakeMember('SirAua'),
                        3: FakeMember('dakkkz')})
 
     out = mgr.build_roster('p1', guild)
-    assert 'Ikaros22' in out and 'SirAua' in out, out
-    assert '**2**' in out and 'dakkkz' in out, out
-    # The empty block is counted, not listed.
-    assert '1 with nobody' in out, (
-        f'an empty block is still the signal and must be reported: {out}')
-    assert 'nobody yet' not in out, 'but not as its own line any more'
+    rows = [r for r in out.splitlines() if r.startswith('`')]
+    assert len(rows) == 3, f'every block gets a row, empty included: {out}'
+    assert 'Ikaros22' in out and 'SirAua' in out, (
+        f'who to chase must survive somewhere: {out}')
+    assert 'Best: A' in out, f'the busiest block is named: {out}'
+    assert '1 block with nobody' in out, (
+        f'an empty block is the signal and must be reported: {out}')
 
-    # Unknown member falls back to a mention rather than vanishing
     out2 = mgr.build_roster('p1', FakeGuild({}))
-    assert '<@1>' in out2
+    assert '<@1>' in out2, out2
 
-    # A crowded block truncates itself, and later blocks still appear
     mgr.data['p1']['0'] = list(range(100, 140))
-    big = mgr.build_roster('p1', FakeGuild({i: FakeMember(f'LongMemberName{i}') for i in range(100, 140)}))
+    big = mgr.build_roster('p1', FakeGuild(
+        {i: FakeMember(f'LongMemberName{i} [{4000000 + i}]')
+         for i in range(100, 140)}))
     assert 'more' in big, 'a crowded block must summarise, not run away'
-    assert '**C**' in big, 'later blocks must survive truncation'
-    assert len(big) <= 1000
+    assert len(big) <= 1024, f'must fit one embed field, got {len(big)}'
+    assert len([r for r in big.splitlines() if r.startswith('`')]) == 3, (
+        'later blocks must survive a crowded earlier one')
 
 
 def test_no_open_slots_is_reported_but_is_not_an_excuse():
@@ -5711,18 +5716,18 @@ def test_chain_event_member_view_and_late_joiner_exemption():
 
 def test_poll_summary_shows_best_blocks_in_clock_order():
     """
-    A 24 block poll listed every block and everyone in it, which ran to 24
-    dense lines and buried the only question anybody is asking: when do we
-    chain.
+    Every block got its own line with everyone in it, so a 24 block poll ran
+    to 24 dense rows and the question people came for, when do we chain, was
+    buried in the middle.
 
-    The summary now shows the blocks worth calling, picked by headcount so
-    thin ones do not take up room, then sorted back into TIME order. Sorting
-    the display by headcount makes the reader jump around the week to work
-    out what comes next.
+    Every block still appears, in clock order, but compactly: letter, time,
+    bar, count. The names move to one call-out on the busiest block, which is
+    what keeps the whole thing inside Discord's 1024 character field limit
+    once real nicknames carry a Torn id.
     """
     from features.availability import AvailabilityManager
 
-    m = AvailabilityManager.__new__(AvailabilityManager)
+    mgr = AvailabilityManager.__new__(AvailabilityManager)
     slots = [('02:00', '06:00'), ('06:00', '10:00'), ('10:00', '14:00'),
              ('14:00', '18:00'), ('18:00', '22:00'), ('22:00', '02:00')]
     labels = 'ABCDEFGHIJKLMNOPQRSTUVWX'
@@ -5733,43 +5738,41 @@ def test_poll_summary_shows_best_blocks_in_clock_order():
                            'start_time': st, 'end_time': en})
             bid += 1
 
-    # Deliberately: the biggest block is LAST in time, so a display sorted by
-    # headcount would put it first and the clock order check would catch it.
+    # The busiest block is deliberately LAST in time: a display sorted by
+    # headcount would hoist it to the top and this would catch it.
     counts = [0] * len(blocks)
-    counts[2] = 2     # 25-10 10:00
-    counts[9] = 4     # 26-10 06:00
-    counts[16] = 3    # 27-10 10:00
-    counts[22] = 9    # 28-10 22:00  <- biggest, latest
-    m.polls = {'p': {'blocks': blocks}}
-    m.data = {'p': {str(b['id']): [str(900 + j) for j in range(counts[b['id']])]
-                    for b in blocks}}
+    counts[2] = 2
+    counts[9] = 4
+    counts[16] = 3
+    counts[22] = 9
+    mgr.polls = {'p': {'blocks': blocks}}
+    mgr.data = {'p': {str(b['id']): [str(900 + j)
+                                     for j in range(counts[b['id']])]
+                      for b in blocks}}
 
     class G:
         def get_member(self, uid):
             class M:
-                display_name = f'M{uid}'
+                display_name = f'Member{uid} [{4000000 + uid}]'
             return M()
 
-    out = m.build_roster('p', G(), max_chars=4000)
-    rows = [r for r in out.splitlines() if r.startswith('**')]
-    assert len(rows) == 4, f'only blocks with answers appear: {out}'
+    out = mgr.build_roster('p', G(), max_chars=1024)
+    rows = [r for r in out.splitlines() if r.startswith('`')]
+    assert len(rows) == len(blocks), (
+        f'every block gets a row: {len(rows)} of {len(blocks)}')
 
-    dates = [r.split('`')[1] for r in rows]
+    dates = [r.split('` ')[1][:5] for r in rows]
     assert dates == sorted(dates), (
-        f'blocks must read in clock order, not by headcount: {dates}')
-    assert dates[0].startswith('25-10') and dates[-1].startswith('28-10'), dates
-    assert '**9**' in rows[-1], (
-        'the busiest block is last here, which is what proves the sort is by '
-        'time rather than by count')
+        f'rows must read in clock order, not by headcount: {dates}')
+    assert rows[0].startswith('`A`') and rows[-1].startswith('`X`'), rows[:1]
 
-    # Blocks nobody picked are summarised, never listed one by one.
-    assert 'with nobody' in out, out
-    assert 'nobody yet' not in out, (
-        'empty blocks must not each get their own line again')
+    assert 'Best: W' in out, f'the busiest block must be named: {out}'
+    assert '**9**' in out
+    assert 'with nobody in them' in out, out
+    assert len(out) <= 1024, f'{len(out)} chars will be truncated by Discord'
 
-    # Nothing answered at all reads as such instead of an empty string.
-    m.data = {'p': {}}
-    assert 'Nobody has answered' in m.build_roster('p', G())
+    mgr.data = {'p': {}}
+    assert 'Nobody has answered' in mgr.build_roster('p', G())
 
 
 if __name__ == '__main__':

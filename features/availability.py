@@ -298,57 +298,58 @@ class AvailabilityManager:
             member = guild.get_member(int(uid)) if guild else None
             return member.display_name if member else f'<@{uid}>'
 
-        counted = []
-        for i, block in enumerate(blocks):
-            uids = data.get(str(block['id']), [])
-            if uids:
-                counted.append((len(uids), i, block, uids))
-        if not counted:
+        counts = [(len(data.get(str(b['id']), [])), b) for b in blocks]
+        most = max([n for n, _b in counts] or [0])
+        if not most:
             return '-# Nobody has answered yet.'
 
-        # Best by headcount, then back into clock order for display.
-        top = sorted(counted, key=lambda c: -c[0])[:self.SUMMARY_BLOCKS]
-        top.sort(key=lambda c: c[1])
-        most = top[0][0] if top else 0
-        most = max(most, max(c[0] for c in top))
+        # Every block, in clock order. Names are left off deliberately: real
+        # nicknames carry the Torn id, so three of them on 24 rows runs past
+        # the 1024 character field limit and the whole thing gets truncated
+        # mid-list. The count and bar answer "when", and the call-out below
+        # answers "who" for the block that matters.
+        rows = []
+        for n, block in counts:
+            bar = ('█' * max(1, round(n / most * self.BAR_WIDTH))
+                   if n else '·')
+            rows.append(f"`{block['label']}` {block['date'][:5]} "
+                        f"{block['start_time'][:2]}-{block['end_time'][:2]} "
+                        f"{bar:<{self.BAR_WIDTH}} {n}")
 
-        lines = []
-        for n, _i, block, uids in top:
-            names = [name_for(u) for u in uids]
-            shown, used = [], 0
-            for nm in names:
-                if used + len(nm) + 2 > 60:
+        best_n, best_block = max(counts, key=lambda c: c[0])
+        uids = data.get(str(best_block['id']), [])
+        names = [name_for(u) for u in uids]
+        shown, used = [], 0
+        for nm in names:
+            if used + len(nm) + 2 > 90:
+                break
+            shown.append(nm)
+            used += len(nm) + 2
+        who = ', '.join(shown)
+        if len(shown) < len(names):
+            who += f' +{len(names) - len(shown)} more'
+
+        empty = sum(1 for n, _b in counts if not n)
+        out = '\n'.join(rows)
+        # Hard cap before the field limit bites, so a long poll loses its
+        # tail with a note rather than being cut mid row by Discord.
+        body_room = max_chars - 200
+        if len(out) > body_room:
+            kept = []
+            for r in rows:
+                if sum(len(x) + 1 for x in kept) + len(r) > body_room:
                     break
-                shown.append(nm)
-                used += len(nm) + 2
-            text = ', '.join(shown)
-            if len(shown) < len(names):
-                text += f' +{len(names) - len(shown)} more'
-            # Scaled to the busiest block shown, not one character per head.
-            # A 26 member faction would otherwise draw a 26 character bar and
-            # push the names off the line, which is the problem this whole
-            # summary exists to fix.
-            filled = max(1, round(n / most * self.BAR_WIDTH)) if most else 1
-            bar = '█' * filled
-            # The letter stays: it is how a member finds the block in the
-            # dropdown, so a summary without it cannot be acted on.
-            lines.append(f"**{block['label']}** `{block['date'][:5]} "
-                         f"{block['start_time']}-{block['end_time']}` "
-                         f"{bar} **{n}** {text}")
-
-        hidden = len(counted) - len(top)
-        empty = len(blocks) - len(counted)
-        tail = []
-        if hidden:
-            tail.append(f'{hidden} quieter block{"s" if hidden != 1 else ""}')
+                kept.append(r)
+            out = ('\n'.join(kept)
+                   + f'\n-# +{len(rows) - len(kept)} more blocks, see '
+                     f'`/avail action:Summary`')
+        out += (f"\n\U0001f3c6 **Best: {best_block['label']}** "
+                f"{best_block['date'][:5]} {best_block['start_time']}-"
+                f"{best_block['end_time']} TCT with **{best_n}** ({who})")
         if empty:
-            tail.append(f'{empty} with nobody')
-        if tail:
-            lines.append(f'-# Not shown: {", ".join(tail)}. '
-                         f'Use `/avail action:Summary` for all of them.')
-
-        out = '\n'.join(lines)
-        return out[:max_chars] if len(out) > max_chars else out
+            out += (f"\n-# {empty} block{'s' if empty != 1 else ''} with "
+                    f"nobody in {'them' if empty != 1 else 'it'} yet.")
+        return out
 
     def get_block_count(self, poll_id: str, block_id: int) -> int:
         """Get number of users available for a block"""
