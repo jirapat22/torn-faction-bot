@@ -429,6 +429,49 @@ class AvailabilityManager:
             'block_length': poll['block_length']
         }
 
+    def non_voters(self, poll_id: str, guild, role_name=None):
+        """
+        Members who could have answered and did not.
+
+        The pool is people holding the verified role, because that is exactly
+        who the poll accepts answers from. Counting the whole faction would
+        list people who are not in Discord and literally cannot vote, which
+        makes the list useless for chasing anybody.
+
+        Returns a sorted list of display names, or [] when the guild or the
+        role cannot be resolved. Not None: an empty list here means "nobody
+        to chase" and the caller shows nothing either way, so the
+        distinction buys nothing and a missing name is not an accusation.
+        """
+        if not guild:
+            return []
+        from config import VERIFIED_ROLE_NAME
+        wanted = (role_name or VERIFIED_ROLE_NAME).lower()
+        role = discord.utils.find(lambda r: r.name.lower() == wanted,
+                                  guild.roles)
+        if role is None:
+            logger.warning('Availability: verified role not found, so the '
+                           'non-voter list is skipped rather than guessed')
+            return []
+
+        voted = set()
+        for user_ids in (self.data.get(poll_id, {}) or {}).values():
+            voted.update(str(u) for u in user_ids)
+
+        missing = [m.display_name for m in role.members
+                   if not m.bot and str(m.id) not in voted]
+        return sorted(missing, key=str.lower)
+
+    def non_voter_line(self, poll_id: str, guild, role_name=None):
+        """The "did not answer" footer, or a line saying everybody did."""
+        missing = self.non_voters(poll_id, guild, role_name=role_name)
+        if not missing:
+            return '\n✅ **Everyone answered.**'
+        shown = ', '.join(missing[:25])
+        more = len(missing) - 25
+        return (f'\n❌ **Did not answer ({len(missing)}):** {shown}'
+                + (f' +{more} more' if more > 0 else ''))
+
     def generate_member_grid(self, poll_id: str, guild) -> str:
         """
         Generate member × time slot grid for availability
@@ -700,8 +743,11 @@ class AvailabilityManager:
                     color=EMBED_COLOR_SUCCESS
                 )
 
-                # Combined chart + grid
+                # Combined chart + grid, then who still has not answered.
+                # Outside the code block so the names read normally, and last
+                # because it is the part you act on after reading the chart.
                 combined = f"```\nAvailability (Torn Time)\n\n{timetable}\n\nMember Grid\n\n{grid}\n```"
+                combined += self.non_voter_line(poll_id, guild)
 
                 if len(combined) <= 2000:
                     await channel.send(embed=embed, content=combined)
@@ -1382,6 +1428,7 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
             timetable = manager.generate_timetable(poll_id)
             grid = manager.generate_member_grid(poll_id, interaction.guild)
             combined = f"```\nAvailability (Torn Time)\n\n{timetable}\n\nMember Grid\n\n{grid}\n```"
+            combined += manager.non_voter_line(poll_id, interaction.guild)
 
             if len(combined) <= 2000:
                 await interaction.followup.send(embed=embed, content=combined)

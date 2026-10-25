@@ -6180,6 +6180,63 @@ def test_chain_report_and_board_do_not_overstate_what_they_know():
         chains_mod.fetch_faction_data = original
 
 
+def test_poll_names_who_did_not_answer():
+    """
+    The results post shows when people are free, which answers "when do we
+    chain" but not "who do I chase". Naming the people who never answered is
+    the actionable half, and answering the poll is what exempts somebody
+    from the absence strike, so the list is the warning before that.
+
+    The pool is people holding the verified role, because that is exactly
+    who the poll accepts answers from. Counting the whole faction would list
+    people who are not in Discord and literally cannot vote.
+    """
+    from features.availability import AvailabilityManager
+
+    class M:
+        def __init__(self, uid, name, bot=False):
+            self.id = uid
+            self.display_name = name
+            self.bot = bot
+
+    voted_a, voted_b = M(1, 'dakkkz'), M(2, 'Ikaros22')
+    silent_a, silent_b = M(3, 'Ellanna'), M(4, 'BunnyBull')
+    a_bot = M(5, 'ApexPunk', bot=True)
+    outsider = M(6, 'NotVerified')
+
+    class Role:
+        name = 'Ascended punks'
+        members = [voted_a, voted_b, silent_a, silent_b, a_bot]
+
+    class Guild:
+        roles = [Role()]
+
+    mgr = AvailabilityManager.__new__(AvailabilityManager)
+    mgr.data = {'p': {'0': ['1'], '1': ['1', '2'], '2': []}}
+
+    missing = mgr.non_voters('p', Guild())
+    assert missing == ['BunnyBull', 'Ellanna'], missing
+    assert 'ApexPunk' not in missing, 'the bot holds the role and cannot vote'
+    assert 'NotVerified' not in missing, (
+        'somebody without the role was never able to answer, so naming them '
+        'is not a chase list')
+
+    line = mgr.non_voter_line('p', Guild())
+    assert 'Did not answer (2)' in line and 'Ellanna' in line, line
+
+    # Everybody answered reads as such, not as an empty list.
+    mgr.data = {'p': {'0': ['1', '2', '3', '4']}}
+    assert 'Everyone answered' in mgr.non_voter_line('p', Guild())
+
+    # No guild, or no such role, skips rather than guessing a pool.
+    assert mgr.non_voters('p', None) == []
+
+    class NoRoleGuild:
+        roles = []
+    assert mgr.non_voters('p', NoRoleGuild()) == [], (
+        'without the role there is no defensible pool, so name nobody')
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -6290,4 +6347,5 @@ if __name__ == '__main__':
     test_flytrack_ratio_pruning_keeps_what_is_still_useful()
     test_easter_and_major_event_classification()
     test_chain_report_and_board_do_not_overstate_what_they_know()
+    test_poll_names_who_did_not_answer()
     print('All smoke tests passed.')
