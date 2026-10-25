@@ -86,6 +86,9 @@ CALENDAR_EVENTS = [
     ('World Population Day', 7, 10),
     ('World Tiger Day', 7, 28),
     ('International Beer Day', 8, None),
+    # Sep 5 to 18 from 2026 onward, per the wiki calendar. Was missing
+    # entirely, and the faction's own event guide calls it a big four.
+    ('Elimination', 9, 5),
     ('Tourism Day', 9, 26),
     ('CaffeineCon {year}', 10, 14),
     ('Trick or Treat', 10, 25),
@@ -185,9 +188,7 @@ class EventReminderManager:
                 if name in STACKING_EVENTS:
                     embed.add_field(
                         name='⏱️ Stack now',
-                        value=('Four Xanax at 6 to 8 hours cooldown each is '
-                               'roughly 32 hours, so this is about the last '
-                               'moment to go in on a full stack.'),
+                        value='Start stacking your Xanax so you go in full.',
                         inline=False)
                 await channel.send(content=content, embed=embed)
                 logger.info(f'Calendar event reminder posted for '
@@ -282,9 +283,8 @@ class EventReminderManager:
         # four Xanax at a 6 to 8 hour cooldown each is about 32 hours, plus
         # the last cooldown clearing before the event. Reminding somebody 24
         # hours out is already too late to go in full.
-        return (f"{head}\n\n⏱️ **Start your Xanax now.** Four of "
-                f"them at 6 to 8 hours cooldown each is roughly 32 hours, so "
-                f"this is about the last moment to go in on a full stack.")
+        return (f"{head}\n\n⏱️ **Start stacking your Xanax now** "
+                f"so you go in on a full bar.")
 
     async def check_and_announce_events(self):
         """

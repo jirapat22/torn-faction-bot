@@ -41,11 +41,18 @@ HORIZON_DAYS = 14
 # one that admits it.
 TORN_EVENT_START_HOUR = 10
 
-# Most Torn events run 48 hours. These do not.
+# Durations from the wiki calendar at https://wiki.torn.com/wiki/Calendar.
+# The wiki writes inclusive date RANGES, so "13 to 15 February" is a 48 hour
+# event: it starts on the 13th and ends on the 15th. Days here is the gap
+# between those two dates, which is what gets added to the start, so the
+# number is always one less than the count of dates listed.
 TORN_EVENT_DAYS = {
-    'Trick or Treat': 7,
-    'Christmas Town': 14,
-    'Elimination': 14,
+    'Awareness Week': 6,        # 15 to 21 January
+    'Elimination': 13,          # 5 to 18 September
+    'Trick or Treat': 7,        # 25 October to 1 November
+    'Christmas Town': 12,       # 19 to 31 December
+    'Torn Anniversary': 1,      # 15 November, single date
+    'Black Friday': 1,          # 29 November, single date
 }
 DEFAULT_TORN_EVENT_DAYS = 2
 

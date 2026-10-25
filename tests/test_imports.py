@@ -6048,10 +6048,46 @@ def test_easter_and_major_event_classification():
         assert easter_sunday(year).isoformat() == expect, (
             f'Easter {year}: got {easter_sunday(year)}, expected {expect}')
 
-    # Easter is on the calendar now.
+    # Easter and Elimination are on the calendar now. Both were missing,
+    # and both are in the faction's own "big four".
     names = [n for n, _m, _d in CALENDAR_EVENTS]
     assert 'Easter Egg Hunt' in names, names
+    assert 'Elimination' in names, names
     assert any(d == EASTER for _n, _m, d in CALENDAR_EVENTS)
+
+    # Durations come from the wiki calendar, not a guess. Checked against the
+    # published ranges, because the default used to be 2 days and ended most
+    # of them a day early.
+    from features.calendar_sync import (TORN_EVENT_DAYS,
+                                        DEFAULT_TORN_EVENT_DAYS,
+                                        torn_event_window)
+    from datetime import datetime, timezone
+    # The wiki writes INCLUSIVE ranges, so "13 to 15 February" is a 48 hour
+    # event and the gap is 2, not 3. Getting this backwards put every end
+    # date a day late in the Events tab.
+    assert DEFAULT_TORN_EVENT_DAYS == 2, (
+        "Valentine's is 13 to 15 February, which is a 48 hour event")
+    for name, days in (('Trick or Treat', 7), ('Christmas Town', 12),
+                       ('Elimination', 13), ('Awareness Week', 6),
+                       ('Black Friday', 1)):
+        assert TORN_EVENT_DAYS[name] == days, (name, TORN_EVENT_DAYS.get(name))
+
+    # 25 October to 1 November, exactly as the wiki states it.
+    before = datetime(2026, 10, 1, tzinfo=timezone.utc)
+    st, en = torn_event_window('Trick or Treat', 10, 25, before)
+    assert (st.month, st.day) == (10, 25) and (en.month, en.day) == (11, 1), (st, en)
+    # 5 to 18 September.
+    st, en = torn_event_window('Elimination', 9, 5,
+                               datetime(2026, 8, 1, tzinfo=timezone.utc))
+    assert (st.month, st.day) == (9, 5) and (en.month, en.day) == (9, 18), (st, en)
+    # And a plain one: Valentine's, 13 to 15 February.
+    st, en = torn_event_window("Valentine's Day", 2, 13,
+                               datetime(2026, 2, 1, tzinfo=timezone.utc))
+    assert (st.month, st.day) == (2, 13) and (en.month, en.day) == (2, 15), (st, en)
+    # Christmas Town, 19 to 31 December.
+    st, en = torn_event_window('Christmas Town', 12, 19,
+                               datetime(2026, 12, 1, tzinfo=timezone.utc))
+    assert (en.month, en.day) == (12, 31), en
 
     # One rule, shared. Both entry points must agree on every shape.
     for year, month, day in ((2026, 4, EASTER), (2026, 8, None),
