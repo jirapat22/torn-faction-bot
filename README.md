@@ -1,9 +1,31 @@
-# Apexpunk — Torn Faction Discord Bot
+# Apexpunk: a Discord bot for a Torn faction
 
-A Discord bot for running a Torn.com faction: member accountability
-(inactivity + organized-crime participation), war tracking, chain tracking,
-verification/role sync, and event reminders. Built on `discord.py`, deployed
-on Railway.
+A Discord bot that helps run my 35-member faction in the online game [Torn](https://www.torn.com): war and chain updates, enemy flight tracking, availability polls, and a daily check on who has gone inactive. It is used by **27 members** who linked their Discord to the game, and it has tracked **13 wars**.
+
+**Live overview with screenshots:** [jirapat.dev/#apexpunk](https://jirapat.dev/#apexpunk)
+
+<p>
+  <img src="https://jirapat.dev/shots/apexpunk-1-war.webp" width="260" alt="Chain timer and enemy flight landing windows in the war room">
+  <img src="https://jirapat.dev/shots/apexpunk-2-inactivity.webp" width="260" alt="The daily check flagging inactive members">
+</p>
+
+<sub>Screenshots are the bot's real message code run on made-up players.</sub>
+
+## Interesting problems solved
+
+- **Jobs that can't silently die.** Ten background jobs run 24/7 (wars, chains, inactivity, flights, polls...). A watchdog checks every 5 minutes and restarts any that stopped, and a health endpoint only reports healthy when Discord is connected and every job is running.
+- **"API failed" is not "nothing happened".** Returning an empty list for both once made the bot flag nearly the whole faction for missing crimes. Fetch helpers now return `None` for a failure, and reports skip that section instead of guessing.
+- **Complete war reports.** Hits taken come from Torn's paginated attack log. Pages retry on errors, so one failed page can't make a war look quieter than it was, and a finished war's query window is closed so later hits don't leak in.
+- **Predicting enemy landing times.** Torn won't reveal other players' flight times, so the bot measures each player's real travel speed (median of their past flights) and shows a landing window, with the early edge first because that's the dangerous one.
+- **Staying inside API limits** with a rolling-window rate limiter and short response caching.
+
+## Tech
+
+Python · discord.py · aiohttp · Torn API (v1 + v2) · FFScouter API · JSON-file storage · Docker
+
+## How it was built
+
+Built with [Claude Code](https://claude.com/claude-code) (an AI coding assistant). I decided the features, directed the design and tested every change; Claude wrote most of the code. **118 automated tests** (`python -m pytest -q`).
 
 ## What it does
 
@@ -60,12 +82,12 @@ pip install -r requirements.txt
 python bot.py
 ```
 
-## Deployment (Railway)
+## Deployment
 
-The repo ships a `Dockerfile` and `railway.json`. Push to the connected repo;
-Railway builds and runs `python bot.py`. Set every variable from `.env` in the
-Railway service's Variables tab. A `PORT`-bound healthcheck endpoint reports
-`healthy` only when Discord is connected **and** every background loop is running.
+Runs in Docker (the repo ships a `Dockerfile`) on a self-hosted home server, started with
+`python bot.py`. Settings come from environment variables (below). With `PORT` set, a small
+health endpoint reports `healthy` only when Discord is connected **and** every background
+loop is running.
 
 ## Environment variables
 
