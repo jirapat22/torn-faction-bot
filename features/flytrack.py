@@ -95,7 +95,7 @@ TIER_LABELS = {
 # Why: snapping a measurement to the nearest bucket threw away the accurate
 # number we had just observed. Measured against 82 real flights, every single
 # prediction landed LATE (avg 8 min, worst 24) because every bucket is a touch
-# slower than reality - e.g. MegaBates was measured at 143 min to South Africa,
+# slower than reality - e.g. MegaMoth was measured at 143 min to South Africa,
 # then predicted with the WLT bucket's 148.5 min, so he landed ~5.5 min early.
 #
 # Empirical ratios from those 82 flights: median 0.669, p25 0.657, p75 0.692.
@@ -135,9 +135,9 @@ FOLLOW_THREAT_RATIO = 0.5      # below this x the member's stats, never worth a 
 FOLLOW_COOLDOWN_RETENTION = 4  # prune cooldown rows older than N x the cooldown
 
 # Enemies are split into bands RELATIVE TO THE MEMBER being warned, because
-# "strong" has no absolute meaning here - measured live, the same enemy (PUAD,
-# ~817k) is a genuine threat to Trizzy973 (516k) and completely irrelevant to
-# TrevorLahey420 (7.5m) standing in the same country.
+# "strong" has no absolute meaning here - measured live, the same enemy (QXZT,
+# ~817k) is a genuine threat to Brizzy871 (516k) and completely irrelevant to
+# GaryHollis42 (7.5m) standing in the same country.
 #
 # Only a non-trivial enemy can TRIGGER a message; once one has, every other
 # enemy heading to that country in the same tick is listed too, since the extra
@@ -851,7 +851,7 @@ class FlyTracker:
 
         The mention alone identifies the person - Discord already renders it as
         their nickname, which in this server carries the Torn name, so also
-        printing mem['name'] produced "@Trizzy973 [3266373] Trizzy973".
+        printing mem['name'] produced "@Brizzy871 [3266373] Brizzy871".
 
         An unregistered member can't be mentioned at all, so the warning names
         them and closes with how to fix that. Deliberately NOT escalated to a

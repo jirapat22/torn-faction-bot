@@ -199,14 +199,14 @@ def test_flytrack_group_formatting():
     # mgr.players deliberately left empty - formatters take fields directly
     assert mgr.players == {}
 
-    line = mgr._format_group_line('Chaosito', PHASE_OUT, 'China', 1_700_000)
-    assert 'Chaosito' in line and 'China' in line and '→' in line
+    line = mgr._format_group_line('Mischiefo', PHASE_OUT, 'China', 1_700_000)
+    assert 'Mischiefo' in line and 'China' in line and '→' in line
 
-    line = mgr._format_group_line('RodneyAKing', PHASE_RETURNING, 'South Africa', None)
+    line = mgr._format_group_line('CliveKingston', PHASE_RETURNING, 'South Africa', None)
     assert '←' in line and 'ETA unknown' in line
 
-    line = mgr._format_abroad_line('Ferothen', 'China')
-    assert line == '**Ferothen** · China'
+    line = mgr._format_abroad_line('Ravenholt', 'China')
+    assert line == '**Ravenholt** · China'
 
 
 def test_flytrack_status_reuses_persisted_eta():
@@ -222,17 +222,17 @@ def test_flytrack_status_reuses_persisted_eta():
 
     mgr = FlyTracker(bot=None)
     mgr.enabled = True
-    mgr.enemy_faction_name = 'TGC'
+    mgr.enemy_faction_name = 'RVC'
 
     # Simulate check_flights() having anchored this leg some time ago
     fixed_eta = 1_700_000
     mgr.players['99'] = {
-        'name': 'BigGeecuz', 'phase': PHASE_RETURNING, 'dest': 'UAE',
+        'name': 'BigKestrel', 'phase': PHASE_RETURNING, 'dest': 'UAE',
         'eta': fixed_eta, 'leg_start': fixed_eta - 3600, 'leg_observed': True,
     }
 
     async def fake_members():
-        return {'99': {'name': 'BigGeecuz',
+        return {'99': {'name': 'BigKestrel',
                        'status': {'state': 'Traveling', 'description': 'Traveling from UAE to Torn'}}}
     mgr._fetch_enemy_members = fake_members
 
@@ -1353,7 +1353,7 @@ def test_left_faction_access_revoked_after_grace_period():
 def test_flytrack_uses_measured_speed_not_rounded_bucket():
     """
     Regression test for a real report: "he landed like 5 minute earlier than
-    what was said". MegaBates had been MEASURED at 143 min to South Africa, but
+    what was said". MegaMoth had been MEASURED at 143 min to South Africa, but
     the ETA was computed from the WLT bucket (0.50 x 297 = 148.5 min) - so the
     bot ignored its own measurement and predicted 5.5 min late. Across 82 stored
     flights every single prediction ran late (avg 8 min, worst 24) for the same
@@ -1366,7 +1366,7 @@ def test_flytrack_uses_measured_speed_not_rounded_bucket():
     start = 1_000_000
 
     # Exactly the stored production record that produced the complaint
-    mgr.tiers['mega'] = {'tier': 'wlt', 'name': 'MegaBates',
+    mgr.tiers['mega'] = {'tier': 'wlt', 'name': 'MegaMoth',
                          'observed_minutes': 143.0, 'dest': 'South Africa'}
 
     eta = mgr._eta_ts('mega', 'South Africa', start)
@@ -1710,7 +1710,7 @@ def test_saved_war_history_records_real_hits_taken():
 
     try:
         asyncio.run(mgr._save_war_member_data(
-            50338, report_factions, 1952, 5290, 'The Naughty Kids',
+            50338, report_factions, 1952, 5290, 'The Rowdy Ravens',
             friendly_hosps=[], attack_stats=attack_stats))
 
         wars = saved['data']['wars'] if 'wars' in saved['data'] else saved['data']
@@ -1921,7 +1921,7 @@ def test_war_report_counts_hits_taken_from_attack_log():
                 'members': {'111': {'attacks': 79, 'score': 384.0},
                             '222': {'attacks': 0, 'score': 0}},
             },
-            '53421': {'name': 'The Naughty Kids', 'score': 5290, 'members': {}},
+            '53421': {'name': 'The Rowdy Ravens', 'score': 5290, 'members': {}},
         },
     }
 
@@ -2050,10 +2050,10 @@ def test_war_report_v2_shape_normalised():
             {'id': 45635, 'name': 'Ascended Punks', 'score': 1200, 'rank': 'Gold',
              'attacks': 300, 'rewards': {},
              'members': [
-                 {'id': 3571142, 'name': 'Ikaros22', 'level': 67, 'attacks': 40, 'score': 210},
+                 {'id': 3571142, 'name': 'Icarus77', 'level': 67, 'attacks': 40, 'score': 210},
                  {'id': 2094609, 'name': 'Someone', 'level': 30, 'attacks': 12, 'score': 66},
              ]},
-            {'id': 53421, 'name': 'The Naughty Kids', 'score': 900, 'rank': 'Gold',
+            {'id': 53421, 'name': 'The Rowdy Ravens', 'score': 900, 'rank': 'Gold',
              'attacks': 250, 'rewards': {}, 'members': []},
         ],
     }
@@ -2065,7 +2065,7 @@ def test_war_report_v2_shape_normalised():
 
     members = factions['45635']['members']
     assert isinstance(members, dict), 'members must be keyed by user id'
-    assert members['3571142']['name'] == 'Ikaros22'
+    assert members['3571142']['name'] == 'Icarus77'
     assert members['3571142']['attacks'] == 40
     # Fields consumers read survive; defends is absent in v2 and must default safely
     assert members['3571142'].get('defends', 0) == 0
@@ -2214,7 +2214,7 @@ def _home(name):
 
 def test_follow_warning_pings_only_the_member_in_that_country():
     """
-    The feature SirAua asked for: warn a member when an enemy takes off toward
+    The feature SirKaka asked for: warn a member when an enemy takes off toward
     the country they are sitting in.
 
     Three things have to hold or it's either useless or spam:
@@ -2255,7 +2255,7 @@ def test_follow_warning_pings_only_the_member_in_that_country():
 
 def test_follow_warning_tells_unregistered_members_how_to_fix_it():
     """
-    An unregistered member (Kiwisupercar, live) can't be mentioned, so the
+    An unregistered member (Tuatararacer, live) can't be mentioned, so the
     warning is posted but notifies nobody. Rather than escalating to a role
     ping - which would route their alerts through someone else indefinitely -
     the message tells them how to get pinged themselves.
@@ -2316,8 +2316,8 @@ def test_follow_warning_cooldown_suppresses_repeats():
 def test_follow_warning_splits_stronger_from_weaker():
     """
     Enemies are banded against the stats of the member being warned, because
-    "strong" has no absolute meaning - measured live, PUAD (~817k) was a real
-    threat to Trizzy973 (516k) and irrelevant to TrevorLahey420 (7.5m) standing
+    "strong" has no absolute meaning - measured live, QXZT (~817k) was a real
+    threat to Brizzy871 (516k) and irrelevant to GaryHollis42 (7.5m) standing
     in the same country.
 
     Banding and the decision to send are deliberately separate: a trivial enemy
@@ -2369,8 +2369,8 @@ def test_follow_warning_splits_stronger_from_weaker():
 
 def test_follow_warning_not_triggered_by_weak_enemies_alone():
     """
-    The send gate. Confirmed live: PUAD departing for Switzerland pinged
-    Trizzy973 and Kiwisupercar but correctly stayed silent for TrevorLahey420,
+    The send gate. Confirmed live: QXZT departing for Switzerland pinged
+    Brizzy871 and Tuatararacer but correctly stayed silent for GaryHollis42,
     who outguns them ~9x. Without this, every member abroad hears about every
     takeoff regardless of whether it could hurt them - the noise objection that
     nearly killed the feature before it was built.
@@ -2722,13 +2722,13 @@ def test_poll_roster_names_who_picked_each_block():
                                    blk(1, 'B', '06:00', '10:00'),
                                    blk(2, 'C', '10:00', '14:00')]}}
     mgr.data = {'p1': {'0': [1, 2], '1': [], '2': [3]}}
-    guild = FakeGuild({1: FakeMember('Ikaros22'), 2: FakeMember('SirAua'),
-                       3: FakeMember('dakkkz')})
+    guild = FakeGuild({1: FakeMember('Icarus77'), 2: FakeMember('SirKaka'),
+                       3: FakeMember('zorrkk')})
 
     out = mgr.build_roster('p1', guild)
     rows = [r for r in out.splitlines() if r.startswith('`')]
     assert len(rows) == 3, f'every block gets a row, empty included: {out}'
-    assert 'Ikaros22' in out and 'SirAua' in out, (
+    assert 'Icarus77' in out and 'SirKaka' in out, (
         f'who to chase must survive somewhere: {out}')
     assert 'Best: A' in out, f'the busiest block is named: {out}'
     assert '1 block with nobody' in out, (
@@ -3153,7 +3153,7 @@ def test_management_ping_lands_in_the_channel_that_got_the_alert():
     inact_mod.MANAGEMENT_PING_ROLE_ID = 999
 
     mgr = InactivityTracker(bot=FakeBot())
-    crit = [{'torn_name': 'Druid1999', 'torn_id': '4460611', 'torn_level': 15,
+    crit = [{'torn_name': 'Sage1998', 'torn_id': '4460611', 'torn_level': 15,
              'days': 15.0, 'last_oc_ts': 1790000000.0}]
     try:
         # ONLY an OC critical: the exact shape that produced the bare ping.
@@ -3266,7 +3266,7 @@ def test_member_with_no_oc_history_is_clocked_from_their_join_date():
         '2': member(g),                           # grace just ended: 0 days
         '3': member(g + OC_WARNING_DAYS),         # first day of the nudge
         '4': member(g + OC_CRITICAL_DAYS),        # first day of strike range
-        '5': member(g + 48),                      # the BunnyBull case
+        '5': member(g + 48),                      # the BriarBull case
     }
     warn, crit, _, _slots = mgr._get_oc_status(members, crimes)
     warned = {m['torn_name'] for m in warn}
@@ -3683,7 +3683,7 @@ def test_bleeding_warns_before_it_strikes_and_resets_on_a_clean_war():
     """
     Measured across wars 47427, 48339 and 50338: five members took more than
     they landed in EVERY war they played, together 591 of 2,364 hits taken.
-    Meanwhile EyeUhhn went 86 -> 11 -> 6 across the same wars.
+    Meanwhile Marlow went 86 -> 11 -> 6 across the same wars.
 
     That contrast is the whole design. One bad war is not a signal, so nothing
     happens. The first REPEAT gets a DM with the fix in it, because bleeding
@@ -5156,8 +5156,8 @@ def test_timezone_board_survives_daylight_saving():
     from features.timezones import group_by_region, local_now, friendly_time
 
     store = {
-        '1': {'zone': 'Pacific/Auckland', 'name': 'Ikaros22'},
-        '2': {'zone': 'Europe/London', 'name': 'GDawng'},
+        '1': {'zone': 'Pacific/Auckland', 'name': 'Icarus77'},
+        '2': {'zone': 'Europe/London', 'name': 'KDingo'},
     }
 
     # --- January: NZ on summer time (+13), UK on GMT (+0) ---
@@ -5387,7 +5387,7 @@ def test_retals_show_live_status_and_the_board_keeps_reasons():
 
     retal = {'attacker_id': '9', 'attacker_name': 'Oceiros', 'level': 54,
              'status': {'state': 'Okay'}, 'expires': now + 200, 'retaliated_by': None,
-             'hits': [{'defender_name': 'Ellanna', 'result': 'Mugged', 'ended': now - 100}]}
+             'hits': [{'defender_name': 'Evanna', 'result': 'Mugged', 'ended': now - 100}]}
     embed = T.build_retal_embed(retal, {'bs_estimate': 467_000, 'bs_estimate_human': '467k',
                                         'last_updated': now - 9 * 86400}, now)
     assert 'Oceiros' in embed.title and 'Lv54' in embed.title and '467k' in embed.title
@@ -5635,9 +5635,9 @@ def test_timezone_board_awake_means_their_clock_not_their_last_click():
     # Manila +8 = 12:00 (awake), London +1 = 05:00 (asleep).
     now = datetime(2026, 10, 24, 4, 0, tzinfo=timezone.utc)
     store = {
-        '1': {'zone': 'Pacific/Auckland', 'name': 'Ikaros22'},
-        '2': {'zone': 'America/Los_Angeles', 'name': 'EyeUhhn'},
-        '3': {'zone': 'Asia/Manila', 'name': 'dakkkz'},
+        '1': {'zone': 'Pacific/Auckland', 'name': 'Icarus77'},
+        '2': {'zone': 'America/Los_Angeles', 'name': 'Marlow'},
+        '3': {'zone': 'Asia/Manila', 'name': 'zorrkk'},
         '4': {'zone': 'Europe/London', 'name': 'NightOwl'},
     }
 
@@ -5721,10 +5721,10 @@ def test_chain_event_never_calls_an_unreadable_log_a_no_show():
     assert merged == {'100': 10, '200': 1} and ok is True, merged
 
     # --- shortfall ---
-    roster = {'100': 'Ikaros22', '200': 'dakkkz', '400': 'NeverShowed'}
+    roster = {'100': 'Icarus77', '200': 'zorrkk', '400': 'NeverShowed'}
     short = shortfall({'100': 12, '200': 3}, roster, 10)
     names = [m['name'] for m in short]
-    assert names == ['NeverShowed', 'dakkkz'], (
+    assert names == ['NeverShowed', 'zorrkk'], (
         f'worst first, and somebody absent from the log is 0 not missing: {names}')
     assert short[0]['hits'] == 0
     assert met_minimum({'100': 12, '200': 3}, roster, 10) == 1
@@ -6072,10 +6072,10 @@ def test_chain_event_member_view_and_late_joiner_exemption():
     now = start + 2 * 86400
 
     roster = {
-        '1': {'name': 'Ikaros22', 'days_in_faction': 800},
-        '2': {'name': 'dakkkz', 'days_in_faction': 400},
+        '1': {'name': 'Icarus77', 'days_in_faction': 800},
+        '2': {'name': 'zorrkk', 'days_in_faction': 400},
         '3': {'name': 'Lagger', 'days_in_faction': 300},
-        '4': {'name': 'Trizzy973', 'days_in_faction': 500},
+        '4': {'name': 'Brizzy871', 'days_in_faction': 500},
         '9': {'name': 'NewGuy', 'days_in_faction': 1},
     }
     totals = {'1': 48, '2': 31, '4': 12, '3': 5, '9': 7}
@@ -6105,7 +6105,7 @@ def test_chain_event_member_view_and_late_joiner_exemption():
 
     # --- the member view ---
     text = member_embed(ev, totals, roster, True, '4', now=now).description
-    assert 'Ikaros22' in text and 'Top hitters' in text
+    assert 'Icarus77' in text and 'Top hitters' in text
     assert 'You: 12 hits' in text and 'rank **3**' in text
     assert 'Minimum cleared' in text
     assert 'another treat roll' in text, 'must push past the minimum'
@@ -6118,7 +6118,7 @@ def test_chain_event_member_view_and_late_joiner_exemption():
         f'the x/minimum format belongs to the management board only: {text}')
 
     # The chase line is measured against the NEAREST person ahead, not the
-    # leader, and is phrased as what it takes to overtake them. dakkkz has 31
+    # leader, and is phrased as what it takes to overtake them. zorrkk has 31
     # and this member has 12, so 20 hits passes them, not 19 which only draws.
     assert '20 more hits' in text and 'reach rank 2' in text, text
 
@@ -6161,7 +6161,7 @@ def test_chain_event_member_view_and_late_joiner_exemption():
     assert 'CLEARED 10+' in board and 'UNDER 10' in board, board
     assert 'Lagger' in board.split('UNDER 10')[1], (
         'somebody short belongs in the UNDER block')
-    assert 'Ikaros22' in board.split('UNDER 10')[0], (
+    assert 'Icarus77' in board.split('UNDER 10')[0], (
         'somebody who cleared it belongs in the CLEARED block')
     assert 'joined after this event started' in board
     assert '1 member joined' in board, f'singular grammar: {board}'
@@ -6337,8 +6337,8 @@ def test_chain_event_second_audit_findings():
     assert shortfall(totals, {}, 10) == []
 
     # --- 2: either roster shape works, and neither reaches .lower() ---
-    plain = {'1': 'Ikaros22', '2': 'Lagger'}
-    rich = {'1': {'name': 'Ikaros22', 'days_in_faction': 800},
+    plain = {'1': 'Icarus77', '2': 'Lagger'}
+    rich = {'1': {'name': 'Icarus77', 'days_in_faction': 800},
             '2': {'name': 'Lagger', 'days_in_faction': 700}}
     a = shortfall(totals, plain, 10)
     b = shortfall(totals, rich, 10)
@@ -6582,17 +6582,17 @@ def test_chain_report_and_board_do_not_overstate_what_they_know():
 
     # --- only real contributors are listed ---
     sorted_members = [
-        {'name': 'Blazingdragon6', 'hits': 11, 'respect': 29.41},
-        {'name': 'Ellanna', 'hits': 2, 'respect': 3.94},
-        {'name': 'LaneEndzMafia', 'hits': 0, 'respect': 0},
-        {'name': 'GDawng', 'hits': 0, 'respect': 0},
-        {'name': 'TrevorLahey420', 'hits': 0, 'respect': 0},
+        {'name': 'Emberwing6', 'hits': 11, 'respect': 29.41},
+        {'name': 'Evanna', 'hits': 2, 'respect': 3.94},
+        {'name': 'BackStreetCrew', 'hits': 0, 'respect': 0},
+        {'name': 'KDingo', 'hits': 0, 'respect': 0},
+        {'name': 'GaryHollis42', 'hits': 0, 'respect': 0},
     ]
     # Calls the real rule, not a copy of it. The first version of this test
     # reimplemented the filter inline and passed whatever chains.py did.
     contributors = ChainTracker.contributors_of(sorted_members)
     assert len(contributors) == 2, contributors
-    assert [m['name'] for m in contributors] == ['Blazingdragon6', 'Ellanna']
+    assert [m['name'] for m in contributors] == ['Emberwing6', 'Evanna']
     assert ChainTracker.contributors_of([]) == []
     assert ChainTracker.contributors_of(None) == []
     assert ChainTracker.contributors_of(
@@ -6652,8 +6652,8 @@ def test_poll_names_who_did_not_answer():
             self.display_name = name
             self.bot = bot
 
-    voted_a, voted_b = M(1, 'dakkkz'), M(2, 'Ikaros22')
-    silent_a, silent_b = M(3, 'Ellanna'), M(4, 'BunnyBull')
+    voted_a, voted_b = M(1, 'zorrkk'), M(2, 'Icarus77')
+    silent_a, silent_b = M(3, 'Evanna'), M(4, 'BriarBull')
     a_bot = M(5, 'ApexPunk', bot=True)
     outsider = M(6, 'NotVerified')
 
@@ -6668,14 +6668,14 @@ def test_poll_names_who_did_not_answer():
     mgr.data = {'p': {'0': ['1'], '1': ['1', '2'], '2': []}}
 
     missing = mgr.non_voters('p', Guild())
-    assert missing == ['BunnyBull', 'Ellanna'], missing
+    assert missing == ['BriarBull', 'Evanna'], missing
     assert 'ApexPunk' not in missing, 'the bot holds the role and cannot vote'
     assert 'NotVerified' not in missing, (
         'somebody without the role was never able to answer, so naming them '
         'is not a chase list')
 
     line = mgr.non_voter_line('p', Guild())
-    assert 'Did not answer (2)' in line and 'Ellanna' in line, line
+    assert 'Did not answer (2)' in line and 'Evanna' in line, line
 
     # Everybody answered reads as such, not as an empty list.
     mgr.data = {'p': {'0': ['1', '2', '3', '4']}}

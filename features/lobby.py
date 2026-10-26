@@ -4,7 +4,7 @@ People who joined Discord and never registered.
 Without a verification record the bot cannot map them to a Torn ID, so they
 get no alerts, no poll mention, no payout line - and because an unregistered
 member can only see the welcome channel, they are also invisible to everyone
-else. Sadrapp sat like that unnoticed: present, on the faction roster, and
+else. Quietpine sat like that unnoticed: present, on the faction roster, and
 reachable by nobody.
 
 The weekly roster check already listed them, but a weekly list to management

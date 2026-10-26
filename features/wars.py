@@ -2138,7 +2138,7 @@ class WarTracker:
 
         Measured across wars 47427, 48339 and 50338: five members took more
         than they landed in EVERY war they played, together 591 of 2,364 hits
-        taken. Meanwhile members like EyeUhhn went 86 -> 11 -> 6, which is why
+        taken. Meanwhile members like Marlow went 86 -> 11 -> 6, which is why
         a single bad war is not the signal. Only a repeat is.
 
         So the first repeat gets a DM with the turtling guide, because bleeding
