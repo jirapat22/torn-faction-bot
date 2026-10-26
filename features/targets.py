@@ -466,7 +466,10 @@ class TargetManager:
         guild = self.bot.get_guild(GUILD_ID)
         if guild is None:
             return None
-        ch = discord.utils.get(guild.text_channels, name=CHANNEL_NAME)
+        # Matched on the END of the name: the channel gets themed with an
+        # emoji prefix ("🔫-targets-and-retals"), and an exact match would
+        # miss it and create a second channel if the stored id were ever lost.
+        ch = next((c for c in guild.text_channels if c.name.endswith(CHANNEL_NAME)), None)
         if ch is None:
             verified = self._verified_role(guild)
             if verified is None:

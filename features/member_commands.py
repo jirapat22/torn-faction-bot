@@ -61,7 +61,7 @@ SECTIONS = [
     ]),
     ('\U0001f3af Targets', [
         ('/target action:Add who:<id or profile link>',
-         'Puts someone on the target board in #targets-and-retals for 7 days. '
+         'Puts someone on the pinned target board for 7 days. '
          'Add a reason if you like. Up to 5 each.', []),
         ('/target action:Remove who:<id>',
          'Takes one of yours off the board.', []),

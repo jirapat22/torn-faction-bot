@@ -5493,6 +5493,16 @@ def test_targets_channel_is_created_once_when_both_loops_start_together():
     assert guild.created == 1, f'{guild.created} channels created'
     assert a is b
 
+    # Renamed to fit the server theme and the stored id lost: the bot must
+    # find the themed channel, not make a second plain one next to it.
+    themed = Guild()
+    themed.text_channels.append(Channel(77, '\U0001f52b-targets-and-retals'))
+    guild = themed
+    manager = T.TargetManager(Bot())
+    manager.save = lambda: None
+    assert asyncio.run(manager.ensure_channel()).id == 77
+    assert themed.created == 0, 'found the renamed channel instead of creating one'
+
 
 def test_notices_never_turn_an_unreadable_channel_into_an_accusation():
     """
