@@ -370,6 +370,178 @@ def test_register_allows_unlinked_torn_id():
     assert str(FakeUser.id) in mgr.verified_users
 
 
+
+def test_register_refuses_when_the_torn_link_cannot_be_checked():
+    """
+    The ownership check used to fail OPEN: fetch_user_discord answered '' for
+    both "no link" and "Torn unreachable", so during an outage anyone could
+    /register as somebody else. An outage now refuses with a try-again.
+    """
+    import asyncio
+    import features.verification as verification_mod
+    import utils.torn_api as torn_api_mod
+
+    async def fake_player(torn_id, *args, **kwargs):
+        return {'player_id': torn_id, 'name': 'Victim', 'level': 10,
+                'faction': {'faction_id': 0, 'faction_name': '', 'faction_tag': ''},
+                'last_action': {'timestamp': 0}}
+
+    async def unreachable(torn_id):
+        return None
+
+    class FakeUser:
+        id = 333333333333333333
+    class FakeInteraction:
+        user = FakeUser()
+        guild = None
+
+    orig = (verification_mod.fetch_player_data, torn_api_mod.fetch_user_discord)
+    verification_mod.fetch_player_data = fake_player
+    torn_api_mod.fetch_user_discord = unreachable
+    try:
+        mgr = verification_mod.VerificationSystem(bot=None)
+        mgr.verified_users = {}
+        mgr.config = {'require_faction': False, 'change_name': False}
+        ok, message = asyncio.run(mgr.register_user(FakeInteraction(), 777))
+        assert ok is False and 'try again' in message
+        assert mgr.verified_users == {}
+    finally:
+        verification_mod.fetch_player_data, torn_api_mod.fetch_user_discord = orig
+
+    # And at the source: an unreachable Torn is None, a missing link is ''.
+    # A fresh copy of the module, because older tests here replace
+    # fetch_user_discord on the shared one without putting it back.
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('torn_api_fresh', torn_api_mod.__file__)
+    fresh = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fresh)
+    async def failed(*a, **k):
+        return None
+    async def no_link(*a, **k):
+        return {'discord': {}}
+    fresh._make_api_request = failed
+    assert asyncio.run(fresh.fetch_user_discord(1)) is None
+    fresh._make_api_request = no_link
+    assert asyncio.run(fresh.fetch_user_discord(1)) == ''
+
+
+def test_torn_api_pauses_after_a_block_and_names_the_failed_call():
+    """
+    27/10/2026: Torn answered HTTP 403 for an hour and the bot kept calling
+    ~13 times a minute, with logs that never said which call failed. Now a
+    block pauses every Torn call (failing fast as None), and the error names
+    the endpoint without ever printing the key.
+    """
+    import asyncio, logging
+    import utils.torn_api as api
+
+    calls = []
+
+    class FakeResponse:
+        def __init__(self, status):
+            self.status = status
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *a):
+            return False
+        async def json(self):
+            return {'ok': 1}
+
+    class FakeSession:
+        def __init__(self, status):
+            self.status = status
+        def get(self, url, params=None):
+            calls.append((url, dict(params)))
+            return FakeResponse(self.status)
+
+    logged = []
+    class Catch(logging.Handler):
+        def emit(self, record):
+            logged.append(record.getMessage())
+    catch = Catch()
+    api.logger.addHandler(catch)
+
+    orig_session = api._get_session
+    status = {'code': 403}
+    async def fake_session():
+        return FakeSession(status['code'])
+    api._get_session = fake_session
+    try:
+        api._blocked_until, api._backoff_seconds = 0.0, 0
+        assert asyncio.run(api._make_api_request('faction/1', {'selections': 'basic'},
+                                                 cache_seconds=0)) is None
+        assert len(calls) == 1
+        assert any("faction/1 {'selections': 'basic'}" in m for m in logged), logged
+        assert not any('key' in m for m in logged), 'the API key must never be logged'
+
+        # Paused: no request goes out at all
+        assert asyncio.run(api._make_api_request('faction/1', {'selections': 'chain'},
+                                                 cache_seconds=0)) is None
+        assert len(calls) == 1, 'a paused call must not reach Torn'
+
+        # A second block doubles the pause, capped
+        api._blocked_until = 0.0
+        asyncio.run(api._make_api_request('faction/1', {}, cache_seconds=0))
+        assert api._backoff_seconds == 2 * api.BACKOFF_FIRST_SECONDS
+
+        # Success ends it and is recorded for the health page
+        api._blocked_until = 0.0
+        status['code'] = 200
+        assert asyncio.run(api._make_api_request('faction/1', {}, cache_seconds=0)) == {'ok': 1}
+        assert api._backoff_seconds == 0 and api.last_success_at is not None
+    finally:
+        api._get_session = orig_session
+        api._blocked_until, api._backoff_seconds = 0.0, 0
+        api.logger.removeHandler(catch)
+
+
+def test_lost_chain_reply_is_posted_to_the_channel():
+    """
+    30/10/2026: the first Event board after a deploy recounted the whole event
+    (~72s) and Discord answered "Unknown Message" to the reply, so nobody saw
+    it. A public reply now falls back to the channel; a private one must not.
+    """
+    import asyncio
+    import discord
+    from features.commands import _followup
+
+    class FakeResp:
+        status = 404
+        reason = 'Not Found'
+
+    channel_posts = []
+
+    class FakeChannel:
+        async def send(self, **kw):
+            channel_posts.append(kw)
+
+    class FakeFollowup:
+        async def send(self, **kw):
+            raise discord.NotFound(FakeResp(), {'code': 10008, 'message': 'Unknown Message'})
+
+    class FakeUser:
+        mention = '<@1>'
+
+    class FakeInteraction:
+        followup = FakeFollowup()
+        channel = FakeChannel()
+        user = FakeUser()
+        command = None
+
+    asyncio.run(_followup(FakeInteraction(), embed='board', content='Not ending it.'))
+    assert len(channel_posts) == 1
+    post = channel_posts[0]
+    assert post['embed'] == 'board' and 'Not ending it.' in post['content']
+    assert '<@1>' in post['content']
+
+    try:
+        asyncio.run(_followup(FakeInteraction(), embed='mine', ephemeral=True))
+        assert False, 'a private reply must not be reposted publicly'
+    except discord.NotFound:
+        pass
+    assert len(channel_posts) == 1
+
+
 def test_chain_milestone_picks_highest_on_jump():
     """
     Regression test: a chain that jumps past multiple milestones between two
@@ -402,10 +574,6 @@ def test_chain_milestone_picks_highest_on_jump():
     tracker.get_current_chain = fake_get_current_chain
 
     chains_mod.save_json = lambda *a, **kw: None  # avoid real disk writes
-
-    async def fake_save_history():
-        pass
-    tracker.save_chain_history = fake_save_history
 
     asyncio.run(tracker.check_chain_update())
 
@@ -586,10 +754,7 @@ def test_chain_timeout_is_a_countdown_not_a_clock_time():
         return {'current': 100, 'max': 250, 'timeout': 20, 'modifier': 1,
                 'cooldown': 0, 'start': 7000}
 
-    async def nothing():
-        return None
     t.get_current_chain = dying
-    t.save_chain_history = nothing
     asyncio.run(t.check_chain_update())
     assert any('Chain dying' in (p or '') and '20s left' in p for p in posted), posted
 
@@ -2906,6 +3071,7 @@ def test_turtle_alert_fires_only_for_exposed_members():
         return roster
 
     orig = (wars_mod.fetch_faction_attacks, wars_mod.fetch_faction_data, wars_mod.save_json)
+    retry_delay = wars_mod.ATTACK_PAGE_RETRY_DELAY
     wars_mod.fetch_faction_attacks = fake_attacks
     wars_mod.fetch_faction_data = fake_basic
     wars_mod.save_json = lambda *a, **k: None
@@ -2929,8 +3095,70 @@ def test_turtle_alert_fires_only_for_exposed_members():
         async def dead(from_ts=None, to_ts=None, sort=None):
             return None
         wars_mod.fetch_faction_attacks = dead
+        wars_mod.ATTACK_PAGE_RETRY_DELAY = 0  # the retries are real; the wait is not needed here
         asyncio.run(mgr.check_turtle_alerts())
         assert sent == [], 'an outage is not evidence that nobody is being farmed'
+    finally:
+        (wars_mod.fetch_faction_attacks, wars_mod.fetch_faction_data,
+         wars_mod.save_json, wars_mod.ATTACK_PAGE_RETRY_DELAY) = orig + (retry_delay,)
+
+
+def test_turtle_alert_reads_past_the_first_page():
+    """
+    The attacks log holds OUR outgoing hits too, and Torn answers a `from`
+    query with the OLDEST 100 after it. Measured 30/10/2026: the busiest hour
+    held 135 attacks. Reading one page meant the newest hits on a member, the
+    ones that matter, were never seen. Here 100 outgoing hits fill page one and
+    the member is farmed only after them.
+    """
+    import asyncio, time
+    from features.wars import WarTracker, TURTLE_HIT_THRESHOLD
+    import features.wars as wars_mod
+    from config import TORN_FACTION_ID
+
+    sent = []
+
+    class FakeChannel:
+        async def send(self, **kw):
+            sent.append(kw.get('embed'))
+
+    class FakeBot:
+        def get_channel(self, _):
+            return FakeChannel()
+
+    mgr = WarTracker(bot=FakeBot())
+    mgr.was_war_active = True
+    mgr.turtle_cooldowns = {}
+
+    our = str(TORN_FACTION_ID)
+    start = int(time.time()) - 3000
+    log = {}
+    for i in range(100):  # our own outgoing hits, oldest first
+        log[f'out-{i}'] = {'attacker_faction': our, 'defender_faction': '53421',
+                           'defender_id': '9', 'result': 'Attacked',
+                           'timestamp_started': start + i}
+    for i in range(TURTLE_HIT_THRESHOLD):  # then a member gets farmed
+        log[f'in-{i}'] = {'attacker_faction': '53421', 'defender_faction': our,
+                          'defender_id': '111', 'result': 'Hospitalized',
+                          'timestamp_started': start + 500 + i * 60}
+
+    async def torn_like(from_ts=None, to_ts=None, sort=None):
+        # What Torn does: the oldest 100 at or after `from`.
+        rows = sorted((a for a in log.items() if a[1]['timestamp_started'] >= from_ts),
+                      key=lambda a: a[1]['timestamp_started'])
+        return dict(rows[:100])
+
+    async def fake_basic(selections='basic'):
+        return {'members': {'111': {'name': 'Farmed', 'status': {'state': 'Okay'}}}}
+
+    orig = (wars_mod.fetch_faction_attacks, wars_mod.fetch_faction_data, wars_mod.save_json)
+    wars_mod.fetch_faction_attacks = torn_like
+    wars_mod.fetch_faction_data = fake_basic
+    wars_mod.save_json = lambda *a, **k: None
+    try:
+        asyncio.run(mgr.check_turtle_alerts())
+        assert len(sent) == 1 and 'Farmed' in sent[0].description, \
+            'hits after the first 100 log entries must still be counted'
     finally:
         (wars_mod.fetch_faction_attacks, wars_mod.fetch_faction_data,
          wars_mod.save_json) = orig
@@ -6779,6 +7007,9 @@ if __name__ == '__main__':
     test_flytrack_fast_turnaround_detected()
     test_register_rejects_torn_discord_mismatch()
     test_register_allows_unlinked_torn_id()
+    test_register_refuses_when_the_torn_link_cannot_be_checked()
+    test_torn_api_pauses_after_a_block_and_names_the_failed_call()
+    test_lost_chain_reply_is_posted_to_the_channel()
     test_flytrack_autostop_trusts_war_tracker_not_raw_none()
     test_chain_milestone_picks_highest_on_jump()
     test_chain_event_board_shows_respect_from_the_same_hits()
@@ -6802,6 +7033,7 @@ if __name__ == '__main__':
     test_poll_roster_names_who_picked_each_block()
     test_no_open_slots_is_reported_but_is_not_an_excuse()
     test_turtle_alert_fires_only_for_exposed_members()
+    test_turtle_alert_reads_past_the_first_page()
     test_only_recruiting_oc_slots_count_as_joinable()
     test_war_report_separates_opponent_mugs_from_outside_mugs()
     test_chain_break_warning_gates_on_size_and_cooldown()

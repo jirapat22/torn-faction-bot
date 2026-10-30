@@ -693,7 +693,12 @@ class TargetManager:
 
             # Small overlap past the window: a hit that ended just before the
             # previous tick's cut-off must not fall in the gap between reads.
-            attacks = await fetch_faction_attacks(from_ts=now - RETAL_WINDOW - 60)
+            # Newest first: given only a `from`, Torn returns the OLDEST 100
+            # after it, so a busy chain (measured peak: 42 in 6 minutes) would
+            # eventually push fresh hits off the page. Newest-first only ever
+            # drops the oldest, which earlier ticks already saw 30s ago.
+            attacks = await fetch_faction_attacks(
+                from_ts=now - RETAL_WINDOW - 60, sort='desc')
             if attacks is not None:
                 for hit in landed_hits(attacks, TORN_FACTION_ID):
                     if hit['ended'] + RETAL_WINDOW <= now or hit['code'] in self.data['seen']:

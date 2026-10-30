@@ -71,10 +71,8 @@ class ChainTracker:
         self._last_chain_warning = 0  # ts of the last about-to-break ping
         self.last_chain_start = 0  # Start timestamp of the chain we're currently tracking
         self.was_chain_active = False  # Track if chain was active in last check
-        self.chain_data_file = 'data/chain_history.json'
         self.chain_state_file = 'data/chain_state.json'
         self.chain_session_file = 'data/chain_session.json'
-        self.chain_history = {}
         self.chain_session = {'chains': []}  # Per-member data for chains in current session
         self.last_reported_chain_id = None  # Track last reported chain to prevent duplicates
         # The start time is what really identifies a chain: the "id" above is
@@ -85,9 +83,13 @@ class ChainTracker:
         self._recheck_task = None  # the one pending "chain dying" re-check, if any
 
     async def load_chain_history(self):
-        """Load chain history from JSON file"""
-        self.chain_history = load_json(self.chain_data_file, default={})
+        """Load chain state (what was last reported) so a restart mid-chain
+        neither re-posts nor misses a report.
 
+        There used to be a chain_history.json too, a snapshot written every
+        minute and capped at 100, so it only ever held the last 100 minutes.
+        Nothing read it, so it is gone; chain_session.json holds real per-chain
+        data."""
         # Load chain state (last reported chain ID + last chain count)
         state = load_json(self.chain_state_file, default={})
         self.last_reported_chain_id = state.get('last_reported_chain_id')
@@ -95,15 +97,11 @@ class ChainTracker:
         self.last_chain_start = state.get('last_chain_start', 0)
         self.last_reported_chain_start = state.get('last_reported_chain_start', 0)
 
-        logger.info(f'Loaded chain history with {len(self.chain_history)} records')
         if self.last_reported_chain_id:
             logger.info(f'Last reported chain: #{self.last_reported_chain_id}')
         if self.last_chain_count > 0:
             logger.info(f'Restored last chain count: {self.last_chain_count}')
 
-    async def save_chain_history(self):
-        """Save chain history to JSON file"""
-        save_json(self.chain_data_file, self.chain_history)
 
     async def load_chain_session(self):
         """Load chain session data (per-member stats across chains). Auto-clears if older than 24h."""
@@ -892,20 +890,3 @@ class ChainTracker:
             'last_chain_start': self.last_chain_start,
             'last_reported_chain_start': self.last_reported_chain_start,
         })
-
-        # Save chain data to history (keep last 100 entries max)
-        chain_id = f'chain_{get_current_timestamp()}'
-        self.chain_history[chain_id] = {
-            'count': current_count,
-            'timestamp': get_current_timestamp(),
-            'max': chain.get('max', 0),
-            'modifier': chain.get('modifier', 1.0)
-        }
-
-        # Prune old entries if history is too large
-        if len(self.chain_history) > 100:
-            sorted_keys = sorted(self.chain_history.keys())
-            for old_key in sorted_keys[:-100]:
-                del self.chain_history[old_key]
-
-        await self.save_chain_history()

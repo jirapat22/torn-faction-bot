@@ -2,7 +2,7 @@
 Does every id in the config still point at something real?
 
 The failure this exists for is quiet, and it is the one a tired admin causes
-at 2am: delete a channel, paste an id with a digit missing into Railway, or
+at 2am: delete a channel, paste an id with a digit missing into the env file, or
 remove a role, and the feature that used it simply stops. Every posting
 feature already guards itself - get_channel() returns None, a warning goes to
 the log, the function returns - so nothing crashes and nothing complains
@@ -134,7 +134,7 @@ def build_embed(broken, unset):
         description=('\n\n'.join(parts)
                      + '\n\n-# Until this is fixed the feature above does '
                        'nothing and says nothing - no error, no alert. Fix '
-                       'the id in Railway, or recreate what it pointed at.'),
+                       'the id in the bot\'s env file, or recreate what it pointed at.'),
         color=EMBED_COLOR_CRITICAL)
 
 

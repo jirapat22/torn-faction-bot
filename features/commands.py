@@ -28,6 +28,31 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+async def _followup(interaction, ephemeral=False, **kwargs):
+    """
+    interaction.followup.send, with a way out when Discord has lost the reply.
+
+    A slow answer (the first Event board after a deploy recounts every attack
+    of the event, ~72s) came back "404 Unknown Message" on 30/10/2026: the
+    command worked and nobody saw it. A public reply can still go straight into
+    the channel; a private one cannot, since a channel post is public.
+    """
+    try:
+        return await interaction.followup.send(ephemeral=ephemeral, **kwargs)
+    except (discord.NotFound, discord.HTTPException) as e:
+        if ephemeral or interaction.channel is None:
+            logger.error(f'Follow-up lost for /{interaction.command.name if interaction.command else "?"} '
+                         f'({e}); private, so not reposted')
+            raise
+        logger.warning(f'Follow-up lost ({e}); posting to the channel instead')
+        content = kwargs.pop('content', None)
+        lead = f'{interaction.user.mention} asked for this:'
+        kwargs['content'] = f'{lead}\n{content}' if content else lead
+        # A mention in a fallback post should not ping: they are already here.
+        kwargs['allowed_mentions'] = discord.AllowedMentions.none()
+        return await interaction.channel.send(**kwargs)
+
+
 async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracker=None, verification_system=None,
                          event_reminder_manager=None, role_sync_manager=None,
                          enemy_watchlist=None, stakeout_manager=None,
@@ -169,9 +194,11 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
                 {
                     'name': 'Chain & War',
                     'value': (
-                        '`/chain` - Chain status / report / board\n'
+                        '`/chain` - Chain status / report / board / event\n'
                         '`/war` - War status / board / xan / history / trends\n'
-                        '`/avail` - Availability polls (setup / summary / mine / list / delete)'
+                        '`/avail` - Availability polls (setup / summary / mine / list / delete)\n'
+                        '`/target` - Target board: add / remove / list\n'
+                        '`/tct_now` - Torn City Time right now'
                     ),
                     'inline': False,
                 },
@@ -436,14 +463,14 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
                 str(interaction.user.id)) if vs else None
             if rec:
                 torn_id = str(rec.get('torn_id'))
-            await interaction.followup.send(
+            await _followup(interaction,
                 embed=member_embed(event, totals, roster, ok, torn_id),
                 ephemeral=True)
             return
 
         embed = progress_embed(event, totals, roster, ok)
         if action != 'event_end':
-            await interaction.followup.send(embed=embed)
+            await _followup(interaction, embed=embed)
             return
 
         # ---- end ----
@@ -458,7 +485,7 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
             # Refuse to close on numbers we could not verify: ending stamps
             # the totals the shortfall list is built from, and a strike filed
             # off a partial read is the exact failure this guards against.
-            await interaction.followup.send(
+            await _followup(interaction,
                 embed=embed,
                 content='⚠️ **Not ending it.** The counts could not '
                         'be verified, so nothing is final and no list is '
@@ -466,11 +493,11 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
             return
         chain_event_manager.finish(event)
         if not short:
-            await interaction.followup.send(
+            await _followup(interaction,
                 embed=embed,
                 content='✅ **Everyone met the minimum.** Nothing to action.')
             return
-        await interaction.followup.send(
+        await _followup(interaction,
             embed=embed,
             content=f'⛓️ **{event["name"]}** finished · '
                     f'**{len(short)}** below the minimum. Nothing is struck '

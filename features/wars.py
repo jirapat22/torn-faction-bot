@@ -581,7 +581,7 @@ class WarTracker:
 
         return embed
 
-    async def _fetch_all_attacks_since(self, war_start, war_end=None):
+    async def _fetch_all_attacks_since(self, war_start, war_end=None, quiet=False):
         """
         Fetch ALL faction attacks in the war window by paginating through the API.
         The Torn attacks API returns ~100 attacks per call, so we page through
@@ -595,6 +595,9 @@ class WarTracker:
                 50338, the log read 422 against the official 421 because one
                 member hit them again after it was over. Left unbounded, Xanax
                 reimbursement for a finished war grows the longer you wait.
+            quiet: Log pages at DEBUG. The turtle check reads the last hour
+                every minute of a war, and a page line each time would bury
+                the log.
 
         Returns:
             Dict of {attack_id: attack_data} with all attacks since war_start,
@@ -646,7 +649,8 @@ class WarTracker:
                 if ts > latest_timestamp:
                     latest_timestamp = ts
 
-            logger.info(f'War attacks page {page + 1}: got {len(attacks)} attacks, {new_count} new (total: {len(all_attacks)})')
+            log_page = logger.debug if quiet else logger.info
+            log_page(f'War attacks page {page + 1}: got {len(attacks)} attacks, {new_count} new (total: {len(all_attacks)})')
 
             # Nothing new means the last page repeated itself - we have it all.
             # This is the only stop condition, deliberately: a short page used
@@ -667,7 +671,8 @@ class WarTracker:
                          f'{len(all_attacks)} attacks - log is incomplete')
             return None
 
-        logger.info(f'War: Fetched {len(all_attacks)} total attacks since war start')
+        (logger.debug if quiet else logger.info)(
+            f'War: Fetched {len(all_attacks)} total attacks since war start')
         return all_attacks
 
     @staticmethod
@@ -2031,8 +2036,13 @@ class WarTracker:
             return
         now = get_current_timestamp()
 
-        attacks = await fetch_faction_attacks(
-            from_ts=now - TURTLE_WINDOW_SECONDS, sort='asc')
+        # The whole hour, paged. One page used to be assumed enough (~22
+        # incoming hits an hour), but the log holds OUR outgoing hits too, and
+        # Torn answers a `from` query with the OLDEST 100 after it: measured
+        # 30/10/2026, the busiest hour of a chain event held 135 attacks, so a
+        # busy war hour silently dropped its newest hits on us.
+        attacks = await self._fetch_all_attacks_since(
+            now - TURTLE_WINDOW_SECONDS, quiet=True)
         if attacks is None:
             return  # outage; silence beats guessing who is being farmed
 

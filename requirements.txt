@@ -1,10 +1,15 @@
-# Python dependencies for Torn Faction Discord Bot
+# Python dependencies for the ApexPunk Discord bot.
+#
+# Pinned to exact versions on purpose. With ">=" every Docker rebuild (so every
+# deploy) quietly pulled whatever was newest, and a breaking discord.py or
+# aiohttp release would have taken the bot down on an unrelated deploy.
+# To upgrade: bump a version here, run the tests, deploy, watch the log.
 
 # Discord library
-discord.py>=2.3.0
+discord.py==2.7.1
 
-# Async HTTP client (for Torn API in Phase 2+)
-aiohttp>=3.9.0
+# Async HTTP client (Torn API, FFScouter, health page)
+aiohttp==3.14.5
 
-# For future .env file support
-python-dotenv>=1.0.0
+# Reads .env for local runs (Docker passes the env vars directly)
+python-dotenv==1.2.4

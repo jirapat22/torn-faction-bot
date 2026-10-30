@@ -201,6 +201,11 @@ class VerificationSystem:
         # proof available, so it still falls through to the existing self-report.
         from utils.torn_api import fetch_user_discord
         linked_discord_id = await fetch_user_discord(torn_id)
+        if linked_discord_id is None:
+            # Fail closed: skipping the check during an outage would let
+            # anyone register as someone else for as long as Torn is down.
+            return False, ('Could not check your Torn account with Torn right now. '
+                           'Please try again in a few minutes.')
         if linked_discord_id and linked_discord_id != discord_id:
             return False, (
                 f'Torn ID {torn_id} is linked to a different Discord account via Torn\'s '
@@ -314,6 +319,8 @@ class VerificationSystem:
             checked += 1
             discord_id = await fetch_user_discord(tid)
 
+            if discord_id is None:
+                continue  # Torn unreachable: unknown, not "unlinked"
             if not discord_id:
                 unlinked += 1
                 continue

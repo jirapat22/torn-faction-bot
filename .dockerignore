@@ -1,12 +1,19 @@
+# Kept out of the Docker image. Secrets and data never belong in it (settings
+# come from env/apexpunk.env, data is mounted at /app/data), and the rest is
+# local-only weight: venv/ is the Mac's own 24 MB Python, useless on Linux.
 .env
 .git
 .gitignore
 .vscode
+.pytest_cache
 __pycache__
 *.pyc
 data/
+venv/
+tests/
+scripts/
 .dockerignore
 Dockerfile
 README.md
-COMMAND_GUIDE.md
-DISCORD_PERMISSIONS_GUIDE.md
+CLAUDE.md
+docs/

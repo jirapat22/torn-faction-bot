@@ -43,6 +43,44 @@ _session = None
 _rate_window = deque()
 _rate_lock = asyncio.Lock()
 
+# Backoff after Torn refuses us outright (HTTP 403/429, or API errors 5 "too
+# many requests", 8 "IP block", 9 "API disabled"). On 27/10/2026 Torn answered
+# 403 for an hour and every loop kept retrying ~13 times a minute, which is the
+# behaviour most likely to extend a block. While the pause runs, requests fail
+# fast as None (the normal "could not fetch" answer) without touching Torn.
+BLOCK_ERROR_CODES = {5, 8, 9}
+BACKOFF_FIRST_SECONDS = 60
+BACKOFF_MAX_SECONDS = 600
+_blocked_until = 0.0
+_backoff_seconds = 0
+
+# When Torn last answered with usable data. The health page shows its age, so
+# an hour of failed calls is visible from outside instead of reading "healthy".
+last_success_at = None
+
+
+def _note_blocked(reason):
+    """Start (or double) the pause after Torn refuses a request."""
+    global _blocked_until, _backoff_seconds
+    _backoff_seconds = min(BACKOFF_MAX_SECONDS,
+                           _backoff_seconds * 2 if _backoff_seconds else BACKOFF_FIRST_SECONDS)
+    _blocked_until = time.time() + _backoff_seconds
+    logger.error(f'Torn API refused us ({reason}); pausing all Torn calls for '
+                 f'{_backoff_seconds}s')
+
+
+def _note_success():
+    """A good answer ends any pause and resets the backoff."""
+    global _backoff_seconds, last_success_at
+    _backoff_seconds = 0
+    last_success_at = time.time()
+
+
+def _describe(endpoint, params):
+    """Which request this was, for the log. Never includes the API key."""
+    shown = {k: v for k, v in (params or {}).items() if k != 'key'}
+    return f'{endpoint} {shown}' if shown else endpoint
+
 
 async def _get_session():
     """Get or create a reusable aiohttp session"""
@@ -139,13 +177,22 @@ async def _make_api_request(endpoint, params=None, use_personal_key=False, cache
 
     # Make API request
     url = f"{TORN_API_BASE}/{endpoint}"
+    what = _describe(endpoint, params)
+
+    # Inside a backoff pause: fail fast, quietly (one line was logged when the
+    # pause started; logging every skipped call is the spam this replaces).
+    if time.time() < _blocked_until:
+        logger.debug(f'Torn API paused, skipping {what}')
+        return None
 
     try:
         await _wait_rate_limit()
         session = await _get_session()
         async with session.get(url, params=params) as response:
             if response.status != 200:
-                logger.error(f'Torn API error: HTTP {response.status}')
+                logger.error(f'Torn API error: HTTP {response.status} on {what}')
+                if response.status in (403, 429):
+                    _note_blocked(f'HTTP {response.status}')
                 return None
 
             data = await response.json()
@@ -154,8 +201,12 @@ async def _make_api_request(endpoint, params=None, use_personal_key=False, cache
             if 'error' in data:
                 error_code = data['error'].get('code', 'unknown')
                 error_msg = data['error'].get('error', 'Unknown error')
-                logger.error(f'Torn API error {error_code}: {error_msg}')
+                logger.error(f'Torn API error {error_code}: {error_msg} on {what}')
+                if error_code in BLOCK_ERROR_CODES:
+                    _note_blocked(f'error {error_code}')
                 return None
+
+            _note_success()
 
             # Cache the response
             api_cache[cache_key] = {
@@ -166,10 +217,12 @@ async def _make_api_request(endpoint, params=None, use_personal_key=False, cache
             return data
 
     except aiohttp.ClientError as e:
-        logger.error(f'Network error accessing Torn API: {e}')
+        logger.error(f'Network error accessing Torn API on {what}: {e!r}')
         return None
     except Exception as e:
-        logger.error(f'Unexpected error with Torn API: {e}')
+        # repr, not str: a timeout's str() is empty, which is why five of
+        # these were logged as "Unexpected error with Torn API: " and nothing.
+        logger.error(f'Unexpected error with Torn API on {what}: {e!r}')
         return None
 
 
@@ -362,9 +415,14 @@ async def fetch_user_discord(torn_id):
     unlike a self-set Discord nickname it cannot be spoofed.
 
     Returns:
-        Discord user ID as a string, or '' if the player hasn't linked one.
+        Discord user ID as a string, '' if the player hasn't linked one, or
+        None if Torn could not be asked. The difference matters: /register
+        uses this as an anti-impersonation check, and reading an outage as
+        "no link" let anyone register as someone else while the API was down.
     """
     data = await _make_api_request(f'user/{torn_id}', {'selections': 'discord'})
+    if data is None:
+        return None
     if not data:
         return ''
     return str((data.get('discord') or {}).get('discordID') or '')
@@ -565,7 +623,8 @@ async def fetch_ffscouter_stats(torn_ids: list) -> dict:
 
         async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=15)) as response:
             if response.status != 200:
-                logger.error(f'FFScouter API error: HTTP {response.status}')
+                logger.error(f'FFScouter API error: HTTP {response.status} '
+                             f'({len(capped_ids)} players)')
                 return {}
 
             data = await response.json()
@@ -599,5 +658,5 @@ async def fetch_ffscouter_stats(torn_ids: list) -> dict:
             return result
 
     except Exception as e:
-        logger.error(f'FFScouter request failed: {e}')
+        logger.error(f'FFScouter request failed: {e!r}')
         return {}

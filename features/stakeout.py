@@ -1312,7 +1312,7 @@ async def setup_stakeout_commands(bot, manager: StakeoutManager, enemy_group):
         if not TORN_PERSONAL_API_KEY:
             embed = create_embed(
                 title='❌ API Key Missing',
-                description='`TORN_PERSONAL_API_KEY` is not set in environment variables.\n\nPlease add your personal Torn API key to Railway.',
+                description='`TORN_PERSONAL_API_KEY` is not set in environment variables.\n\nPlease add your personal Torn API key to the bot\'s env file.',
                 color=EMBED_COLOR_CRITICAL
             )
             await interaction.followup.send(embed=embed, ephemeral=True)
@@ -1332,7 +1332,7 @@ async def setup_stakeout_commands(bot, manager: StakeoutManager, enemy_group):
         else:
             embed = create_embed(
                 title='❌ Player Fetch Failed',
-                description=f'Could not fetch player {torn_id}.\n\nPossible reasons:\n• Player ID does not exist\n• Player account is fedded/deleted\n• API rate limited\n\nCheck Railway logs for the actual error.',
+                description=f'Could not fetch player {torn_id}.\n\nPossible reasons:\n• Player ID does not exist\n• Player account is fedded/deleted\n• API rate limited\n\nCheck the bot log for the actual error.',
                 color=EMBED_COLOR_CRITICAL
             )
 

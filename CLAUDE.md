@@ -7,7 +7,7 @@ A Discord bot for a Torn.com faction (Ascended Punks), running on Pat's home Mac
 ## Commands
 
 ```bash
-<py> -m pytest -q tests/          # full suite (113 tests), the one to trust
+<py> -m pytest -q tests/          # full suite (123 tests), the one to trust
 <py> -m pytest -q tests/test_imports.py::test_flytrack_logic   # single test
 <py> tests/test_imports.py        # runs test_imports.py ONLY, see note below
 <py> bot.py                       # run locally (needs .env)
@@ -41,7 +41,8 @@ Runs on Pat's home **Mac mini** in Docker Compose (`~/Projects/mac-server`, serv
   rebuilds the container and wipes it, so it never reaches back past the last deploy.
 - **Live state:** `docker compose exec apexpunk cat data/<file>.json` is the way to see what the bot actually believes,
   far more reliable than reasoning about persisted state from the code.
-- **Health:** `curl http://127.0.0.1:3108/health` on the Mac.
+- **Health:** `curl http://127.0.0.1:3108/health` on the Mac. `torn_api_last_ok_seconds_ago` there shows how long since Torn last answered,
+  which is how a Torn outage shows up (it does not make the bot "unhealthy": restarting cannot fix Torn).
 - **Railway** is a stopped cold backup: deployment removed and auto-deploy disabled (repo still linked so it can be
   redeployed by hand in an emergency). A bot must only run in ONE place, so never redeploy there while the Mac runs it.
 
@@ -49,7 +50,7 @@ Runs on Pat's home **Mac mini** in Docker Compose (`~/Projects/mac-server`, serv
 
 ### bot.py is an orchestrator, not logic
 
-Each feature is a manager class owning its own state and JSON file. `bot.py` constructs all 11 in `on_ready()`, wires them together, then starts one `@tasks.loop` per feature. Feature modules hold the logic; `bot.py` holds the schedule.
+Each feature is a manager class owning its own state and JSON file. `bot.py` constructs them all in `on_ready()`, wires them together, then starts one `@tasks.loop` per feature. Feature modules hold the logic; `bot.py` holds the schedule.
 
 Three managers are cross-wired by hand after construction, and the order matters because later ones reference earlier ones:
 
@@ -67,7 +68,7 @@ Every loop's `before_loop` only awaits `bot.wait_until_ready()`, so **there is n
 
 The established fix is a strike counter, require N consecutive confirmations before acting on another feature's state, never a single read.
 
-`loop_watchdog` (5 min) restarts any loop that has stopped. A loop that is *executing* still counts as running, so slow work inside a loop body is safe.
+`loop_watchdog` (5 min) restarts any loop that has stopped. A loop that is *executing* still counts as running, so slow work inside a loop body is safe. If the bot is still broken (dead loops or no Discord connection) on 3 ticks in a row, the watchdog exits the process so Docker's `restart: unless-stopped` starts a fresh one: Docker only *labels* a container unhealthy, it never restarts it. The loop list lives once, in `_background_loops()`, shared by the watchdog and the health page.
 
 `daily_inactivity_check` is the only 24h loop; it fires at **00:00 TCT (UTC)**. Everything else re-runs within 1–15 minutes, so a transient failure costs them one tick but costs the daily check a whole day, which is why it alone retries internally (`DAILY_FETCH_RETRY_DELAYS`).
 
@@ -100,6 +101,8 @@ Two things it must not do, both of which it used to:
 - v1 and v2 are both in use; some selections exist only in v2 (`wars`, OC2 `crimes`). v2 is authoritative for crimes.
 - Responses are cached ~30s by default; pass `cache_seconds=0` to bypass (flytrack needs fresh statuses).
 - Failures are **not** cached, so an immediate retry genuinely re-hits the API.
+- A refusal (HTTP 403/429, or Torn errors 5/8/9) **pauses every Torn call**, 60s doubling to 10 min, and calls fail fast as `None` meanwhile. On 27/10/2026 an hour of 403s met ~13 retries a minute, the behaviour most likely to extend a block. Error lines name the endpoint and selections (never the key).
+- Given only `from`, the attacks log returns the **oldest** 100 after it, not the newest (busiest hour measured: 135 attacks). Anything that must see recent hits either pages (`_fetch_all_attacks_since`) or asks `sort='desc'` (retals).
 - A rolling-window rate limiter caps requests/min.
 - `selections=travel` returns error 7 for any ID but the key owner's, so exact flight times for enemies are **impossible**, this is why flight ETAs are estimated and must stay estimates.
 
@@ -129,7 +132,7 @@ The cooldown is stamped only when a warning actually goes out, so an outage or a
 
 `data/*.json` is gitignored and lives in `~/Projects/mac-server/data/apexpunk/` on the Mac, mounted into the container (it survives rebuilds). Files are written atomically via `utils/helpers.py`. There is no migration system, new fields must be read defensively with `.get(...)` and backfilled on write, because live records predate them.
 
-Anything accumulating per-player needs an explicit retention policy; several files grow forever otherwise. Current ones: activity profiles prune after 7 days absent from the roster, chain history caps at 100.
+Anything accumulating per-player needs an explicit retention policy; several files grow forever otherwise. Current ones: activity profiles prune after 7 days absent from the roster, chain_session keeps 24 hours.
 
 ## Conventions
 

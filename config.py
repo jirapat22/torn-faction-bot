@@ -1,12 +1,12 @@
 """
 Configuration file for Torn Faction Discord Bot
-Railway deployment version - uses environment variables
+Settings come from environment variables (on the Mac: ~/Projects/mac-server/env/apexpunk.env)
 """
 
 import os
 from dotenv import load_dotenv
 
-# Load .env file for local development (Railway ignores this)
+# Load .env file for local development (Docker passes env vars directly)
 load_dotenv()
 
 # Bot version

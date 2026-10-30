@@ -65,6 +65,9 @@ SECTIONS = [
          'Add a reason if you like. Up to 5 each.', []),
         ('/target action:Remove who:<id>',
          'Takes one of yours off the board.', []),
+        ('/target action:List',
+         'Everyone on the board, with who added them and why. Only you see it.',
+         []),
     ]),
     ('⛓️ Chains', [
         ('/chain view:Status',

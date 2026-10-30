@@ -4,13 +4,14 @@ Full featured bot with war tracking, chain tracking, verification, and more
 """
 
 import sys
-# Force unbuffered output for Railway logs
+# Force unbuffered output so `docker compose logs` shows lines as they happen
 sys.stdout.reconfigure(line_buffering=True)
 
 import discord
 from discord.ext import commands, tasks
 import asyncio
 import os
+import math
 import time
 import traceback
 from datetime import datetime, timezone
@@ -125,7 +126,7 @@ _healthcheck_runner = None
 
 async def _start_healthcheck_server():
     """
-    Spin up a tiny aiohttp server on $PORT for Railway's healthcheck probe.
+    Spin up a tiny aiohttp server on $PORT for Docker's healthcheck probe.
     No-op if PORT isn't set (local development) or already running.
     """
     global _healthcheck_runner
@@ -144,18 +145,21 @@ async def _start_healthcheck_server():
 
     async def handle(request):
         # Healthy = bot logged in AND every background loop still running
-        loops = [
-            daily_inactivity_check, chain_update_check, war_update_check,
-            role_sync_check, enemy_status_check, event_reminder_check,
-            stakeout_check, fly_check, poll_end_check,
-            retal_check, target_board_check, timezone_board_check,
-        ]
+        loops = list(_background_loops().values())
         all_running = bot.is_ready() and all(loop.is_running() for loop in loops)
+        # How long since Torn last gave a usable answer. Informational, not
+        # part of "healthy": a Torn outage is not something restarting the bot
+        # can fix, but on 27/10/2026 an hour of HTTP 403s read as "healthy"
+        # with nothing to show the bot was blind.
+        from utils import torn_api
+        last_ok = torn_api.last_success_at
         body = {
             'status': 'healthy' if all_running else 'degraded',
             'discord_ready': bot.is_ready(),
             'loops_running': sum(1 for loop in loops if loop.is_running()),
             'loops_total': len(loops),
+            'torn_api_last_ok_seconds_ago': (
+                None if last_ok is None else int(time.time() - last_ok)),
         }
         return web.json_response(body, status=200 if all_running else 503)
 
@@ -190,7 +194,7 @@ async def on_ready():
 
         # Mark initialized early so a mid-init crash doesn't cause duplicate
         # command registration on a subsequent reconnect. A crash here
-        # requires a full process restart (Railway handles that).
+        # requires a full process restart (Docker's restart policy handles that).
         _initialized = True
         bot.start_time = datetime.now(timezone.utc)
 
@@ -420,7 +424,7 @@ async def on_ready():
         if not loop_watchdog.is_running():
             loop_watchdog.start()
 
-        # Healthcheck HTTP endpoint for Railway (only starts if PORT is set,
+        # Healthcheck HTTP endpoint for Docker (only starts if PORT is set,
         # so local runs aren't affected). Reports 200 if Discord is connected
         # AND every background loop is running; 503 otherwise.
         await _start_healthcheck_server()
@@ -865,10 +869,10 @@ async def before_timezone_board_check():
     logger.info('Timezone board started (refreshes every 5 minutes)')
 
 
-@tasks.loop(minutes=5)
-async def loop_watchdog():
-    """Restart any background task loop that has stopped unexpectedly."""
-    loops = {
+def _background_loops():
+    """Every feature loop, by name. One list, shared by the health page and
+    the watchdog, so a new loop cannot be added to one and forgotten in the other."""
+    return {
         'daily_inactivity_check': daily_inactivity_check,
         'chain_update_check': chain_update_check,
         'war_update_check': war_update_check,
@@ -882,6 +886,33 @@ async def loop_watchdog():
         'target_board_check': target_board_check,
         'timezone_board_check': timezone_board_check,
     }
+
+
+# Consecutive watchdog ticks (5 min apart) that found the bot still broken
+# AFTER trying to repair it. At the limit the process exits so Docker's
+# restart policy starts a fresh one: Docker only LABELS a container unhealthy,
+# it never restarts it, so without this a stuck bot stays stuck until a human
+# notices.
+WATCHDOG_EXIT_AFTER = 3
+_unhealthy_ticks = 0
+
+
+def _still_broken(loops):
+    """What is wrong right now, or [] when everything is fine."""
+    problems = [name for name, loop in loops.items() if not loop.is_running()]
+    # latency is inf/nan while the gateway is disconnected. discord.py
+    # reconnects by itself within seconds to minutes; 10+ minutes is stuck.
+    if bot.is_closed() or not bot.is_ready() or not math.isfinite(bot.latency):
+        problems.append('discord connection')
+    return problems
+
+
+@tasks.loop(minutes=5)
+async def loop_watchdog():
+    """Restart any background task loop that has stopped unexpectedly, and
+    restart the whole bot if that does not fix it."""
+    global _unhealthy_ticks
+    loops = _background_loops()
     for name, loop in loops.items():
         if not loop.is_running():
             try:
@@ -889,6 +920,18 @@ async def loop_watchdog():
                 logger.info(f'Watchdog: restarted dead loop {name}')
             except RuntimeError as e:
                 logger.warning(f'Watchdog: could not restart {name}: {e}')
+
+    problems = _still_broken(loops)
+    if not problems:
+        _unhealthy_ticks = 0
+        return
+    _unhealthy_ticks += 1
+    logger.warning(f'Watchdog: still broken ({", ".join(problems)}), '
+                   f'strike {_unhealthy_ticks}/{WATCHDOG_EXIT_AFTER}')
+    if _unhealthy_ticks >= WATCHDOG_EXIT_AFTER:
+        logger.critical('Watchdog: not recovering, exiting so Docker restarts the bot')
+        logging.shutdown()  # flush bot.log before the process goes
+        os._exit(1)
 
 
 @loop_watchdog.before_loop
@@ -978,7 +1021,7 @@ if __name__ == '__main__':
         logger.error('ERROR: Configuration is incomplete:')
         for e in config_errors:
             logger.info(f'  - {e}')
-        logger.info('Check your environment variables (.env or Railway config).')
+        logger.info('Check your environment variables (.env, or ~/Projects/mac-server/env/apexpunk.env on the Mac).')
         sys.exit(1)
 
     try:
