@@ -79,6 +79,36 @@ def chain_hits_by_member(attacks, our_faction_id, after=None):
     if attacks is None:
         return None
     out = {}
+    for attacker, _a in _chain_attacks(attacks, our_faction_id, after):
+        out[attacker] = out.get(attacker, 0) + 1
+    return out
+
+
+def chain_respect_by_member(attacks, our_faction_id, after=None):
+    """
+    {torn_id: respect} earned by the same attacks chain_hits_by_member
+    counts, so respect and hits can never disagree about which hits were in.
+    Includes the chain bonus a milestone hit carries (respect_gain does).
+
+    None when `attacks` is None, same contract as the hit count.
+    """
+    if attacks is None:
+        return None
+    out = {}
+    for attacker, a in _chain_attacks(attacks, our_faction_id, after):
+        gain = a.get('respect_gain')
+        if gain is None:
+            gain = a.get('respect') or 0
+        out[attacker] = round(out.get(attacker, 0) + float(gain), 2)
+    return out
+
+
+def _chain_attacks(attacks, our_faction_id, after=None):
+    """
+    The attacks that count toward an event: ours, advancing a chain, past
+    the `after` boundary. Yields (attacker_id, attack). The reasons for each
+    rule are on chain_hits_by_member.
+    """
     for _attack_id, a in attacks.items():
         if not isinstance(a, dict):
             continue
@@ -106,8 +136,7 @@ def chain_hits_by_member(attacks, our_faction_id, after=None):
         attacker = str(a.get('attacker_id') or '')
         if not attacker or attacker == '0':
             continue
-        out[attacker] = out.get(attacker, 0) + 1
-    return out
+        yield attacker, a
 
 
 def longest_in(attacks, our_faction_id):
@@ -416,6 +445,11 @@ class ChainEventManager:
         # war read 422 hits against the official 421.
         until = min(int(event['end']), int(now))
 
+        # Events that began before respect was tracked have hits but no
+        # respect; one full recount fills it in, then the cheap path resumes.
+        if 'respect' not in event:
+            full = True
+
         if full:
             attacks = await self.war_tracker._fetch_all_attacks_since(
                 int(event['start']), until)
@@ -425,6 +459,7 @@ class ChainEventManager:
                              f'failed, attacks log unreadable')
                 return event.get('totals', {}), False
             event['totals'] = counted
+            event['respect'] = chain_respect_by_member(attacks, self.faction_id)
             # Recomputed, not merged: a full recount exists so nothing rests
             # on accumulated state, and a stale high-water mark would survive
             # a correction that should have lowered it.
@@ -451,6 +486,10 @@ class ChainEventManager:
                            f'cursor left at {cursor}')
             return event.get('totals', {}), False
         event['totals'] = merged
+        respect, _ok = merge_totals(
+            event.get('respect', {}),
+            chain_respect_by_member(attacks, self.faction_id, after=after))
+        event['respect'] = {k: round(v, 2) for k, v in respect.items()}
         slice_best = longest_in(attacks, self.faction_id)
         if slice_best is not None:
             event['longest'] = max(int(event.get('longest', 0)), slice_best)
@@ -541,11 +580,19 @@ def progress_embed(event, totals, roster, ok, now=None):
         return _ce(title=f"⛓️ {event['name']}",
                    description=chr(10).join(lines), color=_ci)
     head = f"**Day {day} of {days}** · minimum **{minimum}** hits each"
+    # Respect rides alongside, never instead: the rule is written in hits.
+    respect = event.get('respect')
     if is_over(event, now=now) and event.get('status') == 'running':
         head = (f"✅ **Window closed.** Run `/chain` → **Event end** to "
                 f"finalise it and see who fell short." + chr(10) + head)
     lines = [head]
     lines.extend(faction_lines(event, totals))
+    if respect is not None:
+        lines.append(f'\U0001f3c6 **Total respect: {round(sum(respect.values())):,}**')
+
+    def resp(tid):
+        return f"{round((respect or {}).get(str(tid), 0)):>5}" if respect is not None else ''
+    resp_head = '   Resp' if respect is not None else ''
 
     if not ok:
         lines.append('\n⚠️ **The attacks log could not be read.** '
@@ -565,15 +612,15 @@ def progress_embed(event, totals, roster, ok, now=None):
                     + [len(m['name']) for m in short] + [4])
 
         if cleared:
-            rows = '\n'.join(f"{i:>2}  {r['name']:<{width}}  {r['hits']:>4}"
+            rows = '\n'.join(f"{i:>2}  {r['name']:<{width}}  {r['hits']:>4}  {resp(r['torn_id'])}".rstrip()
                              for i, r in enumerate(cleared, start=1))
             lines.append(f'\n```\nCLEARED {minimum}+\n'
-                         f'{"#":>2}  {"Name":<{width}}  Hits\n{rows}\n```')
+                         f'{"#":>2}  {"Name":<{width}}  Hits{resp_head}\n{rows}\n```')
         if short:
-            rows = '\n'.join(f"    {m['name']:<{width}}  {m['hits']:>4}"
+            rows = '\n'.join(f"    {m['name']:<{width}}  {m['hits']:>4}  {resp(m['torn_id'])}".rstrip()
                              for m in short)
             lines.append(f'```\nUNDER {minimum}\n'
-                         f'    {"Name":<{width}}  Hits\n{rows}\n```')
+                         f'    {"Name":<{width}}  Hits{resp_head}\n{rows}\n```')
             lines.append(f'⚠️ **{len(short)}** under the minimum · '
                          f'✅ {met} cleared it')
         else:

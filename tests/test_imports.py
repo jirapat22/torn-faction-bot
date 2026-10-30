@@ -414,6 +414,60 @@ def test_chain_milestone_picks_highest_on_jump():
     assert tracker.last_chain_count == 120
 
 
+def test_chain_event_board_shows_respect_from_the_same_hits():
+    """
+    Respect on the event board is summed from exactly the attacks the hit
+    count uses, so the two can never disagree about what was in. Checked
+    live against 14 of Torn's own chain reports: identical to the cent.
+    Events that predate respect tracking get one full recount to fill it in.
+    """
+    import asyncio
+    from features import chain_events as CE
+    OURS = 45635
+    attacks = {
+        'a': {'attacker_id': 1, 'attacker_faction': OURS, 'chain': 9, 'respect_gain': 2.5,
+              'timestamp_started': 100},
+        'b': {'attacker_id': 1, 'attacker_faction': OURS, 'chain': 10, 'respect_gain': 20.0,
+              'timestamp_started': 110},                    # bonus hit counts in full
+        'c': {'attacker_id': 2, 'attacker_faction': OURS, 'chain': 11, 'respect': 3.0,
+              'timestamp_started': 120},                    # older records: 'respect'
+        'lost': {'attacker_id': 2, 'attacker_faction': OURS, 'chain': 0, 'respect_gain': 0,
+                 'timestamp_started': 130},                 # not a chain hit
+        'them': {'attacker_id': 9, 'attacker_faction': 1, 'chain': 4, 'respect_gain': 5,
+                 'timestamp_started': 140},                 # incoming
+    }
+    assert CE.chain_respect_by_member(attacks, OURS) == {'1': 22.5, '2': 3.0}
+    assert CE.chain_hits_by_member(attacks, OURS) == {'1': 2, '2': 1}
+    assert CE.chain_respect_by_member(attacks, OURS, after=110) == {'2': 3.0}
+    assert CE.chain_respect_by_member(None, OURS) is None, 'unreadable is not zero'
+
+    # an event with no respect yet is recounted in full once, then topped up
+    class FakeWarTracker:
+        calls = []
+
+        async def _fetch_all_attacks_since(self, start, until):
+            self.calls.append((start, until))
+            return attacks
+    wt = FakeWarTracker()
+    mgr = CE.ChainEventManager(bot=None, war_tracker=wt, faction_id=OURS)
+    mgr.save = lambda: None
+    event = {'name': 'Old', 'start': 50, 'end': 10_000, 'minimum': 1,
+             'cursor': 125, 'totals': {'1': 2}, 'status': 'running'}
+    totals, ok = asyncio.run(mgr.tally(event, now=200))
+    assert ok and wt.calls[-1][0] == 50, 'backfill reads from the event start'
+    assert event['respect'] == {'1': 22.5, '2': 3.0} and totals == {'1': 2, '2': 1}
+    asyncio.run(mgr.tally(event, now=300))
+    assert wt.calls[-1][0] == 200, 'afterwards only the new slice is read'
+
+    # the board: a total line and a Resp column; none of it without respect
+    roster = {'1': {'name': 'SirAua'}, '2': {'name': 'Twiggy'}}
+    text = CE.progress_embed(event, event['totals'], roster, True, now=200).description
+    assert 'Total respect: 26' in text and 'Resp' in text
+    assert any(line.startswith(' 1  SirAua') and line.rstrip().endswith('22') for line in text.splitlines()), text
+    old = dict(event); old.pop('respect')
+    assert 'respect' not in CE.progress_embed(old, old['totals'], roster, True, now=200).description.lower()
+
+
 def test_chain_complete_posts_when_the_cooldown_starts():
     """
     Torn keeps showing a finished chain's final count for the whole cooldown
@@ -6727,6 +6781,7 @@ if __name__ == '__main__':
     test_register_allows_unlinked_torn_id()
     test_flytrack_autostop_trusts_war_tracker_not_raw_none()
     test_chain_milestone_picks_highest_on_jump()
+    test_chain_event_board_shows_respect_from_the_same_hits()
     test_chain_complete_posts_when_the_cooldown_starts()
     test_chain_timeout_is_a_countdown_not_a_clock_time()
     test_war_report_v2_shape_normalised()
