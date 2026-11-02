@@ -5721,6 +5721,74 @@ def test_retals_show_live_status_and_the_board_keeps_reasons():
     assert retals['4']['status'] == {'state': 'Okay'}, 'failed lookup keeps last status'
 
 
+
+def test_targets_cap_is_ten_and_management_can_pin_permanent_ones():
+    """
+    Members get 10 targets each, for TARGET_DAYS. Management can also add
+    permanent ones: they never expire, show a pin, and do not use up anyone's
+    cap. Members cannot add permanent ones.
+    """
+    import asyncio, time
+    import features.targets as T
+
+    assert T.PER_MEMBER_CAP == 10
+
+    class FakeUser:
+        id = 42
+        display_name = 'Boss'
+
+    class FakeInteraction:
+        user = FakeUser()
+
+    manager = T.TargetManager(bot=None)
+    manager.save = lambda: None
+    manager._is_verified = lambda interaction: True
+    async def no_refresh():
+        return None
+    manager.refresh_board = no_refresh
+
+    async def fake_profile(tid, selections='profile', **_kw):
+        return {'name': f'Enemy{tid}', 'level': 50, 'faction': {'faction_id': 999999}}
+
+    is_mgmt = {'value': False}
+    saved = T.fetch_player_data, T.is_management
+    T.fetch_player_data = fake_profile
+    T.is_management = lambda interaction: is_mgmt['value']
+    try:
+        async def add(tid, permanent=False):
+            return await manager.add_target(FakeInteraction(), tid, 'grudge', permanent=permanent)
+
+        # A member cannot pin one
+        msg = asyncio.run(add(500, permanent=True))
+        assert 'Only management' in msg and '500' not in manager.data['targets']
+
+        # Ten normal ones fit, the eleventh does not
+        for i in range(10):
+            assert 'for 7 days' in asyncio.run(add(100 + i))
+        assert 'already have 10' in asyncio.run(add(200))
+
+        # Management can still pin past the cap; pins do not count toward it
+        is_mgmt['value'] = True
+        assert 'permanently' in asyncio.run(add(300, permanent=True))
+        assert manager.data['targets']['300']['permanent'] is True
+        assert T.count_added_by(manager.data['targets'], 42) == 10
+
+        # Pinning someone already up for 7 days upgrades them in place
+        assert 'stays until removed' in asyncio.run(add(100, permanent=True))
+        assert manager.data['targets']['100']['permanent'] is True
+    finally:
+        T.fetch_player_data, T.is_management = saved
+
+    # A week later only the pinned ones survive
+    gone = T.prune_targets(manager.data['targets'], int(time.time()) + 8 * 86400)
+    assert sorted(manager.data['targets']) == ['100', '300'], manager.data['targets']
+    assert len(gone) == 9
+
+    # The board marks them
+    embed = T.build_board_embed(manager.data['targets'], {}, {}, int(time.time()))
+    assert T.PERMANENT_MARK + ' [Enemy300]' in embed.description
+
+
 def test_targets_channel_is_created_once_when_both_loops_start_together():
     """
     The retal loop and the board loop start in the same second on boot and
@@ -7113,5 +7181,6 @@ if __name__ == '__main__':
     test_poll_names_who_did_not_answer()
     test_targets_and_retals_decide_what_to_post()
     test_retals_show_live_status_and_the_board_keeps_reasons()
+    test_targets_cap_is_ten_and_management_can_pin_permanent_ones()
     test_targets_channel_is_created_once_when_both_loops_start_together()
     print('All smoke tests passed.')

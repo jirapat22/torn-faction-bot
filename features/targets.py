@@ -4,7 +4,10 @@ Targets and retals: one channel, two jobs.
 1. A pinned TARGET BOARD of people the faction wants hit. Any verified member
    can add someone (up to PER_MEMBER_CAP each), entries drop off after
    TARGET_DAYS, and the bot edits the board in place every couple of minutes
-   with each target's status and a rough stat estimate.
+   with each target's status and a rough stat estimate. Management can also
+   pin PERMANENT targets (marked with a pin), which never expire and do not
+   count toward anyone's cap: a standing enemy should not quietly fall off
+   after a week, nor use up a manager's own slots.
 
 2. RETAL messages. Torn pays a retaliation bonus for hitting someone within
    five minutes of them hitting one of us, so the bot reads the faction attack
@@ -49,7 +52,8 @@ CHANNEL_NAME = 'targets-and-retals'
 
 RETAL_WINDOW = 300          # Torn's retaliation bonus lasts 5 minutes
 TARGET_DAYS = 7
-PER_MEMBER_CAP = 5
+PER_MEMBER_CAP = 10
+PERMANENT_MARK = '\U0001f4cc'  # pin: stays until someone removes it
 REASON_MAX = 80
 REASON_SHORT = 40      # what fits on the board line; the rest is in List
 
@@ -260,14 +264,19 @@ def retal_status(status, now):
 
 
 def prune_targets(targets, now):
-    """Drop targets older than TARGET_DAYS. Returns the removed names."""
+    """Drop targets older than TARGET_DAYS, except permanent ones. Returns
+    the removed names."""
     cutoff = now - TARGET_DAYS * 86400
-    gone = [tid for tid, t in targets.items() if int(t.get('added_at') or 0) <= cutoff]
+    gone = [tid for tid, t in targets.items()
+            if not t.get('permanent') and int(t.get('added_at') or 0) <= cutoff]
     return [targets.pop(tid).get('name', tid) for tid in gone]
 
 
 def count_added_by(targets, user_id):
-    return sum(1 for t in targets.values() if str(t.get('added_by')) == str(user_id))
+    """How many of the cap this person is using. Permanent targets are left
+    out: they are faction policy, not one person's picks."""
+    return sum(1 for t in targets.values()
+               if str(t.get('added_by')) == str(user_id) and not t.get('permanent'))
 
 
 def build_board_embed(targets, profiles, ff, now):
@@ -292,6 +301,8 @@ def build_board_embed(targets, profiles, ff, now):
         level = (prof or {}).get('level') or t.get('level')
         human = (ff.get(tid) or {}).get('bs_estimate_human') if est else None
         parts = [f'[{name}]({attack_url(tid)})']
+        if t.get('permanent'):
+            parts[0] = f'{PERMANENT_MARK} ' + parts[0]
         if level:
             parts.append(f'Lv{level}')
         parts.append(human or 'stats ?')
@@ -330,7 +341,8 @@ def build_board_embed(targets, profiles, ff, now):
     else:
         body = '\n\n'.join(blocks)
     body += (f'\n\n-# Add your own with /target action:Add. '
-             f'Entries drop off after {TARGET_DAYS} days.')
+             f'Entries drop off after {TARGET_DAYS} days, '
+             f'{PERMANENT_MARK} ones stay until removed.')
     embed = create_embed(title=BOARD_TITLE, description=body, color=EMBED_COLOR_WARNING)
 
     total = len(targets)
@@ -509,16 +521,32 @@ class TargetManager:
         role = self._verified_role(interaction.guild)
         return (role is not None and role in member.roles) or is_management(interaction)
 
-    async def add_target(self, interaction, torn_id, reason=''):
-        """Returns the message to show the member (only they see it)."""
+    async def add_target(self, interaction, torn_id, reason='', permanent=False):
+        """Returns the message to show the member (only they see it).
+
+        permanent=True is management only: the target never expires and does
+        not count toward the cap."""
+        if permanent and not is_management(interaction):
+            return 'Only management can add permanent targets.'
         if not self._is_verified(interaction):
             return 'Only verified members can add targets. Use `/register` first.'
         targets = self.data['targets']
         tid = str(torn_id)
         if tid in targets:
-            return (f"**{targets[tid].get('name', tid)}** is already on the board "
-                    f"(added by {targets[tid].get('added_by_name', 'someone')}).")
-        if count_added_by(targets, interaction.user.id) >= PER_MEMBER_CAP:
+            existing = targets[tid]
+            if permanent and not existing.get('permanent'):
+                # Already up for 7 days: make it permanent in place rather than
+                # refusing, so management does not have to remove and re-add.
+                existing['permanent'] = True
+                if reason:
+                    existing['reason'] = reason.strip()[:REASON_MAX]
+                self.save()
+                asyncio.create_task(self.refresh_board())
+                return (f"**{existing.get('name', tid)}** was already on the board, "
+                        f"now it stays until removed.")
+            return (f"**{existing.get('name', tid)}** is already on the board "
+                    f"(added by {existing.get('added_by_name', 'someone')}).")
+        if not permanent and count_added_by(targets, interaction.user.id) >= PER_MEMBER_CAP:
             return (f'You already have {PER_MEMBER_CAP} targets on the board. '
                     'Remove one with `/target action:Remove` first.')
         profile = await fetch_player_data(tid, 'profile')
@@ -535,9 +563,13 @@ class TargetManager:
             'added_by': str(interaction.user.id),
             'added_by_name': interaction.user.display_name,
             'added_at': int(time.time()),
+            'permanent': bool(permanent),
         }
         self.save()
         asyncio.create_task(self.refresh_board())
+        if permanent:
+            return (f"Added **{targets[tid]['name']}** to the target board "
+                    f"{PERMANENT_MARK} permanently, until someone removes them.")
         return f"Added **{targets[tid]['name']}** to the target board for {TARGET_DAYS} days."
 
     def remove_target(self, interaction, torn_id):
@@ -773,7 +805,8 @@ async def setup_target_commands(bot, manager):
         who='[Add/Remove] Torn id or profile link',
         reason='[Add] Why (optional, shows on the board)')
     @app_commands.choices(action=[
-        app_commands.Choice(name='Add - Put someone on the board', value='add'),
+        app_commands.Choice(name='Add - Put someone on the board for 7 days', value='add'),
+        app_commands.Choice(name='Add permanent - Stays until removed (Management)', value='add_permanent'),
         app_commands.Choice(name='Remove - Take one of yours off (management: any)', value='remove'),
         app_commands.Choice(name='List - Everyone on the board, just for you', value='list'),
     ])
@@ -785,7 +818,8 @@ async def setup_target_commands(bot, manager):
             if not targets:
                 await interaction.response.send_message('The board is empty.', ephemeral=True)
                 return
-            lines = [f"**{t.get('name', tid)}** [{tid}] · added by {t.get('added_by_name', '?')}"
+            lines = [(f'{PERMANENT_MARK} ' if t.get('permanent') else '')
+                     + f"**{t.get('name', tid)}** [{tid}] · added by {t.get('added_by_name', '?')}"
                      + (f" · \"{t['reason']}\"" if t.get('reason') else '')
                      for tid, t in targets.items()]
             await interaction.response.send_message(
@@ -807,6 +841,8 @@ async def setup_target_commands(bot, manager):
         # 3 seconds Discord allows before an answer.
         await interaction.response.defer(ephemeral=True, thinking=True)
         await interaction.followup.send(
-            await manager.add_target(interaction, torn_id, reason), ephemeral=True)
+            await manager.add_target(interaction, torn_id, reason,
+                                     permanent=(action.value == 'add_permanent')),
+            ephemeral=True)
 
     logger.info('Target command registered (/target add/remove/list)')
