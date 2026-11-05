@@ -578,6 +578,7 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
         @app_commands.describe(
             view='What to show (default: everyone with active strikes)',
             member='For Member view: whose record to show',
+            torn='For Member view: Torn name or id instead (works for people who left Discord)',
             strike_id='For Remove: the 8-character id shown next to the strike'
         )
         @app_commands.choices(view=[
@@ -589,6 +590,7 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
         async def strikes_cmd(interaction: discord.Interaction,
                               view: app_commands.Choice[str] = None,
                               member: discord.Member = None,
+                              torn: str = None,
                               strike_id: str = None):
             if not is_management(interaction):
                 await interaction.response.send_message(
@@ -597,7 +599,6 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
             await interaction.response.defer(ephemeral=True)
 
             from features.strikes import STRIKE_TYPES
-            from config import STRIKE_EXPIRY_DAYS
             import time as _time
             sm = strike_manager
             v = view.value if view else 'all'
@@ -652,15 +653,27 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
                 return
 
             if v == 'member':
-                if not member:
+                from features.strikes import find_torn_id
+                if member:
+                    torn_id = inactivity_tracker.get_torn_id(member.id) if inactivity_tracker else None
+                    title_name = member.display_name
+                    if not torn_id:
+                        await interaction.followup.send(
+                            f'{member.mention} is not registered, so there is no '
+                            f'Torn id to look up. Try `torn:` with their Torn '
+                            f'name or id instead.', ephemeral=True)
+                        return
+                elif torn:
+                    torn_id = find_torn_id(sm, torn)
+                    title_name = torn
+                    if not torn_id:
+                        await interaction.followup.send(
+                            f'No strike record under the name "{torn}". Try '
+                            f'their Torn id.', ephemeral=True)
+                        return
+                else:
                     await interaction.followup.send(
-                        'Pick a member.', ephemeral=True)
-                    return
-                torn_id = inactivity_tracker.get_torn_id(member.id) if inactivity_tracker else None
-                if not torn_id:
-                    await interaction.followup.send(
-                        f'{member.mention} is not registered, so there is no '
-                        f'Torn id to look up. They need `/register` first.',
+                        'Pick a `member`, or type their Torn name or id in `torn`.',
                         ephemeral=True)
                     return
                 act = sm.active(torn_id)
@@ -674,32 +687,36 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
                         f'{when(s["issued_at"])}{flag}\n  {s.get("reason", "")[:160]}')
                 expired = len(hist) - len(act)
                 body = '\n'.join(lines) if lines else 'No active strikes.'
+                clears = sm.clears_at(torn_id)
+                clear_line = (f' All clear <t:{int(clears)}:R> if nothing new.'
+                              if clears else '')
                 await interaction.followup.send(embed=create_embed(
-                    title=f'Strikes \u00b7 {member.display_name}',
-                    description=(f'**{len(act)} active**, {expired} expired or '
-                                 f'removed, {len(hist)} ever.\n\n{body}'[:4000]),
+                    title=f'Strikes \u00b7 {title_name}',
+                    description=(f'**{len(act)} active**, {expired} cleared or '
+                                 f'removed, {len(hist)} ever.{clear_line}'
+                                 f'\n\n{body}'[:4000]),
                     color=EMBED_COLOR_WARNING if act else EMBED_COLOR_SUCCESS),
                     ephemeral=True)
                 return
 
+            from features.strikes import CLEARS_NOTE, ledger_summary
             counts = sm.counts()
             if not counts:
                 await interaction.followup.send(embed=create_embed(
                     title='Strike ledger',
-                    description=f'Nobody has an active strike. '
-                                f'Strikes expire after {STRIKE_EXPIRY_DAYS} days.',
+                    description=f'Nobody has an active strike. {CLEARS_NOTE}',
                     color=EMBED_COLOR_SUCCESS), ephemeral=True)
                 return
-            rows = sorted(counts.items(), key=lambda kv: -kv[1][1])
-            body = '\n'.join(f'**{n}** \u00b7 {c} active' for _tid, (n, c) in rows)
+            footer = (f'\n\n-# {CLEARS_NOTE} {len(sm.pending)} candidate(s) '
+                      f'waiting on a decision, {len(sm.awaiting_notice())} '
+                      f'strike(s) awaiting notice. Full record: view Member.')
+            body = ledger_summary(sm)
+            head = f'{len(counts)} member(s) with active strikes.\n\n'
+            if len(head) + len(body) + len(footer) > 4000:
+                body = ledger_summary(sm, reason_len=30)
             await interaction.followup.send(embed=create_embed(
                 title='Strike ledger',
-                description=(f'{len(rows)} member(s) with active strikes. '
-                             f'Expire after {STRIKE_EXPIRY_DAYS} days.\n\n'
-                             f'{body}\n\n'
-                             f'-# {len(sm.pending)} candidate(s) waiting on a '
-                             f'decision, {len(sm.awaiting_notice())} strike(s) '
-                             f'awaiting notice.')[:4000],
+                description=(head + body)[:4000 - len(footer)] + footer,
                 color=EMBED_COLOR_WARNING), ephemeral=True)
 
         logger.info('Strikes command registered (/strikes all/member/remove)')

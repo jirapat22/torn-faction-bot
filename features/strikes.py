@@ -51,6 +51,7 @@ STRIKE_TYPES = {
     'war_offline': 'Offline during a war',
     'war_nohits': 'No hits in a war',
     'war_farmed': 'Farmed while offline, not turtled',
+    'war_bleeding': 'Kept bleeding points after a warning',
     'prewar_offline': 'Offline before a war started',
     'oc': 'Not in an organised crime',
     'bonus': 'Bonus hit on a non-enemy',
@@ -76,6 +77,18 @@ STRIKE_LADDER_LAST = ('This is **strike 3**. Management now votes on whether '
                       'you stay in the faction.')
 
 
+# A candidate nobody has clicked in this long is dropped so it can be raised
+# afresh; a dismissal is remembered this long, then forgotten.
+PENDING_DAYS = 14
+DISMISSED_DAYS = 180
+
+
+# How the clearing rule reads wherever a strike is shown. One place, so the
+# DM, the issued message and /strikes cannot drift apart again.
+CLEARS_NOTE = (f'Strikes clear after {STRIKE_EXPIRY_DAYS} days with no new '
+               f'strikes.')
+
+
 def dm_text(stype, reason, total=None):
     """
     The message a struck member receives. Built in one place because the
@@ -91,8 +104,7 @@ def dm_text(stype, reason, total=None):
         ladder = (STRIKE_LADDER.get(total) or STRIKE_LADDER_LAST) + '\n\n'
     return (f'**{STRIKE_TYPES.get(stype, stype)}**\n\n{reason}\n\n'
             f'{ladder}'
-            f'Strikes expire after {STRIKE_EXPIRY_DAYS} days with no new '
-            f'strikes. Think this one is unfair? Appeal to the leader.')
+            f'{CLEARS_NOTE} Think this one is unfair? Appeal to the leader.')
 
 
 class StrikeManager:
@@ -112,9 +124,37 @@ class StrikeManager:
         self.strikes = data.get('strikes', []) or []
         self.pending = data.get('pending', {}) or {}
         self.dismissed = data.get('dismissed', {}) or {}
+        if self._prune():
+            await self.save()
         logger.info(f'Strikes: {len(self.active())} active, '
                     f'{len(self.awaiting_notice())} awaiting notice, '
                     f'{len(self.pending)} pending, {len(self.dismissed)} dismissed')
+
+    def _prune(self, now=None):
+        """
+        Forget candidates nobody will ever act on. Returns True if anything
+        went.
+
+        A pending candidate blocks the same thing being raised again, so one
+        whose message was deleted or simply ignored for PENDING_DAYS used to
+        silence that member's check for good. Dropping it lets the next daily
+        run post a fresh one. Dismissals are kept far longer (they are the
+        record of a decision) but not forever.
+        """
+        now = time.time() if now is None else now
+        gone = 0
+        for k in [k for k, v in self.pending.items()
+                  if now - (v or {}).get('created', now) > PENDING_DAYS * 86400]:
+            del self.pending[k]
+            gone += 1
+        for k in [k for k, ts in self.dismissed.items()
+                  if not k.startswith('_') and isinstance(ts, (int, float))
+                  and now - ts > DISMISSED_DAYS * 86400]:
+            del self.dismissed[k]
+            gone += 1
+        if gone:
+            logger.info(f'Strikes: pruned {gone} stale candidate/dismissal record(s)')
+        return bool(gone)
 
     async def save(self):
         save_json(self.file, {
@@ -125,21 +165,49 @@ class StrikeManager:
 
     # ---------- the ledger ----------
 
-    def _expiry_cutoff(self):
-        return time.time() - STRIKE_EXPIRY_DAYS * 86400
-
-    def active(self, torn_id=None):
+    def active(self, torn_id=None, now=None):
         """
         Strikes that still count. Expiry is computed on READ rather than by
         deleting rows, so a strike that aged out is still in the file and the
         history stays auditable.
+
+        The rule is "strikes clear after 60 days with NO NEW STRIKES", so the
+        clock is per member, not per strike: a second strike on day 50 keeps
+        the first one alive too, and both clear together 60 days after the
+        last. Each strike used to expire on its own 60 days after it was
+        issued, which let a strike 1 vanish under a fresh strike 2 and put
+        somebody on their "final warning" back to a "warning".
         """
-        cutoff = self._expiry_cutoff()
-        out = [s for s in self.strikes
-               if s.get('status') == 'active' and s.get('issued_at', 0) >= cutoff]
-        if torn_id is not None:
-            out = [s for s in out if str(s.get('torn_id')) == str(torn_id)]
-        return out
+        now = time.time() if now is None else now
+        window = STRIKE_EXPIRY_DAYS * 86400
+        by_member = {}
+        for s in self.strikes:
+            if s.get('status') != 'active':
+                continue  # removed strikes never count, nor keep others alive
+            if torn_id is not None and str(s.get('torn_id')) != str(torn_id):
+                continue
+            by_member.setdefault(str(s.get('torn_id')), []).append(s)
+        out = []
+        for recs in by_member.values():
+            recs.sort(key=lambda r: r.get('issued_at', 0))
+            if now - recs[-1].get('issued_at', 0) >= window:
+                continue  # 60 clean days since their latest: all cleared
+            # Walk back from the latest; a clean 60-day gap between two
+            # strikes means everything before it had already cleared.
+            keep = [recs[-1]]
+            for older, newer in zip(reversed(recs[:-1]), reversed(recs[1:])):
+                if newer.get('issued_at', 0) - older.get('issued_at', 0) >= window:
+                    break
+                keep.append(older)
+            out.extend(keep)
+        return sorted(out, key=lambda r: r.get('issued_at', 0))
+
+    def clears_at(self, torn_id):
+        """When this member's strikes all clear, or None with none active."""
+        act = self.active(torn_id)
+        if not act:
+            return None
+        return max(s.get('issued_at', 0) for s in act) + STRIKE_EXPIRY_DAYS * 86400
 
     def history(self, torn_id):
         return [s for s in self.strikes if str(s.get('torn_id')) == str(torn_id)]
@@ -314,8 +382,8 @@ class StrikeManager:
         """
         Once a week: who holds strikes, and what for.
 
-        Weekly rather than daily on purpose. Strikes expire at 60 days and
-        move slowly, so a daily post would mostly repeat itself and become
+        Weekly rather than daily on purpose. Strikes clear after 60 clean
+        days and move slowly, so a daily post would mostly repeat itself and become
         wallpaper - the thing that made the old alerts unreadable.
 
         Guarded by ISO week number rather than "has 7 days passed", so a
@@ -392,6 +460,53 @@ class StrikeManager:
         return True
 
 
+def ledger_summary(manager, reason_len=70):
+    """
+    The /strikes All body: who holds strikes, WHAT FOR, and when they clear.
+    Pure (reads the manager only), so it can be tested without Discord.
+
+    It used to list names and counts only, so "what did they do?" meant
+    opening each member one by one.
+    """
+    by_member = {}
+    for st in manager.active():
+        by_member.setdefault(str(st['torn_id']), []).append(st)
+    blocks = []
+    for tid, recs in sorted(by_member.items(), key=lambda kv: (-len(kv[1]), kv[1][-1].get('torn_name', ''))):
+        name = recs[-1].get('torn_name', tid)
+        clears = manager.clears_at(tid)
+        head = (f'**{name}** \u00b7 {len(recs)} active'
+                + (f' \u00b7 clears <t:{int(clears)}:R>' if clears else ''))
+        rows = []
+        for st in recs:
+            reason = (st.get('reason') or '').strip().replace('\n', ' ')
+            if len(reason) > reason_len:
+                reason = reason[:reason_len - 1].rstrip() + '\u2026'
+            told = ' \u23f3 not told yet' if st.get('notified') == 'pending' else ''
+            rows.append(f'`{st["id"]}` {STRIKE_TYPES.get(st["type"], st["type"])} '
+                        f'<t:{int(st.get("issued_at", 0))}:d>{told}\n-# {reason}')
+        blocks.append(head + '\n' + '\n'.join(rows))
+    return '\n\n'.join(blocks)
+
+
+def find_torn_id(manager, text):
+    """
+    A Torn id from what management typed: an id, or a name already in the
+    ledger (case-insensitive). Lets /strikes look up someone who has left
+    Discord or never registered, which a Discord member picker cannot.
+    """
+    text = (text or '').strip()
+    if not text:
+        return None
+    digits = text.strip('[]')
+    if digits.isdigit():
+        return digits
+    for st in reversed(manager.strikes):
+        if (st.get('torn_name') or '').lower() == text.lower():
+            return str(st.get('torn_id'))
+    return None
+
+
 class StrikeActionView(discord.ui.View):
     """
     The three choices on a candidate.
@@ -451,7 +566,7 @@ class StrikeChoice(discord.ui.Button):
                 title=f'✅ Dismissed · {label}',
                 description=(f'**{cand["torn_name"]}**\n\n{cand["reason"]}\n\n'
                              f'-# Dismissed by **{actor}**. Not recorded, and '
-                             f'will not be raised again.'),
+                             f'will not be raised again for this.'),
                 color=EMBED_COLOR_SUCCESS), view=None)
             return
 
@@ -463,34 +578,57 @@ class StrikeChoice(discord.ui.Button):
         total = len(m.active(cand['torn_id']))
 
         if self.choice == 'bot':
+            # Answer Discord first: it allows 3 seconds, and fetching the user
+            # plus sending a DM can take longer. The strike was already
+            # recorded, so a timeout here showed "interaction failed" on a
+            # strike that had in fact gone through.
+            await interaction.response.defer()
             sent, text = await m.send_dm(cand['torn_id'], cand['type'],
                                          cand['reason'])
             mention = m.discord_id_for(cand['torn_id'])
             who = f'<@{mention}>' if mention else f'**{cand["torn_name"]}**'
+            if sent:
+                await interaction.edit_original_response(embed=create_embed(
+                    title=f'\U0001f534 Strike issued \u00b7 {label}',
+                    description=(f'**{cand["torn_name"]}** \u00b7 `{rec["id"]}`\n\n'
+                                 f'{cand["reason"]}\n\n'
+                                 f'-# Issued by **{actor}**, bot notified. '
+                                 f'{total} active strike(s). {CLEARS_NOTE}'),
+                    color=EMBED_COLOR_CRITICAL), view=None)
+                head = f'\U0001f4e8 DM sent to {who}:'
+            else:
+                # Nobody has told them, so it must show as outstanding. It
+                # used to stay marked "bot notified" while the message itself
+                # said they still needed telling, so it never reached the
+                # Awaiting list and could be forgotten.
+                rec['notified'] = 'pending'
+                await m.save()
+                await interaction.edit_original_response(embed=create_embed(
+                    title=f'\U0001f534 Strike issued \u00b7 {label}',
+                    description=(f'**{cand["torn_name"]}** \u00b7 `{rec["id"]}`\n\n'
+                                 f'{cand["reason"]}\n\n'
+                                 f'**The DM did not go through, so somebody has '
+                                 f'to tell them.**\n'
+                                 f'-# Issued by **{actor}**. {total} active '
+                                 f'strike(s). Click below once they know.'),
+                    color=EMBED_COLOR_CRITICAL),
+                    view=StrikeDeliveredView(m, rec['id']))
+                head = (f'\u26a0\ufe0f Could not DM {who} (blocked, or not '
+                        f'registered). This is what would have been sent:')
             # Echo the DM verbatim so management can see what was actually
             # said, not a summary of it.
-            head = (f'\U0001f4e8 DM sent to {who}:' if sent
-                    else f'⚠️ Could not DM {who} '
-                         f'(blocked, or not registered). They still need '
-                         f'telling. This is what would have been sent:')
-            await interaction.response.edit_message(embed=create_embed(
-                title=f'\U0001f534 Strike issued · {label}',
-                description=(f'**{cand["torn_name"]}** · `{rec["id"]}`\n\n'
-                             f'{cand["reason"]}\n\n'
-                             f'-# Issued by **{actor}**, bot notified. '
-                             f'{total} active strike(s). Expires in '
-                             f'{STRIKE_EXPIRY_DAYS} days.'),
-                color=EMBED_COLOR_CRITICAL), view=None)
             try:
-                await interaction.channel.send(f'{head}\n>>> {text}')
+                await interaction.channel.send(
+                    f'{head}\n>>> {text}',
+                    allowed_mentions=discord.AllowedMentions.none())
             except Exception as e:
                 logger.error(f'Strikes: could not echo DM: {e}')
             return
 
         # 'self' - recorded, but nobody has told them yet
         await interaction.response.edit_message(embed=create_embed(
-            title=f'\U0001f534 Strike issued · {label}',
-            description=(f'**{cand["torn_name"]}** · `{rec["id"]}`\n\n'
+            title=f'\U0001f534 Strike issued \u00b7 {label}',
+            description=(f'**{cand["torn_name"]}** \u00b7 `{rec["id"]}`\n\n'
                          f'{cand["reason"]}\n\n'
                          f'**{actor} is telling them personally.**\n'
                          f'-# Recorded and awaiting notice. {total} active '

@@ -2234,8 +2234,11 @@ class WarTracker:
             await self._warn_bleeder(tid, name, detail)
         if sm:
             for tid, name, detail in flagged:
+                # Its own type: filed as 'war_offline' it shared a key with
+                # the real offline candidate for the same war, so whichever
+                # posted first silently blocked the other.
                 await sm.post_candidate(
-                    tid, name, 'war_offline',
+                    tid, name, 'war_bleeding',
                     f'Kept bleeding after a warning. {detail} Every hit they '
                     f'take scores for the enemy, and abroad it scores 25% more.',
                     context=str(war_id))

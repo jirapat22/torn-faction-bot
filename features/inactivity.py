@@ -51,6 +51,30 @@ DAILY_FETCH_RETRY_DELAYS = [60, 120, 180]
 NOTICE_COVERS_DAYS_BEFORE = 7
 
 
+def oc_context(d):
+    """
+    Which OC gap a candidate is about: when their last OC ended, or 'never'.
+
+    It used to be '' for everyone, so a dismissal (stored by key) silenced
+    that member's OC check forever, and one OC strike blocked every later OC
+    candidate while it was active. Per gap, a dismissal or strike covers this
+    gap only, and the next gap is raised on its own merits.
+    """
+    ts = d.get('last_oc_ts')
+    return str(int(ts)) if ts else 'never'
+
+
+def oc_already_struck(sm, d):
+    """
+    True when an active OC strike was issued during this gap. Covers strikes
+    filed before the per-gap context existed (context ''), so changing the
+    key does not re-raise a gap somebody was already struck for.
+    """
+    since = d.get('last_oc_ts') or 0
+    return any(s.get('type') == 'oc' and s.get('issued_at', 0) >= since
+               for s in sm.active(d['torn_id']))
+
+
 def inactive_strike_candidates(critical_members, notices, is_open=None):
     """
     Which critical-inactive members become strike candidates, with the reason
@@ -920,11 +944,11 @@ class InactivityTracker:
 
         Args:
             channel: Discord channel to send to (always inactivity-alerts)
-            warning_members: List of members inactive for 3+ days
-            critical_members: List of members inactive for 5+ days
+            warning_members: List of members inactive INACTIVITY_WARNING_DAYS+
+            critical_members: List of members inactive INACTIVITY_CRITICAL_DAYS+
             total_faction_members: Total number of faction members checked
-            oc_warning: List of members with no OC for 2+ days
-            oc_critical: List of members with no OC for 4+ days
+            oc_warning: List of members with no OC for OC_WARNING_DAYS+
+            oc_critical: List of members with no OC for OC_CRITICAL_DAYS+
             left_faction: List of verified Discord members gone from faction 7+ days
         """
         if oc_warning is None:
@@ -961,7 +985,8 @@ class InactivityTracker:
         # it, rather than assuming every critical member produces a message.
         sm = getattr(self, 'strike_manager', None)
         oc_to_raise = [d for d in oc_critical
-                       if not sm or sm.is_open('oc', d['torn_id'], '')]
+                       if not sm or (sm.is_open('oc', d['torn_id'], oc_context(d))
+                                     and not oc_already_struck(sm, d))]
         # Same for 3 days offline: only what the ledger would actually post.
         inactive_to_raise = inactive_strike_candidates(
             critical_members, notices,
@@ -1140,8 +1165,15 @@ class InactivityTracker:
                     if data.get('never_joined'):
                         reason = (f"Never joined an OC, and has been eligible for "
                                   f"{data['days']:.0f} days.")
+                    # Context only, never an excuse: the OC rule has no
+                    # notice exemption written down, so management decides.
+                    from features.notices import note_for
+                    note = note_for(self.get_discord_id(data['torn_id']), notices)
+                    if note:
+                        reason += f' They posted a leave {note[2:]}'
                     if await sm.post_candidate(data['torn_id'], data['torn_name'],
-                                               'oc', reason, context='',
+                                               'oc', reason,
+                                               context=oc_context(data),
                                                channel=oc_channel):
                         posted += 1
             else:

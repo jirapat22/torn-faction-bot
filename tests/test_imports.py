@@ -4063,6 +4063,192 @@ def test_strike_ledger_remembers_dismissals_and_expires_strikes():
     assert counts['1'][1] == 2 and counts['2'][1] == 1, counts
 
 
+
+def test_strikes_clear_60_days_after_the_last_one_not_each_on_its_own():
+    """
+    The rule, the rulebook and the DM all say strikes clear after 60 days
+    WITH NO NEW STRIKES. The ledger expired each strike 60 days after it was
+    issued, so a strike 1 from day 0 vanished on day 60 even though strike 2
+    landed on day 50, quietly turning a final warning back into a warning.
+    """
+    import time
+    from features.strikes import StrikeManager
+    from config import STRIKE_EXPIRY_DAYS as W
+
+    day = 86400
+    t0 = time.time() - 300 * day
+    sm = StrikeManager(bot=None)
+    a = sm.add('1', 'Alpha', 'oc', 'x'); a['issued_at'] = t0
+    b = sm.add('1', 'Alpha', 'chain', 'y'); b['issued_at'] = t0 + 50 * day
+
+    assert len(sm.active('1', now=t0 + 70 * day)) == 2, 'strike 2 keeps strike 1 alive'
+    assert len(sm.active('1', now=t0 + 109 * day)) == 2
+    assert sm.active('1', now=t0 + (50 + W) * day) == [], '60 clean days clears both'
+
+    # A clean 60-day gap BETWEEN strikes means the older one already cleared
+    c = sm.add('2', 'Beta', 'oc', 'x'); c['issued_at'] = t0
+    d = sm.add('2', 'Beta', 'oc', 'y'); d['issued_at'] = t0 + 100 * day
+    assert [s['id'] for s in sm.active('2', now=t0 + 110 * day)] == [d['id']]
+
+    # A removed strike neither counts nor keeps the others alive
+    e = sm.add('3', 'Gamma', 'oc', 'x'); e['issued_at'] = t0
+    f = sm.add('3', 'Gamma', 'oc', 'y'); f['issued_at'] = t0 + 50 * day
+    sm.remove(f['id'], 'mgr')
+    assert sm.active('3', now=t0 + 70 * day) == []
+
+    # clears_at is 60 days after the latest active one
+    g = sm.add('4', 'Delta', 'oc', 'x')
+    assert abs(sm.clears_at('4') - (g['issued_at'] + W * day)) < 1
+    assert sm.clears_at('nobody') is None
+
+
+def test_strike_button_defers_and_a_failed_dm_stays_awaiting_notice():
+    """
+    "Strike, bot tells them" sent the DM before answering Discord, which
+    allows 3 seconds; a slow DM showed "interaction failed" on a strike that
+    had been recorded. And when the DM failed the strike stayed marked "bot
+    notified", so it never showed under Awaiting although nobody had told
+    the member.
+    """
+    import asyncio
+    from features.strikes import StrikeManager, StrikeChoice
+    import utils.helpers as helpers_mod
+
+    calls = []
+
+    class FakeResponse:
+        async def defer(self, **kw):
+            calls.append('defer')
+        async def edit_message(self, **kw):
+            calls.append('edit_message')
+        async def send_message(self, *a, **kw):
+            calls.append('send_message')
+
+    class FakeChannel:
+        async def send(self, *a, **kw):
+            calls.append('echo')
+
+    class FakeUser:
+        display_name = 'Mgr'
+
+    class FakeInteraction:
+        response = FakeResponse()
+        channel = FakeChannel()
+        user = FakeUser()
+        async def edit_original_response(self, **kw):
+            calls.append(('edited', 'view' in kw and kw['view'] is not None))
+
+    orig_mgmt = helpers_mod.is_management
+    helpers_mod.is_management = lambda i: True
+    try:
+        for dm_ok in (False, True):
+            calls.clear()
+            sm = StrikeManager(bot=None)
+            async def nosave():
+                return None
+            sm.save = nosave
+            async def fake_dm(tid, stype, reason, ok=dm_ok):
+                calls.append('dm')
+                return ok, 'text'
+            sm.send_dm = fake_dm
+            key = sm.key_for('oc', '7', 'never')
+            sm.pending[key] = {'torn_id': '7', 'torn_name': 'P7', 'type': 'oc',
+                               'reason': 'no OC', 'context': 'never'}
+            asyncio.run(StrikeChoice(sm, key, 'bot').callback(FakeInteraction()))
+            assert calls.index('defer') < calls.index('dm'), calls
+            rec = sm.strikes[-1]
+            if dm_ok:
+                assert rec['notified'] == 'bot' and sm.awaiting_notice() == []
+                assert ('edited', False) in calls
+            else:
+                assert rec['notified'] == 'pending', 'nobody told them'
+                assert [s['id'] for s in sm.awaiting_notice()] == [rec['id']]
+                assert ('edited', True) in calls, 'needs the Mark as told button'
+    finally:
+        helpers_mod.is_management = orig_mgmt
+
+
+def test_oc_candidates_are_per_gap_so_a_dismissal_does_not_last_forever():
+    """
+    Every OC candidate used the same key ('oc:id:'), so once dismissed that
+    member could never be raised for OCs again, and one OC strike blocked
+    every later OC candidate while active. The key is now the gap (when
+    their last OC ended), and a strike issued during the gap covers it,
+    including old strikes filed with the blank key.
+    """
+    import time
+    from features.strikes import StrikeManager
+    from features.inactivity import oc_context, oc_already_struck
+
+    now = time.time()
+    gap_a = {'torn_id': '5', 'last_oc_ts': now - 20 * 86400}
+    gap_b = {'torn_id': '5', 'last_oc_ts': now - 5 * 86400}
+    never = {'torn_id': '5', 'last_oc_ts': None}
+    assert oc_context(gap_a) != oc_context(gap_b)
+    assert oc_context(never) == 'never'
+
+    sm = StrikeManager(bot=None)
+    sm.dismissed[sm.key_for('oc', '5', oc_context(gap_a))] = now
+    assert not sm.is_open('oc', '5', oc_context(gap_a)), 'dismissal holds for its gap'
+    assert sm.is_open('oc', '5', oc_context(gap_b)), 'the next gap is raised afresh'
+
+    # A legacy strike (blank context) issued 3 days ago covers the gap that
+    # began 5 days ago, but not one that began after it.
+    old = sm.add('5', 'P5', 'oc', 'x', context='')
+    old['issued_at'] = now - 3 * 86400
+    assert oc_already_struck(sm, gap_b)
+    assert oc_already_struck(sm, never)
+    later = {'torn_id': '5', 'last_oc_ts': now - 86400}
+    assert not oc_already_struck(sm, later), 'joined an OC since, new gap'
+
+
+def test_stale_candidates_and_old_dismissals_are_pruned():
+    """
+    A pending candidate blocks the same thing being raised, so one whose
+    message was deleted or ignored used to silence that member's check for
+    good. Pending candidates older than PENDING_DAYS are dropped so the next
+    run posts a fresh one; dismissals go after DISMISSED_DAYS; the digest
+    bookkeeping key is never touched.
+    """
+    import time
+    from features.strikes import StrikeManager, PENDING_DAYS, DISMISSED_DAYS
+
+    now = time.time()
+    sm = StrikeManager(bot=None)
+    sm.pending = {'oc:1:never': {'created': now - (PENDING_DAYS + 1) * 86400},
+                  'oc:2:never': {'created': now - 86400}}
+    sm.dismissed = {'oc:3:x': now - (DISMISSED_DAYS + 1) * 86400,
+                    'oc:4:x': now - 86400, '_digest': '2026-W44'}
+    assert sm._prune(now) is True
+    assert list(sm.pending) == ['oc:2:never']
+    assert set(sm.dismissed) == {'oc:4:x', '_digest'}
+    assert sm._prune(now) is False
+
+
+def test_strikes_all_view_says_what_each_strike_was_for():
+    """
+    Pat asked "how do I see who has strikes and what for": the All view only
+    listed names and counts. It now shows each strike's type, date, id and
+    reason, and when the member clears. Members who left Discord can be
+    looked up by Torn name or id.
+    """
+    from features.strikes import StrikeManager, ledger_summary, find_torn_id
+
+    sm = StrikeManager(bot=None)
+    sm.add('251452', 'LaneEndz', 'oc', '6 days without joining an OC')
+    sm.add('4460611', 'Druid', 'oc', '20 days without joining an OC',
+           notified='pending')
+    sm.add('4460611', 'Druid', 'chain', '3 of 10 hits during Halloween')
+    out = ledger_summary(sm)
+    assert out.index('Druid') < out.index('LaneEndz'), 'most strikes first'
+    assert 'Not in an organised crime' in out and 'Missed the chain minimum' in out
+    assert '3 of 10 hits' in out and 'not told yet' in out and 'clears <t:' in out
+
+    assert find_torn_id(sm, 'druid') == '4460611'
+    assert find_torn_id(sm, '[123]') == '123'
+    assert find_torn_id(sm, 'nobody') is None
+
+
 def test_strike_notify_choices_are_exclusive_and_tracked():
     """
     A candidate offers three mutually exclusive choices and only one happens.
@@ -4234,6 +4420,9 @@ def test_bleeding_warns_before_it_strikes_and_resets_on_a_clean_war():
     assert warnings == ['1'], 'must not warn the same person twice'
     assert len(candidates) == 1, candidates
     assert candidates[0][0] == '1' and candidates[0][2] == '102', candidates
+    assert candidates[0][1] == 'war_bleeding', (
+        "its own type: as 'war_offline' it shared a key with the real offline "
+        "candidate for the same war and one silently blocked the other")
 
     # war 4: clean war -> the record is wiped, not just paused
     war('103', made=20, taken=3)
@@ -5563,6 +5752,8 @@ def test_management_is_never_pinged_into_a_channel_with_nothing_in_it():
             self.posted = []
         def is_open(self, stype, torn_id, context=''):
             return str(torn_id) in self.open_ids
+        def active(self, torn_id=None):
+            return []
         async def post_candidate(self, torn_id, name, stype, reason,
                                  context='', channel=None):
             self.posted.append(str(torn_id))
@@ -7334,6 +7525,11 @@ if __name__ == '__main__':
     test_member_with_no_oc_history_is_clocked_from_their_join_date()
     test_trial_check_fires_once_per_member_and_resets_on_rejoin()
     test_strike_ledger_remembers_dismissals_and_expires_strikes()
+    test_strikes_clear_60_days_after_the_last_one_not_each_on_its_own()
+    test_strike_button_defers_and_a_failed_dm_stays_awaiting_notice()
+    test_oc_candidates_are_per_gap_so_a_dismissal_does_not_last_forever()
+    test_stale_candidates_and_old_dismissals_are_pruned()
+    test_strikes_all_view_says_what_each_strike_was_for()
     test_strike_notify_choices_are_exclusive_and_tracked()
     test_war_insight_counts_categories_and_never_invents_hits_taken()
     test_bleeding_warns_before_it_strikes_and_resets_on_a_clean_war()
