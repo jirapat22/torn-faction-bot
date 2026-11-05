@@ -45,6 +45,57 @@ logger = logging.getLogger(__name__)
 # tomorrow - see check_and_alert_inactive for why this loop alone retries.
 DAILY_FETCH_RETRY_DELAYS = [60, 120, 180]
 
+# How far before someone's last action a #leave-notices post still covers this
+# absence. "Away next week" posted a few days early counts; a notice from a
+# trip a month ago does not excuse a new disappearance.
+NOTICE_COVERS_DAYS_BEFORE = 7
+
+
+def inactive_strike_candidates(critical_members, notices, is_open=None):
+    """
+    Which critical-inactive members become strike candidates, with the reason
+    shown on each. Pure, so it can be tested without Discord.
+
+    The rule (November 2026): 3 days offline with NO notice = 1 strike. So:
+    - notices is None (the channel could not be read): raise nobody. An
+      unreadable channel is not "nobody posted", and that mistake would
+      accuse everyone who did post.
+    - a notice from shortly before or during the absence: covered, skipped.
+    - not linked to Discord: raised, saying the notice could not be checked,
+      because a human clicks before anything is recorded.
+
+    is_open(torn_id, context) asks the ledger whether a candidate is still
+    raisable. The context is the absence itself (their last action), so a
+    dismissal holds for this absence but a NEW one can be raised again.
+
+    Returns [(member_data, reason, context)].
+    """
+    if notices is None:
+        return []
+    from features.notices import note_for
+    out = []
+    for d in critical_members:
+        context = str(int(d.get('last_seen') or 0))
+        if is_open and not is_open(d['torn_id'], context):
+            continue
+        member = d.get('discord_member')
+        days = d.get('days')
+        base = f'Offline {days} days on Torn'
+        if member is None:
+            out.append((d, f'{base}. Not linked to Discord, so #leave-notices '
+                           f'could not be checked: look before acting.', context))
+            continue
+        rec = notices.get(str(member.id))
+        cutoff = (d.get('last_seen') or 0) - NOTICE_COVERS_DAYS_BEFORE * 86400
+        if rec and rec['ts'] >= cutoff:
+            continue  # they told us; with a notice there is no time limit
+        reason = f'{base} with no notice in #leave-notices.'
+        older = note_for(member.id, notices)
+        if rec and older:
+            reason += f' Their last notice is older than this absence: {older}'
+        out.append((d, reason, context))
+    return out
+
 
 class InactivityTracker:
     """Tracks member activity on Torn and sends inactivity alerts"""
@@ -687,8 +738,8 @@ class InactivityTracker:
 
         # Track inactive members
         # Both thresholds are env-driven, so no number is written here: live
-        # critical is 7 days to match the rule in #faction-edicts, and a
-        # hardcoded comment would quietly go stale the next time it moves.
+        # critical matches the "days offline with no notice" rule in
+        # #faction-edicts, and a number in a comment goes stale when it moves.
         warning_members = []   # INACTIVITY_WARNING_DAYS+ inactive
         critical_members = []  # INACTIVITY_CRITICAL_DAYS+ inactive, strike-able
 
@@ -911,9 +962,13 @@ class InactivityTracker:
         sm = getattr(self, 'strike_manager', None)
         oc_to_raise = [d for d in oc_critical
                        if not sm or sm.is_open('oc', d['torn_id'], '')]
+        # Same for 3 days offline: only what the ledger would actually post.
+        inactive_to_raise = inactive_strike_candidates(
+            critical_members, notices,
+            lambda tid, ctx: sm.is_open('inactive', tid, ctx)) if sm else []
 
         here = bool(has_inactivity or has_left or oc_warning)
-        there = bool(oc_to_raise)
+        there = bool(oc_to_raise or inactive_to_raise)
         if MANAGEMENT_PING_ROLE_ID:
             if here:
                 await channel.send(f'<@&{MANAGEMENT_PING_ROLE_ID}>')
@@ -971,6 +1026,23 @@ class InactivityTracker:
                 embed = create_embed(title=title, description=chunk.strip(), color=EMBED_COLOR_CRITICAL)
                 await self._send_handled(channel, embed)
             logger.info(f'Sent critical alert for {len(critical_members)} members')
+
+        # Each strike-able absence also becomes its own candidate in the
+        # strikes channel, with the same Strike / Dismiss buttons as OCs. The
+        # alert above stays: it is the record of who was away, the candidate
+        # is the decision.
+        if inactive_to_raise:
+            raised = 0
+            for data, reason, context in inactive_to_raise:
+                if await sm.post_candidate(data['torn_id'], data['torn_name'],
+                                           'inactive', reason, context=context,
+                                           channel=oc_channel):
+                    raised += 1
+            logger.info(f'Inactivity: {len(inactive_to_raise)} strike candidate(s), '
+                        f'{raised} posted')
+        elif critical_members and sm and notices is None:
+            logger.warning('Inactivity: #leave-notices unreadable, so no strike '
+                           'candidates raised (cannot tell who posted a notice)')
 
         # Send warning alerts
         if warning_members:

@@ -50,6 +50,7 @@ STRIKE_TYPES = {
     'inactive': 'Offline with no notice',
     'war_offline': 'Offline during a war',
     'war_nohits': 'No hits in a war',
+    'war_farmed': 'Farmed while offline, not turtled',
     'prewar_offline': 'Offline before a war started',
     'oc': 'Not in an organised crime',
     'bonus': 'Bonus hit on a non-enemy',

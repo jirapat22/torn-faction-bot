@@ -2059,6 +2059,151 @@ def test_strike_candidates_feed_the_ledger_with_the_right_types():
         f'every candidate must be scoped to the war: {got}')
 
 
+
+def test_farmed_while_offline_is_recorded_and_raised_at_war_end():
+    """
+    November 2026 rule: getting farmed while offline and not turtled = 1
+    strike, management's call. The turtle check already sees who takes
+    TURTLE_HIT_THRESHOLD+ hits in an hour while exposed; it now also notes who
+    was OFFLINE at the time, and war end raises each as a candidate. Online
+    (fighting back) and turtled members are not raised.
+    """
+    import asyncio, time
+    from features.wars import WarTracker, TURTLE_HIT_THRESHOLD
+    import features.wars as wars_mod
+    import utils.torn_api as torn_api_mod
+    from config import TORN_FACTION_ID
+
+    class FakeChannel:
+        async def send(self, **kw):
+            pass
+
+    class FakeBot:
+        def get_channel(self, _):
+            return FakeChannel()
+
+    our = str(TORN_FACTION_ID)
+    now = int(time.time())
+    log = {}
+    for victim in ('111', '222', '333'):
+        for i in range(TURTLE_HIT_THRESHOLD):
+            log[f'{victim}-{i}'] = {'attacker_faction': '53421', 'defender_faction': our,
+                                    'defender_id': victim, 'result': 'Attacked',
+                                    'timestamp_started': now - 600 - i * 60}
+
+    def m(name, state, online):
+        return {'name': name, 'status': {'state': state},
+                'last_action': {'status': online, 'timestamp': now - 3000}}
+    roster = {'members': {
+        '111': m('AsleepAbroad', 'Abroad', 'Offline'),
+        '222': m('Fighting', 'Okay', 'Online'),
+        '333': m('Turtled', 'Hospital', 'Offline'),
+    }}
+
+    async def fake_attacks(from_ts=None, to_ts=None, sort=None):
+        return {k: v for k, v in log.items() if v['timestamp_started'] >= from_ts}
+
+    async def fake_basic(selections='basic'):
+        return roster
+
+    mgr = WarTracker(bot=FakeBot())
+    mgr.was_war_active = True
+    mgr.turtle_cooldowns = {}
+    orig = (wars_mod.fetch_faction_attacks, wars_mod.fetch_faction_data, wars_mod.save_json)
+    wars_mod.fetch_faction_attacks = fake_attacks
+    wars_mod.fetch_faction_data = fake_basic
+    wars_mod.save_json = lambda *a, **k: None
+    try:
+        asyncio.run(mgr.check_turtle_alerts())
+        assert set(mgr.war_farmed) == {'111'}, mgr.war_farmed
+        assert mgr.war_farmed['111']['hits'] == TURTLE_HIT_THRESHOLD
+        assert mgr.war_farmed['111']['abroad'] is True
+
+        # The alert cooldown must not hide a farming that keeps going
+        log.update({f'111-extra-{i}': {'attacker_faction': '53421', 'defender_faction': our,
+                                       'defender_id': '111', 'result': 'Attacked',
+                                       'timestamp_started': now - 100} for i in range(3)})
+        asyncio.run(mgr.check_turtle_alerts())
+        assert mgr.war_farmed['111']['hits'] == TURTLE_HIT_THRESHOLD + 3
+    finally:
+        (wars_mod.fetch_faction_attacks, wars_mod.fetch_faction_data,
+         wars_mod.save_json) = orig
+
+    got = []
+
+    class FakeLedger:
+        async def post_candidate(self, tid, name, stype, reason, context='', channel=None):
+            got.append((str(tid), stype, context, reason))
+            return True
+
+    class FakeAvail:
+        polls, data = {}, {}
+
+    class FakeVS:
+        verified_users = {}
+
+    mgr.strike_manager = FakeLedger()
+    mgr.availability_manager = FakeAvail()
+    mgr.verification_system = FakeVS()
+    mgr.war_offline = {}
+
+    async def fake_members():
+        return {t: {'name': r['name']} for t, r in roster['members'].items()}
+    orig_members = torn_api_mod.fetch_faction_members
+    torn_api_mod.fetch_faction_members = fake_members
+    try:
+        report = {our: {'members': {t: {'attacks': 5} for t in roster['members']}}}
+        asyncio.run(mgr.post_strike_candidates('888', {'_friendly_hosps': []}, report))
+    finally:
+        torn_api_mod.fetch_faction_members = orig_members
+    farmed = [g for g in got if g[1] == 'war_farmed']
+    assert [(t, c) for t, _k, c, _r in farmed] == [('111', '888')], got
+    assert 'while offline' in farmed[0][3] and 'abroad' in farmed[0][3]
+
+
+def test_three_days_offline_becomes_a_candidate_only_without_a_notice():
+    """
+    November 2026 rule: 3 days offline with no notice = 1 strike. Each such
+    absence becomes a strike candidate, but a notice from around the absence
+    covers it, an unreadable notice channel raises nobody, and an unlinked
+    member is raised with a warning that nothing could be checked.
+    """
+    from features.inactivity import inactive_strike_candidates, NOTICE_COVERS_DAYS_BEFORE
+
+    now = 1_800_000_000
+    last_seen = now - 4 * 86400
+
+    class Member:
+        def __init__(self, i):
+            self.id = i
+
+    def d(tid, member):
+        return {'torn_id': tid, 'torn_name': f'P{tid}', 'days': 4,
+                'last_seen': last_seen, 'discord_member': member}
+
+    crit = [d('1', Member(11)), d('2', Member(22)), d('3', Member(33)), d('4', None)]
+    notices = {
+        '22': {'ts': last_seen - 86400, 'text': 'away till Friday'},       # covers it
+        '33': {'ts': last_seen - (NOTICE_COVERS_DAYS_BEFORE + 20) * 86400,
+               'text': 'holiday last month'},                                # too old
+    }
+
+    assert inactive_strike_candidates(crit, None) == [], (
+        'an unreadable #leave-notices is not "nobody posted"')
+
+    out = inactive_strike_candidates(crit, notices)
+    by_id = {data['torn_id']: (reason, ctx) for data, reason, ctx in out}
+    assert set(by_id) == {'1', '3', '4'}, by_id
+    assert 'no notice' in by_id['1'][0]
+    assert 'older than this absence' in by_id['3'][0]
+    assert 'Not linked to Discord' in by_id['4'][0]
+    assert by_id['1'][1] == str(last_seen), 'the absence itself is the context'
+
+    # A dismissed (or already struck) absence is not raised again
+    out = inactive_strike_candidates(crit, notices, lambda tid, ctx: tid != '1')
+    assert '1' not in {data['torn_id'] for data, _r, _c in out}
+
+
 def test_strike_candidates_still_post_without_a_ledger():
     """
     The ledger is wired in bot.py after the war tracker exists, and this repo
@@ -3460,6 +3605,77 @@ def test_management_ping_lands_in_the_channel_that_got_the_alert():
     finally:
         inact_mod.STRIKES_CHANNEL_ID = orig_sid
         inact_mod.MANAGEMENT_PING_ROLE_ID = orig_role
+
+
+
+def test_daily_run_raises_an_offline_strike_candidate_and_pings_for_it():
+    """
+    End to end through the daily alert: someone 4 days offline with nothing
+    in #leave-notices gets the usual alert AND an 'inactive' strike candidate
+    in the strikes channel, with management pinged where the candidate is.
+    """
+    import asyncio, time
+    from features.inactivity import InactivityTracker
+    import features.inactivity as inact_mod
+
+    class FakeChannel:
+        def __init__(self, cid):
+            self.id = cid
+            self.posts = []
+
+        async def send(self, content=None, embed=None, **kw):
+            self.posts.append(('ping' if content else 'embed',
+                               embed.title if embed else content))
+            class Msg:
+                async def add_reaction(self, _):
+                    pass
+            return Msg()
+
+    daily, strikes = FakeChannel(111), FakeChannel(222)
+
+    class FakeBot:
+        def get_channel(self, cid):
+            return strikes if cid == 222 else daily
+
+        def get_guild(self, _):
+            return None
+
+    raised = []
+
+    class FakeLedger:
+        def is_open(self, stype, tid, ctx=''):
+            return True
+
+        async def post_candidate(self, tid, name, stype, reason, context='', channel=None):
+            raised.append((tid, stype, context, channel))
+            return True
+
+    class Member:
+        id = 77
+        display_name = 'Sleepy'
+
+    orig = (inact_mod.STRIKES_CHANNEL_ID, inact_mod.MANAGEMENT_PING_ROLE_ID)
+    inact_mod.STRIKES_CHANNEL_ID, inact_mod.MANAGEMENT_PING_ROLE_ID = 222, 999
+    try:
+        mgr = InactivityTracker(bot=FakeBot())
+        mgr.strike_manager = FakeLedger()
+        seen = int(time.time()) - 4 * 86400
+        crit = [{'discord_member': Member(), 'torn_name': 'Sleepy', 'torn_id': '5',
+                 'torn_level': 20, 'days': 4, 'last_seen': seen}]
+        asyncio.run(mgr._send_inactivity_alert(
+            daily, [], crit, 30, oc_warning=[], oc_critical=[], left_faction=[],
+            notices={}))
+        assert raised == [('5', 'inactive', str(seen), strikes)], raised
+        assert any(k == 'ping' for k, _ in strikes.posts), strikes.posts
+
+        # Unreadable notices: the alert still goes out, no candidate
+        raised.clear()
+        asyncio.run(mgr._send_inactivity_alert(
+            daily, [], crit, 30, oc_warning=[], oc_critical=[], left_faction=[],
+            notices=None))
+        assert raised == [], 'cannot tell who posted a notice, so accuse nobody'
+    finally:
+        inact_mod.STRIKES_CHANNEL_ID, inact_mod.MANAGEMENT_PING_ROLE_ID = orig
 
 
 def test_expired_crime_does_not_count_as_participating():
@@ -7109,8 +7325,11 @@ if __name__ == '__main__':
     test_chain_break_warning_gates_on_size_and_cooldown()
     test_strike_candidates_feed_the_ledger_with_the_right_types()
     test_bonus_hit_on_a_non_enemy_is_flagged_but_only_when_it_really_was_one()
+    test_farmed_while_offline_is_recorded_and_raised_at_war_end()
+    test_three_days_offline_becomes_a_candidate_only_without_a_notice()
     test_strike_candidates_still_post_without_a_ledger()
     test_management_ping_lands_in_the_channel_that_got_the_alert()
+    test_daily_run_raises_an_offline_strike_candidate_and_pings_for_it()
     test_expired_crime_does_not_count_as_participating()
     test_member_with_no_oc_history_is_clocked_from_their_join_date()
     test_trial_check_fires_once_per_member_and_resets_on_rejoin()

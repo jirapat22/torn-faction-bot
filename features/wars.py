@@ -148,6 +148,13 @@ class WarTracker:
         # sampled each tick IS their current offline streak; the max over the
         # war is the longest one, without storing any history.
         self.war_offline = {}
+        # {torn_id: {'hits': most hits in one hour, 'abroad': bool, 'at': ts}}
+        # for members the turtle check caught being farmed while OFFLINE and
+        # not turtled during the current war. The rules make that a strike
+        # (November 2026), judged by management, so war end raises each one as
+        # a candidate. Online members are left out: being hit while you are
+        # playing is a fight, not a failure to turtle.
+        self.war_farmed = {}
         self.verification_system = None  # set by bot.py, for Discord mentions
         self.announced_pending_wars = set()  # war_ids already announced during their notice window
         self.war_member_stats_file = 'data/war_member_stats.json'
@@ -179,11 +186,13 @@ class WarTracker:
         data = load_json(self.turtle_alerts_file, default={})
         self.turtle_cooldowns = data.get('cooldowns', {})
         self.war_offline = data.get('war_offline', {})
+        self.war_farmed = data.get('war_farmed', {})
 
     async def save_turtle_alerts(self):
         save_json(self.turtle_alerts_file, {
             'cooldowns': self.turtle_cooldowns,
             'war_offline': self.war_offline,
+            'war_farmed': self.war_farmed,
         })
 
     async def save_pending_wars(self):
@@ -2027,10 +2036,11 @@ class WarTracker:
         """
         Warn members who are being farmed while still attackable.
 
-        Only runs during a war. Reads ONE page of the attacks log covering the
-        last hour rather than paging the whole war: at war 50338's rate that is
-        about 22 incoming hits an hour, far inside a single page, so this costs
-        one API call a tick instead of twenty.
+        Only runs during a war. Reads the last hour of the attacks log rather
+        than the whole war, so a tick costs a page or two, not twenty.
+
+        Also records who was farmed while OFFLINE and not turtled
+        (war_farmed), which war end turns into strike candidates.
         """
         if not self.was_war_active:
             return
@@ -2094,6 +2104,17 @@ class WarTracker:
             state = (member.get('status') or {}).get('state', '')
             if state in TURTLED_STATES:
                 continue  # already safe, nothing to nag about
+            # Recorded before the alert cooldown: the cooldown only stops the
+            # war channel repeating itself, it must not hide a farming that
+            # carries on for hours.
+            if (member.get('last_action') or {}).get('status') == 'Offline':
+                rec = self.war_farmed.get(tid) or {'hits': 0, 'at': now}
+                if hits > rec['hits']:
+                    rec['hits'] = hits
+                    rec['abroad'] = (state == 'Abroad')
+                    rec['at'] = now
+                    self.war_farmed[tid] = rec
+                    changed = True
             last = self.turtle_cooldowns.get(tid, 0)
             if now - last < TURTLE_COOLDOWN_SECONDS:
                 continue
@@ -2322,6 +2343,15 @@ class WarTracker:
                 f"Offline {secs / 3600:.0f}h during war #{war_id} and did not "
                 f"answer the availability poll. Check for a notice in chat "
                 f"before acting."))
+
+        # No poll exemption here: the rule is about turtling, and answering
+        # the poll does not stop anyone being farmed.
+        for tid, rec in (self.war_farmed or {}).items():
+            where = 'abroad (x1.25 for them)' if rec.get('abroad') else 'in Torn'
+            candidates.append((tid, 'war_farmed',
+                f"Took {rec.get('hits', 0)} hits in an hour while offline and "
+                f"not turtled ({where}) during war #{war_id}. Management's "
+                f"call: check the war report before acting."))
 
         for tid, m in our_members.items():
             if m.get('attacks') or str(tid) in posted:
@@ -3073,6 +3103,7 @@ class WarTracker:
             self.current_war_id = war_id
             # Last war's absences say nothing about this one.
             self.war_offline = {}
+            self.war_farmed = {}
             logger.info(f'War detected: {war_id}')
 
         # Save war data to history (faction-level scores for final report)
