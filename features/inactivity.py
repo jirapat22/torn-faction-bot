@@ -31,6 +31,7 @@ from config import (
     EMBED_COLOR_WARNING,
     EMBED_COLOR_CRITICAL,
     EMBED_COLOR_SUCCESS,
+    EMBED_COLOR_INFO,
     GUILD_ID,
     MANAGEMENT_PING_ROLE_ID
 )
@@ -80,6 +81,29 @@ def oc_already_struck(sm, d):
                and str(s.get('torn_id')) == str(d['torn_id'])
                and s.get('issued_at', 0) >= since
                for s in getattr(sm, 'strikes', []))
+
+
+def oc_notice_covers(d, notices, discord_id, now=None):
+    """
+    Whether a #leave-notices post excuses this OC gap. Pat, 06/11/2026: a
+    notice excuses missed OCs as well as being offline, so somebody away is
+    not raised twice for one absence.
+
+    Returns 'unknown' when the notice channel could not be read (raise
+    nobody: an unreadable channel is not "nobody posted"), 'unlinked' when we
+    cannot tell whose notices are whose, True when a notice from shortly
+    before or during the gap covers it, False otherwise.
+    """
+    if notices is None:
+        return 'unknown'
+    if not discord_id:
+        return 'unlinked'
+    rec = notices.get(str(discord_id))
+    if not rec:
+        return False
+    now = now or time.time()
+    gap_start = d.get('last_oc_ts') or (now - (d.get('days') or 0) * 86400)
+    return rec['ts'] >= gap_start - NOTICE_COVERS_DAYS_BEFORE * 86400
 
 
 def inactive_strike_candidates(critical_members, notices, is_open=None):
@@ -334,16 +358,14 @@ class InactivityTracker:
         oc_warning = []
         oc_critical = []
 
-        # NOTE: this used to return early when every slot was filled, on the
-        # grounds that flagging members for management's queue was unfair. The
-        # faction's rule is the other way round: if there is nothing joinable
-        # it is the member's job to tell management so a crime gets created,
-        # not a reason to sit out. So the check still runs, and the shortage is
-        # reported as context rather than used as a blanket excuse.
+        # The check still builds the lists when every slot is filled, so the
+        # alert can name who is waiting. What it does with them is the
+        # alert's job: with no open slots nobody is warned or struck, and
+        # management gets a "create more crimes" reminder instead (Pat,
+        # 06/11/2026, matching "while eligible and slots are open").
         if no_slots_to_join:
-            logger.info('OC participation check: no open slots this run - '
-                        'flagging anyway, members are expected to ask '
-                        'management for a crime')
+            logger.info('OC participation check: no open slots this run, '
+                        'management will be asked to create more crimes')
 
         for torn_id, member in torn_members.items():
             tid = str(torn_id)
@@ -834,6 +856,14 @@ class InactivityTracker:
             # Lets /strikes and the digest mark strikes held by people who
             # have since left, instead of listing them as current members.
             sm.roster_ids = {str(t) for t in torn_members}
+            # Pat, 06/11/2026: once someone leaves the faction their strikes
+            # are cleared. torn_members is a successful roster read here (the
+            # check bails out earlier when it is None), so "not in it" really
+            # means gone, not "Torn did not answer".
+            cleared = sm.clear_left(sm.roster_ids)
+            if cleared:
+                await sm.save()
+                await self._report_cleared_strikes(cleared)
         oc_warning, oc_critical, oc_updated, oc_no_slots = self._get_oc_status(
             torn_members, crimes)
         if oc_updated:
@@ -937,6 +967,24 @@ class InactivityTracker:
             'left_faction': left_alerts,
         }
 
+    async def _report_cleared_strikes(self, cleared):
+        """One line in the strikes channel, so a strike that disappears from
+        /strikes has a visible reason."""
+        names = sorted({s.get('torn_name') or str(s.get('torn_id')) for s in cleared})
+        logger.info(f'Strikes: cleared {len(cleared)} for members who left: {names}')
+        channel = self.bot.get_channel(STRIKES_CHANNEL_ID) if self.bot else None
+        if channel is None:
+            return
+        try:
+            await channel.send(embed=create_embed(
+                title='\U0001f9f9 Strikes cleared',
+                description=(f'{", ".join(f"**{n}**" for n in names)} left the '
+                             f'faction, so their {len(cleared)} strike(s) were '
+                             f'cleared.'),
+                color=EMBED_COLOR_INFO))
+        except Exception as e:
+            logger.error(f'Strikes: could not post the cleared note: {e}')
+
     async def _send_handled(self, channel, embed):
         """
         Post an alert that management ticks off when they have dealt with it.
@@ -999,16 +1047,37 @@ class InactivityTracker:
         #
         # So ask the ledger what it would actually raise before pinging about
         # it, rather than assuming every critical member produces a message.
+        # No open OC slots: nobody can join, so nobody is warned or struck.
+        # Pat, 06/11/2026: the rule only strikes "while slots are open", and
+        # the fix for a full board is management creating more crimes, so
+        # the whole waiting list becomes one reminder to management instead.
+        oc_waiting = []
+        if oc_no_slots and (oc_critical or oc_warning):
+            oc_waiting = sorted(oc_critical + oc_warning, key=lambda d: -d['days'])
+            oc_critical, oc_warning = [], []
+
         sm = getattr(self, 'strike_manager', None)
-        oc_to_raise = [d for d in oc_critical
-                       if not sm or (sm.is_open('oc', d['torn_id'], oc_context(d))
-                                     and not oc_already_struck(sm, d))]
+        oc_to_raise = []
+        for d in oc_critical:
+            if sm and not (sm.is_open('oc', d['torn_id'], oc_context(d))
+                           and not oc_already_struck(sm, d)):
+                continue
+            covered = oc_notice_covers(d, notices, self.get_discord_id(d['torn_id']))
+            if covered is True:
+                continue  # they told us they were away
+            if covered == 'unknown':
+                continue  # cannot check the excuse, so accuse nobody
+            d['notice_unchecked'] = (covered == 'unlinked')
+            oc_to_raise.append(d)
+        if oc_critical and notices is None:
+            logger.warning('OC check: #leave-notices unreadable, so no OC strike '
+                           'candidates raised (a notice now excuses missed OCs)')
         # Same for 3 days offline: only what the ledger would actually post.
         inactive_to_raise = inactive_strike_candidates(
             critical_members, notices,
             lambda tid, ctx: sm.is_open('inactive', tid, ctx)) if sm else []
 
-        here = bool(has_inactivity or has_left or oc_warning)
+        here = bool(has_inactivity or has_left or oc_warning or oc_waiting)
         there = bool(oc_to_raise or inactive_to_raise)
         if MANAGEMENT_PING_ROLE_ID:
             if here:
@@ -1018,7 +1087,8 @@ class InactivityTracker:
                 await oc_channel.send(f'<@&{MANAGEMENT_PING_ROLE_ID}>')
 
         # If everyone is active on both checks, post a positive summary
-        if not warning_members and not critical_members and not oc_warning and not oc_critical and not left_faction:
+        if (not warning_members and not critical_members and not oc_warning
+                and not oc_critical and not oc_waiting and not left_faction):
             active_embed = create_embed(
                 title='✅ Daily Inactivity Check',
                 description=f'All **{total_faction_members}** faction members are active!\n\nNo inactivity, OC, or left-faction issues found.',
@@ -1126,6 +1196,22 @@ class InactivityTracker:
 
         # ── OC Participation alerts ──────────────────────────────────────────
 
+        if oc_waiting:
+            lines = [f'**{d["torn_name"]}** [Lvl {d["torn_level"]}] · '
+                     + (f'never joined one, eligible {d["days"]:.0f} days'
+                        if d.get('never_joined')
+                        else f'{d["days"]:.0f} days since their last OC')
+                     for d in oc_waiting]
+            body = (f'Every OC slot is taken, so **{len(oc_waiting)} member(s)** '
+                    f'have nothing to join. Please create more crimes.\n'
+                    f'-# Nobody is warned or struck for OCs while there are no '
+                    f'open slots.\n\n' + '\n'.join(lines))
+            embed = create_embed(title='\U0001f6e0\ufe0f No open OC slots',
+                                 description=body[:4000], color=EMBED_COLOR_WARNING)
+            await self._send_handled(channel, embed)
+            logger.info(f'OC: no open slots, reminded management about '
+                        f'{len(oc_waiting)} waiting member(s)')
+
         if oc_critical:
             lines = []
             for data in oc_critical:
@@ -1181,17 +1267,15 @@ class InactivityTracker:
                     if data.get('never_joined'):
                         reason = (f"Never joined an OC, and has been eligible for "
                                   f"{data['days']:.0f} days.")
-                    # Context only, never an excuse: the OC rule has no
-                    # notice exemption written down, so management decides.
+                    # A covering notice was already filtered out above; an
+                    # older one is still worth showing to whoever decides.
                     from features.notices import note_for
                     note = note_for(self.get_discord_id(data['torn_id']), notices)
                     if note:
-                        reason += f' They posted a leave {note[2:]}'
-                    if oc_no_slots:
-                        # The rule only strikes "while slots are open", so
-                        # the decider needs to know there were none.
-                        reason += (' No OC slots were open when the bot '
-                                   'checked.')
+                        reason += f' Their last leave notice is older than this gap: {note}'
+                    if data.get('notice_unchecked'):
+                        reason += (' Not linked to Discord, so #leave-notices '
+                                   'could not be checked: look before acting.')
                     if await sm.post_candidate(data['torn_id'], data['torn_name'],
                                                'oc', reason,
                                                context=oc_context(data),

@@ -3612,7 +3612,8 @@ def test_management_ping_lands_in_the_channel_that_got_the_alert():
     try:
         # ONLY an OC critical: the exact shape that produced the bare ping.
         asyncio.run(mgr._send_inactivity_alert(
-            daily, [], [], 35, oc_warning=[], oc_critical=crit, left_faction=[]))
+            daily, [], [], 35, oc_warning=[], oc_critical=crit, left_faction=[],
+            notices={}))
 
         assert not any(k == 'ping' for k, _ in daily.posts), (
             f'bare ping left in the daily channel: {daily.posts}')
@@ -3624,7 +3625,8 @@ def test_management_ping_lands_in_the_channel_that_got_the_alert():
         daily.posts.clear()
         strikes.posts.clear()
         asyncio.run(mgr._send_inactivity_alert(
-            daily, [], [], 35, oc_warning=crit, oc_critical=[], left_faction=[]))
+            daily, [], [], 35, oc_warning=crit, oc_critical=[], left_faction=[],
+            notices={}))
         assert any(k == 'ping' for k, _ in daily.posts), 'nudge must ping here'
         assert any(k == 'embed' for k, _ in daily.posts), 'nudge stays here'
         assert not strikes.posts, (
@@ -3703,6 +3705,192 @@ def test_daily_run_raises_an_offline_strike_candidate_and_pings_for_it():
         assert raised == [], 'cannot tell who posted a notice, so accuse nobody'
     finally:
         inact_mod.STRIKES_CHANNEL_ID, inact_mod.MANAGEMENT_PING_ROLE_ID = orig
+
+
+
+def test_strikes_clear_when_a_member_leaves_the_faction():
+    """
+    Pat, 06/11/2026: when someone leaves the faction their strikes are
+    cleared. They are marked removed (the record stays), their open
+    candidates are dropped, and an empty roster never clears anybody.
+    """
+    from features.strikes import StrikeManager
+
+    sm = StrikeManager()
+    sm.strikes = [
+        {'id': 'a', 'torn_id': '1', 'torn_name': 'Stayed', 'type': 'oc',
+         'status': 'active', 'issued_at': 100},
+        {'id': 'b', 'torn_id': '2', 'torn_name': 'Gone', 'type': 'oc',
+         'status': 'active', 'issued_at': 100},
+        {'id': 'c', 'torn_id': '2', 'torn_name': 'Gone', 'type': 'inactive',
+         'status': 'removed', 'issued_at': 50},
+    ]
+    sm.pending = {'oc:1:x': {'torn_id': '1'}, 'oc:2:y': {'torn_id': '2'}}
+
+    assert sm.clear_left(set()) == [], 'an empty roster must never clear the ledger'
+    assert sm.clear_left(None) == []
+    assert all(s['status'] != 'removed' for s in sm.strikes[:2])
+
+    cleared = sm.clear_left({'1', '3'}, now=500)
+    assert [s['id'] for s in cleared] == ['b']
+    assert sm.strikes[1]['status'] == 'removed'
+    assert sm.strikes[1]['removed_by'] == 'left the faction (auto)'
+    assert sm.strikes[0]['status'] == 'active'
+    assert list(sm.pending) == ['oc:1:x']
+    assert sm.clear_left({'1', '3'}) == [], 'nothing left to clear the second time'
+
+
+def test_no_open_oc_slots_reminds_management_instead_of_striking():
+    """
+    Pat, 06/11/2026: with no open OC slots nobody is warned or struck for
+    OCs; management is asked to create more crimes instead.
+    """
+    import asyncio
+    from features.inactivity import InactivityTracker
+    import features.inactivity as inact_mod
+
+    class FakeChannel:
+        def __init__(self, cid):
+            self.id = cid
+            self.posts = []
+
+        async def send(self, content=None, embed=None, **kw):
+            self.posts.append(('ping' if content else 'embed',
+                               embed.title if embed else content,
+                               embed.description if embed else ''))
+            class Msg:
+                async def add_reaction(self, _):
+                    pass
+            return Msg()
+
+    daily, strikes = FakeChannel(111), FakeChannel(222)
+
+    class FakeBot:
+        def get_channel(self, cid):
+            return strikes if cid == 222 else daily
+
+        def get_guild(self, _):
+            return None
+
+    raised = []
+
+    class FakeLedger:
+        strikes = []
+
+        def is_open(self, *a):
+            return True
+
+        def active(self, *a, **k):
+            return []
+
+        async def post_candidate(self, tid, *a, **k):
+            raised.append(tid)
+            return True
+
+    crit = [{'torn_name': 'Long', 'torn_id': '1', 'torn_level': 20, 'days': 6.0,
+             'last_oc_ts': 1790000000.0, 'never_joined': False}]
+    warn = [{'torn_name': 'Short', 'torn_id': '2', 'torn_level': 20, 'days': 1.5,
+             'last_oc_ts': 1790400000.0, 'never_joined': False}]
+
+    orig = (inact_mod.STRIKES_CHANNEL_ID, inact_mod.MANAGEMENT_PING_ROLE_ID)
+    inact_mod.STRIKES_CHANNEL_ID, inact_mod.MANAGEMENT_PING_ROLE_ID = 222, 999
+    try:
+        mgr = InactivityTracker(bot=FakeBot())
+        mgr.strike_manager = FakeLedger()
+        asyncio.run(mgr._send_inactivity_alert(
+            daily, [], [], 30, oc_warning=warn, oc_critical=crit, left_faction=[],
+            oc_no_slots=True, notices={}))
+    finally:
+        inact_mod.STRIKES_CHANNEL_ID, inact_mod.MANAGEMENT_PING_ROLE_ID = orig
+
+    assert raised == [], 'no OC strike candidates while no slots are open'
+    titles = [t for _k, t, _d in daily.posts]
+    assert any('No open OC slots' in (t or '') for t in titles), daily.posts
+    assert not any('OC Participation' in (t or '') for t in titles), 'no warnings either'
+    reminder = next(d for _k, t, d in daily.posts if t and 'No open OC slots' in t)
+    assert 'Long' in reminder and 'Short' in reminder and 'create more crimes' in reminder
+    assert any(k == 'ping' for k, _t, _d in daily.posts), 'management is pinged'
+    assert not strikes.posts, strikes.posts
+
+
+def test_leave_notice_excuses_missed_ocs():
+    """
+    Pat, 06/11/2026: a leave notice excuses missed OCs too, so one absence is
+    not raised twice. A notice from around the gap covers it; an older one is
+    only shown; an unreadable notice channel raises nobody.
+    """
+    import asyncio
+    from features.inactivity import (InactivityTracker, oc_notice_covers,
+                                     NOTICE_COVERS_DAYS_BEFORE)
+    import features.inactivity as inact_mod
+
+    now = 1_800_000_000
+    gap_start = now - 6 * 86400
+    d = {'torn_id': '1', 'last_oc_ts': gap_start, 'days': 6.0}
+    fresh = {'77': {'ts': gap_start - 86400, 'text': 'away this week'}}
+    old = {'77': {'ts': gap_start - (NOTICE_COVERS_DAYS_BEFORE + 10) * 86400,
+                  'text': 'old trip'}}
+    assert oc_notice_covers(d, None, '77', now) == 'unknown'
+    assert oc_notice_covers(d, fresh, None, now) == 'unlinked'
+    assert oc_notice_covers(d, fresh, '77', now) is True
+    assert oc_notice_covers(d, old, '77', now) is False
+    assert oc_notice_covers(d, {}, '77', now) is False
+
+    class FakeChannel:
+        id = 222
+        async def send(self, *a, **k):
+            class Msg:
+                async def add_reaction(self, _):
+                    pass
+            return Msg()
+
+    ch = FakeChannel()
+
+    class FakeBot:
+        def get_channel(self, cid):
+            return ch
+
+        def get_guild(self, _):
+            return None
+
+    raised = []
+
+    class FakeLedger:
+        strikes = []
+
+        def is_open(self, *a):
+            return True
+
+        def active(self, *a, **k):
+            return []
+
+        async def post_candidate(self, tid, name, stype, reason, **k):
+            raised.append((tid, reason))
+            return True
+
+    crit = [{'torn_name': 'Away', 'torn_id': '1', 'torn_level': 20, 'days': 6.0,
+             'last_oc_ts': float(gap_start), 'never_joined': False}]
+
+    def run(notices):
+        raised.clear()
+        mgr = InactivityTracker(bot=FakeBot())
+        mgr.strike_manager = FakeLedger()
+        mgr.get_discord_id = lambda tid: '77'
+        asyncio.run(mgr._send_inactivity_alert(
+            ch, [], [], 30, oc_warning=[], oc_critical=[dict(c) for c in crit],
+            left_faction=[], notices=notices))
+        return list(raised)
+
+    orig = inact_mod.MANAGEMENT_PING_ROLE_ID
+    inact_mod.MANAGEMENT_PING_ROLE_ID = 0
+    try:
+        assert run({'77': {'ts': gap_start + 3600, 'text': 'on holiday'}}) == [], \
+            'a notice during the gap excuses it'
+        got = run(old)
+        assert [t for t, _ in got] == ['1'] and 'older than this gap' in got[0][1]
+        assert run(None) == [], 'cannot check the excuse, so accuse nobody'
+    finally:
+        inact_mod.MANAGEMENT_PING_ROLE_ID = orig
 
 
 def test_expired_crime_does_not_count_as_participating():
@@ -5814,7 +6002,7 @@ def test_management_is_never_pinged_into_a_channel_with_nothing_in_it():
     tracker.strike_manager = FakeStrikes(open_ids=())
     asyncio.run(tracker._send_inactivity_alert(
         alerts, [], [], 35, oc_warning=[], oc_critical=oc_critical,
-        left_faction=[]))
+        left_faction=[], notices={}))
     pings = [m for m in sends['strikes'] if m and '<@&' in str(m)]
     assert pings == [], (
         f'pinged with nothing to show: {sends["strikes"]}')
@@ -5825,7 +6013,7 @@ def test_management_is_never_pinged_into_a_channel_with_nothing_in_it():
     tracker.strike_manager = FakeStrikes(open_ids={'222'})
     asyncio.run(tracker._send_inactivity_alert(
         alerts, [], [], 35, oc_warning=[], oc_critical=oc_critical,
-        left_faction=[]))
+        left_faction=[], notices={}))
     assert tracker.strike_manager.posted == ['222'], (
         f'only the raisable one: {tracker.strike_manager.posted}')
 
@@ -7562,6 +7750,9 @@ if __name__ == '__main__':
     test_strike_candidates_still_post_without_a_ledger()
     test_management_ping_lands_in_the_channel_that_got_the_alert()
     test_daily_run_raises_an_offline_strike_candidate_and_pings_for_it()
+    test_strikes_clear_when_a_member_leaves_the_faction()
+    test_no_open_oc_slots_reminds_management_instead_of_striking()
+    test_leave_notice_excuses_missed_ocs()
     test_expired_crime_does_not_count_as_participating()
     test_member_with_no_oc_history_is_clocked_from_their_join_date()
     test_trial_check_fires_once_per_member_and_resets_on_rejoin()

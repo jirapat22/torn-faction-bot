@@ -260,6 +260,36 @@ class StrikeManager:
                 return s
         return None
 
+    def clear_left(self, roster_ids, now=None):
+        """
+        Clear every active strike held by someone no longer in the faction,
+        and drop their open candidates. Returns the cleared strikes.
+
+        Pat, 06/11/2026: "if they are removed from faction, clear them".
+        Marked removed (not deleted), so the record of what happened stays.
+        Not remembered as a dismissal: leaving is not a decision about the
+        case, and a returning member starts clean anyway.
+
+        roster_ids must come from a SUCCESSFUL roster read. An empty set is
+        refused outright, because "Torn returned nobody" clearing the whole
+        ledger is the None-vs-empty trap in its most expensive form.
+        """
+        if not roster_ids:
+            return []
+        now = now or time.time()
+        cleared = []
+        for s in self.strikes:
+            if s.get('status') != 'active' or str(s.get('torn_id')) in roster_ids:
+                continue
+            s['status'] = 'removed'
+            s['removed_by'] = 'left the faction (auto)'
+            s['removed_at'] = now
+            cleared.append(s)
+        for key in [k for k, c in self.pending.items()
+                    if str((c or {}).get('torn_id')) not in roster_ids]:
+            del self.pending[key]
+        return cleared
+
     def mark_told(self, strike_id, by):
         s = self.get(strike_id)
         if not s or s.get('notified') != 'pending':
