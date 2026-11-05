@@ -3568,10 +3568,12 @@ def test_member_with_no_oc_history_is_clocked_from_their_join_date():
     assert rec['last_oc_ts'] is None, 'there is genuinely no last OC'
 
     # A member WITH history is still clocked from that history, not join date.
-    mgr.last_oc_completion = {'9': now - 1 * 86400}
+    # An hour short of the warning line (24 hours under the November 2026
+    # rules), so this checks the clock source, not the threshold.
+    mgr.last_oc_completion = {'9': now - OC_WARNING_DAYS * 86400 + 3600}
     warn2, crit2, _, _slots = mgr._get_oc_status({'9': member(500)}, crimes)
     assert not warn2 and not crit2, (
-        'one day since a real OC is fine, however long they have been here')
+        'a recent real OC is fine, however long they have been here')
 
 
 def test_revive_scan_never_turns_a_failed_lookup_into_an_accusation():

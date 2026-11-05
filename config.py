@@ -62,12 +62,16 @@ else:
 # Role IDs for pinging on specific events
 MANAGEMENT_PING_ROLE_ID = int(os.getenv("MANAGEMENT_PING_ROLE_ID", "0"))  # Ping for inactivity/war
 
-# Inactivity thresholds (in days)
-INACTIVITY_WARNING_DAYS = int(os.getenv("INACTIVITY_WARNING_DAYS", "3"))
-INACTIVITY_CRITICAL_DAYS = int(os.getenv("INACTIVITY_CRITICAL_DAYS", "5"))
+# Inactivity thresholds (in days). Critical is the strike line: the rules say
+# 3 days offline with no notice = 1 strike (was 7 before November 2026).
+# Warning is a heads-up for management a day before that.
+INACTIVITY_WARNING_DAYS = int(os.getenv("INACTIVITY_WARNING_DAYS", "2"))
+INACTIVITY_CRITICAL_DAYS = int(os.getenv("INACTIVITY_CRITICAL_DAYS", "3"))
 
-# OC participation thresholds (in days since last completed/active OC)
-OC_WARNING_DAYS = int(os.getenv("OC_WARNING_DAYS", "2"))
+# OC participation thresholds (in days since last completed/active OC).
+# The rules (November 2026): join a new OC within 24 hours of the last one
+# ending, or get a warning; still not in one 3 days after the warning = strike.
+OC_WARNING_DAYS = int(os.getenv("OC_WARNING_DAYS", "1"))
 OC_CRITICAL_DAYS = int(os.getenv("OC_CRITICAL_DAYS", "4"))
 OC_NEW_MEMBER_GRACE_DAYS = int(os.getenv("OC_NEW_MEMBER_GRACE_DAYS", "3"))
 

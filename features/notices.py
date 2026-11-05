@@ -1,7 +1,7 @@
 """
 Did this person say they were going to be away?
 
-Three faction rules turn on it - seven days offline, missing the chain
+Three faction rules turn on it - three days offline, missing the chain
 minimum, no hits in a war - and every one of them reads "without a notice".
 The bot could not see #leave-notices at all, so management checked by hand
 every single time, and a strike could be raised against somebody who had
