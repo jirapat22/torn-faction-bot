@@ -114,6 +114,9 @@ class StrikeManager:
         self.strikes = []
         self.pending = {}
         self.dismissed = {}
+        # Torn ids currently in the faction, refreshed by the daily check.
+        # None until then: unknown, so nobody is tagged as having left.
+        self.roster_ids = None
 
     # ---------- persistence ----------
 
@@ -249,6 +252,11 @@ class StrikeManager:
                 s['status'] = 'removed'
                 s['removed_by'] = removed_by
                 s['removed_at'] = time.time()
+                # Removing is a decision about this case, like a dismissal.
+                # Without remembering it the daily check raised the very same
+                # thing again the next morning.
+                self.dismissed[self.key_for(s.get('type'), s.get('torn_id'),
+                                            s.get('context', ''))] = time.time()
                 return s
         return None
 
@@ -423,7 +431,8 @@ class StrikeManager:
                     kinds[k] = kinds.get(k, 0) + 1
                 detail = ', '.join(f'{v}x {k}' if v > 1 else k
                                    for k, v in sorted(kinds.items()))
-                rows.append(f'**{name}** \u00b7 {len(recs)}\n-# {detail}')
+                rows.append(f'**{name}**{left_tag(tid, self.roster_ids)} '
+                            f'\u00b7 {len(recs)}\n-# {detail}')
             body = '\n'.join(rows)
             desc = (f'{len(counts)} member(s) hold {len(self.active())} active '
                     f'strike(s).\n\n{body}')
@@ -460,7 +469,14 @@ class StrikeManager:
         return True
 
 
-def ledger_summary(manager, reason_len=70):
+def left_tag(tid, roster_ids):
+    """' (left the faction)' when we KNOW they are gone, else ''."""
+    if roster_ids is None or str(tid) in roster_ids:
+        return ''
+    return ' (left the faction)'
+
+
+def ledger_summary(manager, reason_len=70, roster_ids=None):
     """
     The /strikes All body: who holds strikes, WHAT FOR, and when they clear.
     Pure (reads the manager only), so it can be tested without Discord.
@@ -475,7 +491,8 @@ def ledger_summary(manager, reason_len=70):
     for tid, recs in sorted(by_member.items(), key=lambda kv: (-len(kv[1]), kv[1][-1].get('torn_name', ''))):
         name = recs[-1].get('torn_name', tid)
         clears = manager.clears_at(tid)
-        head = (f'**{name}** \u00b7 {len(recs)} active'
+        roster = manager.roster_ids if roster_ids is None else roster_ids
+        head = (f'**{name}**{left_tag(tid, roster)} \u00b7 {len(recs)} active'
                 + (f' \u00b7 clears <t:{int(clears)}:R>' if clears else ''))
         rows = []
         for st in recs:

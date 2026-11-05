@@ -71,8 +71,15 @@ def oc_already_struck(sm, d):
     key does not re-raise a gap somebody was already struck for.
     """
     since = d.get('last_oc_ts') or 0
-    return any(s.get('type') == 'oc' and s.get('issued_at', 0) >= since
-               for s in sm.active(d['torn_id']))
+    if any(s.get('type') == 'oc' and s.get('issued_at', 0) >= since
+           for s in sm.active(d['torn_id'])):
+        return True
+    # A strike management REMOVED during this gap was a decision about it
+    # too: raising the same gap again the next morning undoes that.
+    return any(s.get('type') == 'oc' and s.get('status') == 'removed'
+               and str(s.get('torn_id')) == str(d['torn_id'])
+               and s.get('issued_at', 0) >= since
+               for s in getattr(sm, 'strikes', []))
 
 
 def inactive_strike_candidates(critical_members, notices, is_open=None):
@@ -818,6 +825,11 @@ class InactivityTracker:
                 warning_members.append(member_data)
 
         # OC participation check
+        sm = getattr(self, 'strike_manager', None)
+        if sm is not None:
+            # Lets /strikes and the digest mark strikes held by people who
+            # have since left, instead of listing them as current members.
+            sm.roster_ids = {str(t) for t in torn_members}
         oc_warning, oc_critical, oc_updated, oc_no_slots = self._get_oc_status(
             torn_members, crimes)
         if oc_updated:
@@ -1171,6 +1183,11 @@ class InactivityTracker:
                     note = note_for(self.get_discord_id(data['torn_id']), notices)
                     if note:
                         reason += f' They posted a leave {note[2:]}'
+                    if oc_no_slots:
+                        # The rule only strikes "while slots are open", so
+                        # the decider needs to know there were none.
+                        reason += (' No OC slots were open when the bot '
+                                   'checked.')
                     if await sm.post_candidate(data['torn_id'], data['torn_name'],
                                                'oc', reason,
                                                context=oc_context(data),

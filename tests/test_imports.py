@@ -4201,6 +4201,14 @@ def test_oc_candidates_are_per_gap_so_a_dismissal_does_not_last_forever():
     later = {'torn_id': '5', 'last_oc_ts': now - 86400}
     assert not oc_already_struck(sm, later), 'joined an OC since, new gap'
 
+    # Removing a strike is a decision too: the same case is not re-raised
+    sm.remove(old['id'], 'mgr')
+    assert oc_already_struck(sm, gap_b), 'removed in this gap, still decided'
+    r = sm.add('6', 'P6', 'war_offline', 'x', context='900')
+    sm.remove(r['id'], 'mgr')
+    assert not sm.is_open('war_offline', '6', '900'), 'removed, not re-raised'
+    assert sm.is_open('war_offline', '6', '901'), 'next war is its own case'
+
 
 def test_stale_candidates_and_old_dismissals_are_pruned():
     """
@@ -4243,6 +4251,12 @@ def test_strikes_all_view_says_what_each_strike_was_for():
     assert out.index('Druid') < out.index('LaneEndz'), 'most strikes first'
     assert 'Not in an organised crime' in out and 'Missed the chain minimum' in out
     assert '3 of 10 hits' in out and 'not told yet' in out and 'clears <t:' in out
+
+    # People who left are tagged, but only when the roster is actually known
+    assert 'left the faction' not in out, 'roster unknown: tag nobody'
+    tagged = ledger_summary(sm, roster_ids={'251452'})
+    assert '**Druid** (left the faction)' in tagged
+    assert '**LaneEndz** (left' not in tagged
 
     assert find_torn_id(sm, 'druid') == '4460611'
     assert find_torn_id(sm, '[123]') == '123'

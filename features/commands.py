@@ -710,10 +710,14 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
             footer = (f'\n\n-# {CLEARS_NOTE} {len(sm.pending)} candidate(s) '
                       f'waiting on a decision, {len(sm.awaiting_notice())} '
                       f'strike(s) awaiting notice. Full record: view Member.')
-            body = ledger_summary(sm)
+            # Fresh roster (cached ~30s) so people who left are tagged even
+            # before the next daily check; None on failure tags nobody.
+            members = await fetch_faction_members()
+            roster = {str(t) for t in members} if members else None
+            body = ledger_summary(sm, roster_ids=roster)
             head = f'{len(counts)} member(s) with active strikes.\n\n'
             if len(head) + len(body) + len(footer) > 4000:
-                body = ledger_summary(sm, reason_len=30)
+                body = ledger_summary(sm, reason_len=30, roster_ids=roster)
             await interaction.followup.send(embed=create_embed(
                 title='Strike ledger',
                 description=(head + body)[:4000 - len(footer)] + footer,
