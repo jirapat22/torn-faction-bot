@@ -507,7 +507,11 @@ class InactivityTracker:
                         del self.left_faction[tid]
                         data_updated = True
                         logger.info(f'Left-faction: Removed {torn_name} · no longer in Discord server')
-                        continue
+                    # Always skip, not only when they were tracked: falling
+                    # through re-added them, so the next run removed them
+                    # again, every other day for good (Druid1999, 27/10 to
+                    # 04/11, and the 3-day alert clock reset each time).
+                    continue
 
                 if tid not in self.left_faction:
                     torn_name = torn_id_to_name.get(tid, f'ID:{tid}')

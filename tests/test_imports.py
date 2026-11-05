@@ -1497,6 +1497,33 @@ def test_retry_preserves_already_good_payload():
         asyncio.sleep = real_sleep
 
 
+
+def test_member_gone_from_faction_and_discord_is_not_retracked_every_other_day():
+    """
+    Live log, 27/10 to 04/11/2026: "Removed Druid1999, no longer in Discord
+    server" every second day. Somebody gone from both was removed on one run,
+    re-added on the next (the skip only happened when they were tracked),
+    then removed again, forever, with the alert clock reset each time.
+    """
+    import features.inactivity as inact_mod
+    from features.inactivity import InactivityTracker
+
+    orig = inact_mod.load_json
+    inact_mod.load_json = lambda path, default=None: {}
+    try:
+        mgr = InactivityTracker(bot=None)
+        mgr.user_mapping = {'999': '4460611'}
+        mgr.left_faction = {'4460611': {'first_gone': 0, 'torn_name': 'Druid',
+                                        'discord_id': '999'}}
+        roster = {'1': {}}
+        for _ in range(3):
+            alerts, _changed = mgr._get_left_faction_status(roster, guild_member_ids={'5'})
+            assert '4460611' not in mgr.left_faction, 'must stay untracked'
+            assert alerts == []
+    finally:
+        inact_mod.load_json = orig
+
+
 def test_left_faction_access_revoked_after_grace_period():
     """
     Someone who leaves the faction keeps their verified role (and so their
@@ -7568,6 +7595,7 @@ if __name__ == '__main__':
     test_fetch_faction_crimes_distinguishes_outage_from_empty()
     test_stale_v1_crimes_fallback_rejected()
     test_retry_preserves_already_good_payload()
+    test_member_gone_from_faction_and_discord_is_not_retracked_every_other_day()
     test_left_faction_access_revoked_after_grace_period()
     test_follow_warning_pings_only_the_member_in_that_country()
     test_follow_warning_cooldown_suppresses_repeats()

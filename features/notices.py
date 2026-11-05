@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 logger = logging.getLogger(__name__)
 
 # How far back a notice still counts for. Longer than the longest rule it
-# feeds (7 days offline), because somebody who posted three weeks ago saying
+# feeds (3 days offline), because somebody who posted three weeks ago saying
 # "back in a month" is exactly the case this exists to catch.
 NOTICE_WINDOW_DAYS = 60
 # Enough of the message to recognise it; the rest is one click away.
