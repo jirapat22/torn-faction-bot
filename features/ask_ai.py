@@ -635,7 +635,9 @@ class FactBook:
         w = pick
         out = [f'WAR {w.get("war_id")} vs {w.get("enemy_name")} ended {_date(w.get("timestamp", 0))}: '
                f'{w.get("result", "unknown")}, our score {w.get("our_score")}, enemy score {w.get("enemy_score")}.'
-               + (' Stats rebuilt later, treat as rough.' if w.get('reconstructed') else ''),
+               + (' Rebuilt from Torn\'s war report: hits made are exact, hits taken and hosps are unknown.'
+                  if w.get('incoming_unknown') else
+                  ' Stats rebuilt later, treat as rough.' if w.get('reconstructed') else ''),
                f'Other wars on record: {listing}.']
         members = list(w.get('members', {}).items())
         # Rankings are worked out HERE, not by the AI: a model picking "the
@@ -980,7 +982,10 @@ async def _ask_groq(session, messages, facts, used):
 # no card: 1,000 requests/day, 8,000 tokens/min. Over the limit Groq refuses
 # (HTTP 429), which is a NotCapable like any outage, so the Mac answers instead.
 PROVIDERS = [('Groq', _ask_groq), ('local AI', _ask_local)]
-GROQ_MAX_WAIT_S = 30
+# Up to a minute: measured, the Mac's AI takes 40-90s AND is weaker (it once
+# quoted the wrong war's hits for "Ikaros vs Kaos Korner"), so waiting out
+# Groq's per-minute limit is both quicker and safer than falling back.
+GROQ_MAX_WAIT_S = 60
 
 
 def _retry_after(headers):
@@ -1393,6 +1398,10 @@ class AskAI:
         logger.info(f'ask_ai: {message.author} asked {question[:80]!r} -> {ans.provider}, '
                     f'{ans.seconds:.0f}s, kind={ans.kind}, fallback={ans.fallback}')
         text = ans.text if len(ans.text) <= ANSWER_LIMIT else ans.text[:ANSWER_LIMIT - 3] + '...'
+        if ans.provider == 'local AI' and ans.kind == 'answer':
+            # The backup is a much smaller model: every number is still checked,
+            # but it can quote a real number from the wrong war or member.
+            text += '\n-# Answered by my backup brain on the Mac, double-check with 📎 Show data.'
         # The records go behind a button instead of under every answer: they
         # are long, and most of the time nobody reads them (Pat, 07/11/2026).
         view = ShowDataView(self) if ans.facts_text else None
