@@ -232,7 +232,7 @@ class FactBook:
     sees fresh files and one live roster read.
     """
 
-    def __init__(self, data_dir='data', roster=None, strike_manager=None, now=None):
+    def __init__(self, data_dir='data', roster=None, strike_manager=None, now=None, discord_members=None):
         self.now = now or time.time()
         d = lambda f: os.path.join(data_dir, f)
         self.profiles = _load(d('activity_profile.json'), {})
@@ -246,6 +246,11 @@ class FactBook:
                 links.setdefault(str(k), str(v['torn_id']))
         self.discord_links = links          # discord id -> torn id
         self.linked = set(links.values())
+        # Who is in the Discord server, as {torn_id: discord display name}, or
+        # None when the server list isn't available (then: unknown, not "no").
+        self.in_discord = None
+        if discord_members is not None:
+            self.in_discord = discord_presence(discord_members, links)
         self.bleed = _load(d('bleed_streaks.json'), {})
         # None = the live roster could not be fetched. Then "in the faction?" is
         # unknown, and we say so instead of guessing from old files.
@@ -411,6 +416,17 @@ class FactBook:
                                                     if last else 'none on record.'))
         return out
 
+    def _discord_lines(self, rows):
+        """Ready-made "who isn't in Discord / isn't linked" lists for the faction table."""
+        if self.in_discord is None:
+            return ['In the Discord server: unknown (the server member list was not available).']
+        missing = [r['name'] for r in rows if r['tid'] not in self.in_discord]
+        unlinked = [r['name'] for r in rows if r['tid'] in self.in_discord and r['tid'] not in self.linked]
+        return [f'In the faction but NOT in the Discord server ({len(missing)}): '
+                + (', '.join(sorted(missing, key=str.lower)) or 'nobody') + '.',
+                f'In the Discord server but not linked to the bot, so it cannot DM them; they should use '
+                f'/register ({len(unlinked)}): ' + (', '.join(sorted(unlinked, key=str.lower)) or 'nobody') + '.']
+
     def _latest_war(self):
         """The newest war by date, not by position in the file (rebuilt wars
         get appended out of order)."""
@@ -454,6 +470,8 @@ class FactBook:
                          + (f' Last seen in the faction on {when}.' if when else '')
                          + (f' Bot noticed them gone on {_date(left)}.' if left else ''))
 
+        if self.in_discord is not None:
+            lines.append('In our Discord server: ' + ('yes' if tid in self.in_discord else 'no'))
         lines.append('Discord linked to Torn: ' + ('yes' if tid in self.linked else 'no (the bot cannot DM them)'))
 
         # Activity pattern (hourly snapshots; Idle counts as on, so a tab left
@@ -615,6 +633,7 @@ class FactBook:
                       lambda r: f'{r["chain14"]} hits', skip=lambda r: r['chain14'] is None),
                ranked('Most active strikes', lambda r: r['strikes'], lambda r: f'{r["strikes"]}',
                       skip=lambda r: not r['strikes']),
+               *self._discord_lines(rows),
                f'Every member, sorted by {sort_by} (columns: last action | online share | days online of last 14 '
                '| last war hits made/taken | chain hits last 14 days | days since OC | active strikes; '
                '"-" = not in that record):']
@@ -758,7 +777,8 @@ TOOL_SPECS = [
     {'type': 'function', 'function': {
         'name': 'faction_table',
         'description': 'One line per CURRENT member, for questions comparing or ranking members '
-                       '("who is most inactive", "who made fewest hits last war").',
+                       '("who is most inactive", "who made fewest hits last war"), and who is not in '
+                       'the Discord server or not linked to the bot.',
         'parameters': {'type': 'object', 'properties': {
             'sort_by': {'type': 'string', 'enum': ['name', 'days_offline', 'online_share', 'last_war_hits_made',
                                                    'last_war_hits_taken', 'days_since_oc', 'strikes',
@@ -806,6 +826,7 @@ CAPABILITIES = (
     '- OCs: when someone was last in one\n'
     '- strikes: active strikes, history, and candidates waiting for a decision\n'
     '- who has left the faction (kept for a year)\n'
+    '- who is not in our Discord server, or in it but not linked to the bot\n'
     '- the faction rules, word for word\n'
     'I don\'t have battle stats, money, items, Xanax use, or chat messages.'
 )
@@ -1097,6 +1118,26 @@ def tidy_answer(text, notices, question):
 DATA_WORDS = re.compile(
     r'\b(hits?|strikes?|ocs?|organi[sz]ed crimes?|chains?|chaining|wars?|activity|inactive|offline|'
     r'farmed|bleed(ing)?|respect|leave notices?|turtl\w*|hosp\w*|roster)\b', re.I)
+
+
+def discord_presence(members, links):
+    """
+    {torn_id: display name} for everyone in the Discord server who can be
+    tied to a Torn account: linked through /register, or carrying their Torn
+    ID in their nickname the faction way ("Ikaros22 [3571142]").
+    """
+    out = {}
+    for m in members:
+        if getattr(m, 'bot', False):
+            continue
+        name = getattr(m, 'display_name', '') or ''
+        tid = links.get(str(m.id))
+        if not tid:
+            found = re.search(r'\[(\d{3,})\]', name)
+            tid = found.group(1) if found else None
+        if tid:
+            out[str(tid)] = name
+    return out
 
 
 def names_in(text, facts):
@@ -1401,7 +1442,8 @@ class AskAI:
             async with self.lock:
                 roster = await torn_api.fetch_faction_members()   # None = Torn unreachable (handled)
                 roster = {str(k): v for k, v in roster.items()} if roster is not None else None
-                facts = FactBook(self.data_dir, roster=roster, strike_manager=self.strike_manager)
+                facts = FactBook(self.data_dir, roster=roster, strike_manager=self.strike_manager,
+                                 discord_members=list(message.guild.members) if message.guild else None)
                 question = describe_mentions(message.content, self.bot.user.id, message.mentions, facts, roles)
                 if not question:
                     await message.reply(HELP_TEXT, mention_author=False)

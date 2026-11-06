@@ -8280,6 +8280,33 @@ def test_rules_posts_links_publish_and_takeover():
     assert not store2.data['takeover_pending'] and len(store2.data['message_ids']) == 2
 
 
+def test_ask_ai_knows_who_is_not_in_discord():
+    """
+    "Who in the faction is still not in Discord?" was answered "not
+    recorded", although the bot sees the whole server. Members are matched
+    by /register link or by the "[torn id]" in their nickname; no server
+    list means unknown, never "nobody is in Discord".
+    """
+    import tempfile, os, json
+    from features.ask_ai import FactBook, discord_presence
+
+    class M:
+        def __init__(self, i, name, bot=False):
+            self.id, self.display_name, self.bot = i, name, bot
+    members = [M(1, 'Ikaros22 [3571142]'), M(2, 'just bob'), M(3, 'ApexPunk', bot=True)]
+    assert discord_presence(members, {'2': '555'}) == {'3571142': 'Ikaros22 [3571142]', '555': 'just bob'}
+
+    d = tempfile.mkdtemp()
+    with open(os.path.join(d, 'discord_to_torn.json'), 'w') as f:
+        json.dump({'2': '555'}, f)
+    roster = {'3571142': {'name': 'Ikaros22'}, '555': {'name': 'Bob'}, '777': {'name': 'Ghost'}}
+    table = FactBook(d, roster=roster, discord_members=members).faction_table()
+    assert 'NOT in the Discord server (1): Ghost.' in table
+    assert 'not linked to the bot' in table and '(1): Ikaros22.' in table
+    assert 'In our Discord server: no' in FactBook(d, roster=roster, discord_members=members).member_report('Ghost')
+    assert 'unknown' in FactBook(d, roster=roster).faction_table().split('In the Discord server: ')[1][:10]
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -8428,4 +8455,5 @@ if __name__ == '__main__':
     test_ask_ai_audit_fixes_chat_numbers_war_order_and_groq_hiccups()
     test_rules_sync_renders_posts_and_live_copy_wins()
     test_rules_posts_links_publish_and_takeover()
+    test_ask_ai_knows_who_is_not_in_discord()
     print('All smoke tests passed.')
