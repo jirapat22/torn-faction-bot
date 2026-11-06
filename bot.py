@@ -118,6 +118,7 @@ stakeout_manager = None
 fly_tracker = None
 chain_event_manager = None
 target_manager = None
+chain_log = None
 _initialized = False  # Prevent re-initialization on reconnect
 
 
@@ -180,7 +181,7 @@ async def on_ready():
     global inactivity_tracker, chain_tracker, war_tracker, verification_system
     global role_sync_manager, activity_profile_manager, enemy_watchlist, availability_manager
     global event_reminder_manager, stakeout_manager, fly_tracker, _initialized
-    global strike_manager, chain_event_manager, target_manager
+    global strike_manager, chain_event_manager, target_manager, chain_log
 
     try:
         logger.info(f'Bot logged in as {bot.user.name} (ID: {bot.user.id})')
@@ -357,8 +358,13 @@ async def on_ready():
         # them (see features/ask_ai.py). add_listener, not @bot.event, so it
         # sits beside discord.py's own on_message instead of replacing it.
         from features.ask_ai import AskAI
+        # Chain history (a year of per-member chain hits) for those questions.
+        from features.chain_log import ChainLog
+        chain_log = ChainLog()
         ask_ai = AskAI(bot, strike_manager=strike_manager)
         bot.add_listener(ask_ai.on_message, 'on_message')
+        from features.ask_ai import ShowDataView
+        bot.add_view(ShowDataView(ask_ai))   # keeps old 📎 buttons answering after a restart
 
         # Initialize faction tools
         await setup_faction_commands(bot)
@@ -428,6 +434,8 @@ async def on_ready():
 
         if not timezone_board_check.is_running():
             timezone_board_check.start()
+        if not chain_log_check.is_running():
+            chain_log_check.start()
 
         if not loop_watchdog.is_running():
             loop_watchdog.start()
@@ -877,6 +885,23 @@ async def before_timezone_board_check():
     logger.info('Timezone board started (refreshes every 5 minutes)')
 
 
+@tasks.loop(minutes=5)
+async def chain_log_check():
+    """Save every finished chain's per-member hits for a year (features/chain_log.py).
+    Also walks back 60 days once, a page at a time, to backfill."""
+    try:
+        if chain_log is not None:
+            await chain_log.tick()
+    except Exception as e:
+        logger.error(f'Error in chain log check: {e!r}')
+
+
+@chain_log_check.before_loop
+async def before_chain_log_check():
+    await bot.wait_until_ready()
+    logger.info('Chain log started (checks for finished chains every 5 minutes)')
+
+
 def _background_loops():
     """Every feature loop, by name. One list, shared by the health page and
     the watchdog, so a new loop cannot be added to one and forgotten in the other."""
@@ -893,6 +918,7 @@ def _background_loops():
         'retal_check': retal_check,
         'target_board_check': target_board_check,
         'timezone_board_check': timezone_board_check,
+        'chain_log_check': chain_log_check,
     }
 
 

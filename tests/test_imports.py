@@ -7995,6 +7995,42 @@ def test_ask_ai_faction_rankings_and_record_gaps():
     assert 'not a sign the member missed those wars' in report
 
 
+def test_chain_log_slims_reports_and_summarises_members():
+    """
+    The year-long chain history: a v2 chain report is cut down to who hit
+    (and how much) plus who was present without hitting, and the member
+    summary counts "was in / hit in / hits" over a window. Also checks the
+    📎 data splitter keeps every piece under Discord's embed limit.
+    """
+    import time
+    from features.chain_log import slim_report, member_chain_summary, ChainLog
+    from features.ask_ai import split_for_embeds
+
+    now = time.time()
+    report = {'id': 9, 'start': now - 3600, 'end': now - 600, 'details': {'chain': 12, 'respect': 30.5},
+              'attackers': [{'id': 1, 'attacks': {'total': 10}, 'respect': {'total': 25.123}},
+                            {'id': 2, 'attacks': {'total': 2}, 'respect': {'total': 5}}],
+              'non_attackers': [3]}
+    slim = slim_report(report)
+    assert slim['hits'] == {'1': [10, 25.12], '2': [2, 5.0]} and slim['present'] == ['3'] and slim['length'] == 12
+    old = dict(slim, end=now - 30 * 86400, hits={'1': [4, 1.0]}, present=['2', '3'])
+    chains = {'9': slim, '8': old}
+    assert member_chain_summary(chains, '1', now, 14) == (1, 1, 1, 10, slim['end'])
+    assert member_chain_summary(chains, '3', now, 60)[:4] == (2, 2, 0, 0)   # present twice, never hit
+    assert member_chain_summary(chains, '2', now, 60)[:4] == (2, 2, 1, 2)
+
+    # Queueing skips chains already saved and anything past retention.
+    import tempfile, os
+    log = ChainLog(os.path.join(tempfile.mkdtemp(), 'chain_log.json'))
+    log.chains['9'] = slim
+    oldest = log._enqueue([{'id': 9, 'end': now}, {'id': 10, 'end': now - 100},
+                           {'id': 11, 'end': now - 400 * 86400}], now)
+    assert list(log.queue) == ['10'] and oldest == int(now - 400 * 86400)
+
+    parts = split_for_embeds('\n'.join(['x' * 100] * 200) + '\n' + 'y' * 9000, limit=3900)
+    assert all(len(p) <= 3900 for p in parts) and len(parts) <= 5
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -8138,4 +8174,5 @@ if __name__ == '__main__':
     test_ask_ai_wrong_name_gets_a_question_not_an_ai_guess()
     test_ask_ai_reads_member_and_bot_role_mentions()
     test_ask_ai_faction_rankings_and_record_gaps()
+    test_chain_log_slims_reports_and_summarises_members()
     print('All smoke tests passed.')

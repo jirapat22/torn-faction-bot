@@ -152,6 +152,14 @@ def _ago(ts, now):
     return f'{int(secs // DAY)} days ago'
 
 
+def _hosp(war, member, field):
+    """Friendly hosp count, or 'unknown' for wars rebuilt without the attacks
+    log (scripts/backfill_empty_wars.py), where the field is left out on purpose."""
+    if war.get('incoming_unknown') and field not in member:
+        return 'unknown'
+    return member.get(field, 0)
+
+
 def _num(v):
     """None (unknown) must read as unknown, never as 0: see the None-vs-empty contract."""
     return 'unknown' if v is None else str(v)
@@ -170,7 +178,7 @@ class FactBook:
         self.profiles = _load(d('activity_profile.json'), {})
         self.wars = _load(d('war_member_stats.json'), {}).get('wars', [])
         self.oc = _load(d('oc_participation.json'), {}).get('data', {})
-        self.chains = _load(d('chain_session.json'), {}).get('chains', [])
+        self.chain_log = _load(d('chain_log.json'), {})   # features/chain_log.py: a year of chains
         self.left = _load(d('left_faction.json'), {})
         links = {str(k): str(v) for k, v in _load(d('discord_to_torn.json'), {}).items()}
         for k, v in _load(d('verified_users.json'), {}).items():
@@ -302,6 +310,46 @@ class FactBook:
                 return f'name not on record (Torn ID {tid})'
         return n
 
+    def _chain14(self, tid):
+        """Chain hits in the last 14 days, or None with no chain history."""
+        chains = (self.chain_log or {}).get('chains')
+        if not chains:
+            return None
+        from features.chain_log import member_chain_summary
+        return member_chain_summary(chains, tid, self.now, 14)[3]
+
+    def _chain_coverage(self):
+        """One line on how far back the chain history reaches, and any gaps."""
+        log = self.chain_log or {}
+        chains = log.get('chains') or {}
+        if not chains:
+            return None
+        oldest = min(c.get('end', 0) for c in chains.values())
+        txt = f'Chain history on record from {_date(oldest)} ({len(chains)} chains).'
+        if not log.get('backfill_done'):
+            txt += ' Older chains are still being filled in, so totals further back may be incomplete.'
+        if log.get('queue'):
+            txt += f' {len(log["queue"])} recent chain(s) not saved yet.'
+        if log.get('missing'):
+            txt += f' {len(log["missing"])} chain(s) could not be read from Torn and are missing.'
+        return txt
+
+    def _chain_lines(self, tid):
+        from features.chain_log import member_chain_summary
+        cover = self._chain_coverage()
+        if cover is None:
+            return ['CHAINS: no chain history saved yet (it is being collected).']
+        chains = self.chain_log['chains']
+        out = ['CHAINS: ' + cover]
+        for days in (14, 60):
+            run, were_in, hit_in, hits, last = member_chain_summary(chains, tid, self.now, days)
+            out.append(f'- Last {days} days: {run} chains run; they were in the faction for {were_in}, '
+                       f'hit in {hit_in}, {hits} chain hits in total.')
+        run, were_in, hit_in, hits, last = member_chain_summary(chains, tid, self.now, 10 ** 5)
+        out.append('- Last chain hit on record: ' + (f'{_date(last)} ({_days_ago(last, self.now)} days ago).'
+                                                    if last else 'none on record.'))
+        return out
+
     def _member_wars(self, tid):
         return [w for w in self.wars if tid in (w.get('members') or {})]
 
@@ -390,10 +438,13 @@ class FactBook:
                 m = w['members'][tid]
                 result = w.get('result', 'unknown')
                 note = ' [stats rebuilt later, treat as rough]' if w.get('reconstructed') else ''
+                if w.get('incoming_unknown'):
+                    note = (' [rebuilt from Torn\'s war report: hits made are exact; hits taken and hosps '
+                            'are unknown, too old for the attacks log]')
                 lines.append(
                     f'- War {w.get("war_id")} vs {w.get("enemy_name", "unknown")} ({_date(w.get("timestamp", 0))}, {result}): '
                     f'hits made {m.get("attacks", 0)}, hits taken from the enemy {_num(m.get("defends"))}, '
-                    f'hits taken from outside {_num(m.get("outside_incoming"))}, friendly hosps given {m.get("hosps_given", 0)}{note}')
+                    f'hits taken from outside {_num(m.get("outside_incoming"))}, friendly hosps given {_hosp(w, m, "hosps_given")}{note}')
                 made += m.get('attacks', 0) or 0
                 if m.get('defends') is None:
                     unknown_taken = True
@@ -409,17 +460,8 @@ class FactBook:
         if str(tid) in self.bleed:
             lines.append(f'Bleeding streak (wars in a row taking more hits than made): {self.bleed[str(tid)]}.')
 
-        # Chains: the bot keeps only the most recent chain session.
-        chains = [c for c in self.chains if tid in (c.get('members') or {})]
-        if chains:
-            hits = sum((c['members'][tid] or {}).get('attacks', 0) for c in chains)
-            first = min(c.get('start') or c.get('timestamp', 0) for c in chains)
-            last = max(c.get('end') or c.get('timestamp', 0) for c in chains)
-            lines.append(f'CHAINS: the bot only saves per-member chain hits for about a day, so the only chains on '
-                         f'record are {len(chains)} chains between {_date(first)} and {_date(last)}. They made {hits} '
-                         'chain hits in total across those. Older chains are not on record.')
-        else:
-            lines.append('CHAINS: none on record (the bot only saves per-member chain hits for about a day).')
+        # Chains, from the year-long chain log (features/chain_log.py).
+        lines.extend(self._chain_lines(tid))
 
         # OC
         if tid in self.oc:
@@ -459,6 +501,7 @@ class FactBook:
                 'taken': wm.get('defends') if wm else None,
                 'oc': _days_ago(self.oc[tid], self.now) if tid in self.oc else None,
                 'strikes': len(self._strikes_active(tid)),
+                'chain14': self._chain14(tid),
             })
         big = 10 ** 9
         keys = {
@@ -469,6 +512,7 @@ class FactBook:
             'last_war_hits_taken': lambda r: -(r['taken'] if r['taken'] is not None else -1),
             'days_since_oc': lambda r: -(r['oc'] if r['oc'] is not None else big),
             'strikes': lambda r: -r['strikes'],
+            'chain_hits_14d': lambda r: r['chain14'] if r['chain14'] is not None else big,
         }
         rows.sort(key=keys.get(sort_by, keys['name']))
         war_txt = (f'war {last_war.get("war_id")} vs {last_war.get("enemy_name")} ({_date(last_war.get("timestamp", 0))})'
@@ -497,14 +541,18 @@ class FactBook:
                       skip=lambda r: r['taken'] is None),
                ranked('Longest since an OC', lambda r: r['oc'] if r['oc'] is not None else 10 ** 6,
                       lambda r: 'never seen in one' if r['oc'] is None else f'{r["oc"]} days'),
+               ranked('Fewest chain hits in the last 14 days', lambda r: -r['chain14'],
+                      lambda r: f'{r["chain14"]} hits', skip=lambda r: r['chain14'] is None),
                ranked('Most active strikes', lambda r: r['strikes'], lambda r: f'{r["strikes"]}',
                       skip=lambda r: not r['strikes']),
                f'Every member, sorted by {sort_by} (columns: last action | online share | days online of last 14 '
-               '| last war hits made/taken | days since OC | active strikes; "-" = not in that record):']
+               '| last war hits made/taken | chain hits last 14 days | days since OC | active strikes; '
+               '"-" = not in that record):']
         for r in rows:
             war = '-' if r['made'] is None else f'{r["made"]}/{_num(r["taken"])}'
             out.append(f'- {r["name"]} [{r["tid"]}] L{r["level"]} | {r["off"] or "unknown"} | '
                        f'{"-" if r["pct"] is None else str(r["pct"]) + "%"} | {r["days"]} | {war} | '
+                       f'{"-" if r["chain14"] is None else r["chain14"]} | '
                        f'{"never" if r["oc"] is None else r["oc"]} | {r["strikes"]}')
         return '\n'.join(out)
 
@@ -554,8 +602,8 @@ class FactBook:
         for tid, m in members:
             out.append(f'- {self._name(tid, m)} [{tid}]: hits made {m.get("attacks", 0)}, '
                        f'hits taken from the enemy {_num(m.get("defends"))}, hits taken from outside '
-                       f'{_num(m.get("outside_incoming"))}, friendly hosps given {m.get("hosps_given", 0)}, '
-                       f'friendly hosps received {m.get("hosps_received", 0)}')
+                       f'{_num(m.get("outside_incoming"))}, friendly hosps given {_hosp(w, m, "hosps_given")}, '
+                       f'friendly hosps received {_hosp(w, m, "hosps_received")}')
         return '\n'.join(out)
 
     def strikes_overview(self):
@@ -610,7 +658,8 @@ TOOL_SPECS = [
                        '("who is most inactive", "who made fewest hits last war").',
         'parameters': {'type': 'object', 'properties': {
             'sort_by': {'type': 'string', 'enum': ['name', 'days_offline', 'online_share', 'last_war_hits_made',
-                                                   'last_war_hits_taken', 'days_since_oc', 'strikes']}},
+                                                   'last_war_hits_taken', 'days_since_oc', 'strikes',
+                                                   'chain_hits_14d']}},
             'required': []}}},
     {'type': 'function', 'function': {
         'name': 'war_report',
@@ -643,7 +692,7 @@ CAPABILITIES = (
     'I can answer from the bot\'s records about:\n'
     '- a member\'s activity: when they were last on, online pattern, days online\n'
     '- wars: hits made, hits taken (from the enemy and from outside), friendly hosps, for the last 10 wars\n'
-    '- chains: hits in the latest chain session\n'
+    '- chains: per-member chain hits for the past year\n'
     '- OCs: when someone was last in one\n'
     '- strikes: active strikes, history, and candidates waiting for a decision\n'
     '- who has left the faction (kept for a year)\n'
@@ -1014,6 +1063,77 @@ HELP_TEXT = (
 )
 
 
+FACTS_KEPT = 200   # answers whose 📎 data can still be opened (lost on restart)
+
+
+def split_for_embeds(text, limit=FACTS_EMBED_LIMIT, max_parts=5):
+    """
+    Cut text into pieces of at most `limit` characters, on line breaks where
+    possible (a single over-long line is cut mid-line). Each piece goes in
+    its own message: Discord caps ALL embeds in one message at 6,000
+    characters together. Past max_parts the rest is dropped with a note.
+    """
+    parts, cur = [], ''
+    for line in text.split('\n'):
+        while len(line) > limit:
+            if cur:
+                parts.append(cur)
+                cur = ''
+            parts.append(line[:limit])
+            line = line[limit:]
+        if cur and len(cur) + 1 + len(line) > limit:
+            parts.append(cur)
+            cur = ''
+        cur = f'{cur}\n{line}' if cur else line
+    if cur.strip():
+        parts.append(cur)
+    parts = [p for p in parts if p.strip()]
+    if len(parts) > max_parts:
+        parts = parts[:max_parts]
+        parts[-1] = parts[-1][:limit - 40] + '\n... (cut short to fit Discord)'
+    return parts
+
+
+def facts_embeds(facts, footer):
+    """The records as embeds, the footer on the last one."""
+    embeds = [discord.Embed(title='📎 Data used' if i == 0 else None, description=part, color=0x95a5a6)
+              for i, part in enumerate(split_for_embeds(facts))]
+    if embeds:
+        embeds[-1].set_footer(text=footer)
+    return embeds
+
+
+class ShowDataView(discord.ui.View):
+    """
+    The "📎 Show data" button under an answer. Clicking shows the records the
+    answer was built on, privately (only the clicker sees them). One fixed
+    custom_id, registered once at startup, so the button keeps answering
+    after a restart: it then says the data has expired instead of failing.
+    """
+
+    def __init__(self, ask_ai):
+        super().__init__(timeout=None)
+        self.ask_ai = ask_ai
+
+    @discord.ui.button(label='Show data', emoji='📎', style=discord.ButtonStyle.secondary,
+                       custom_id='askai:show_data')
+    async def show(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not member_is_management(interaction.user):
+            await interaction.response.send_message("Sorry, you don't have permission to see that 🔒",
+                                                    ephemeral=True)
+            return
+        stored = self.ask_ai.facts_by_msg.get(interaction.message.id)
+        if not stored:
+            await interaction.response.send_message(
+                'That data has expired (the bot restarted since). Ask the question again to get it.',
+                ephemeral=True)
+            return
+        embeds = facts_embeds(*stored)
+        await interaction.response.send_message(embed=embeds[0], ephemeral=True)
+        for e in embeds[1:]:
+            await interaction.followup.send(embed=e, ephemeral=True)
+
+
 class AskAI:
     """Listens for @mentions of the bot and answers management's questions."""
 
@@ -1022,7 +1142,8 @@ class AskAI:
         self.strike_manager = strike_manager
         self.data_dir = data_dir
         self.lock = asyncio.Lock()     # one question at a time: the Mac's AI runs one model
-        self.memory = {}               # answer message id -> (question, answer text, facts)
+        self.memory = {}               # answer message id -> (conversation turns, facts so far)
+        self.facts_by_msg = {}         # answer message id -> (facts text, footer) for the 📎 button
         self._session = None
 
     async def session(self):
@@ -1082,18 +1203,21 @@ class AskAI:
 
         logger.info(f'ask_ai: {message.author} asked {question[:80]!r} -> {ans.provider}, '
                     f'{ans.seconds:.0f}s, kind={ans.kind}, fallback={ans.fallback}')
-        embed = None
-        if ans.facts_text:
-            body = ans.facts_text
-            if len(body) > FACTS_EMBED_LIMIT:
-                body = body[:FACTS_EMBED_LIMIT - 40].rstrip() + '\n... (cut short to fit Discord)'
-            embed = discord.Embed(title='📎 Data used', description=body, color=0x95a5a6)
-            embed.set_footer(text=f'{ans.provider} · {ans.seconds:.0f}s · '
-                                  + ('AI wording rejected, raw records shown' if ans.fallback
-                                     else 'every number checked against the bot\'s records ✅'))
         text = ans.text if len(ans.text) <= ANSWER_LIMIT else ans.text[:ANSWER_LIMIT - 3] + '...'
-        sent = await message.reply(text, embed=embed, mention_author=False,
+        if ans.fallback:
+            text += '\n-# Tap 📎 Show data for the records.'
+        # The records go behind a button instead of under every answer: they
+        # are long, and most of the time nobody reads them (Pat, 07/11/2026).
+        view = ShowDataView(self) if ans.facts_text else None
+        sent = await message.reply(text, view=view, mention_author=False,
                                    allowed_mentions=discord.AllowedMentions.none())
+        if ans.facts_text:
+            footer = (f'{ans.provider} · {ans.seconds:.0f}s · '
+                      + ('AI wording rejected, raw records shown' if ans.fallback
+                         else 'every number checked against these records ✅'))
+            self.facts_by_msg[sent.id] = (ans.facts_text, footer)
+            while len(self.facts_by_msg) > FACTS_KEPT:
+                self.facts_by_msg.pop(next(iter(self.facts_by_msg)))
         if ans.provider != 'none':
             # Remember the whole conversation, so a reply to "Did you mean X or
             # Y?" with just "the first one" still makes sense.
