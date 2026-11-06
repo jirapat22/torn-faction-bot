@@ -909,6 +909,18 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
 # Discord side
 # ─────────────────────────────────────────────────────────────────────────────
 
+def only_management_can_see(channel):
+    """
+    True when every non-bot member who can view `channel` is management.
+    Fails closed: no member list, or nobody visible, counts as NOT private.
+    """
+    viewers = getattr(channel, 'members', None)   # members able to view (needs the members intent, which is on)
+    if not viewers:
+        return False
+    humans = [m for m in viewers if not getattr(m, 'bot', False)]
+    return bool(humans) and all(member_is_management(m) for m in humans)
+
+
 MAX_HISTORY = 8   # messages of conversation carried into a follow-up
 MAX_EARLIER_FACTS = 6000
 
@@ -969,9 +981,18 @@ class AskAI:
         return self._session
 
     def is_allowed_channel(self, channel):
+        """
+        Answers are public messages, so only answer where members can't read
+        them. Rather than a hand-kept list of channel IDs (which missed the
+        first private channel Pat actually tested in), check who can SEE the
+        channel: if every human who can is management, it's private enough.
+        The configured channels still always count.
+        """
         cid = getattr(channel, 'id', None)
-        parent = getattr(channel, 'parent_id', None)   # threads inside a management channel count too
-        return cid in ALLOWED_CHANNEL_IDS or parent in ALLOWED_CHANNEL_IDS
+        parent = getattr(channel, 'parent', None)   # a thread inherits its channel's audience
+        if cid in ALLOWED_CHANNEL_IDS or getattr(parent, 'id', None) in ALLOWED_CHANNEL_IDS:
+            return True
+        return only_management_can_see(parent or channel)
 
     @staticmethod
     def strip_mention(content, bot_id):
@@ -995,7 +1016,12 @@ class AskAI:
                                 mention_author=False, delete_after=30)
             return
         if not self.is_allowed_channel(message.channel):
-            await message.reply('Ask me in a management channel, so members\' records stay private 🔒',
+            ch = getattr(message.channel, 'parent', None) or message.channel
+            others = [m for m in (getattr(ch, 'members', None) or [])
+                      if not m.bot and not member_is_management(m)]
+            logger.info(f'ask_ai: refused in #{ch} ({ch.id}): {len(others)} non-management member(s) can see it')
+            await message.reply('Members can see this channel, so I won\'t post anyone\'s records here. '
+                                'Ask me in a channel only management can see 🔒',
                                 mention_author=False, delete_after=30)
             return
 
