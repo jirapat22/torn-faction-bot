@@ -7899,6 +7899,19 @@ def test_ask_ai_wrong_name_gets_a_question_not_an_ai_guess():
                           'BunnyBull: online in 50% of checks.'))]))
     assert partial.kind == 'answer' and '⚠️' in partial.text and 'Ghosty' in partial.text
 
+    # Plain chit-chat passes straight through...
+    chat = asyncio.run(answer_question(None, 'hey, how is your day?', FactBook(d, roster={}), providers=[
+        ('fake', provider([], 'Pretty good, just watching the chain timer 😄'))]))
+    assert chat.kind == 'chat' and 'chain timer' in chat.text
+    # ...but "chat" that names a member, or a data question answered without
+    # looking anything up, is a guess and gets the ask-back instead.
+    gossip = asyncio.run(answer_question(None, 'tell me something fun', FactBook(d, roster={}), providers=[
+        ('fake', provider([], 'BunnyBull never sleeps!'))]))
+    assert gossip.kind == 'ask' and 'BunnyBull' not in gossip.text
+    data_q = asyncio.run(answer_question(None, 'who made the most hits?', FactBook(d, roster={}), providers=[
+        ('fake', provider([], 'Probably the leader.'))]))
+    assert data_q.kind == 'ask'
+
     asked = asyncio.run(answer_question(None, 'how did they do?', FactBook(d, roster={}), providers=[
         ('fake', provider([('ask_back', {'question': 'Who do you mean?'})], 'unused'))]))
     assert asked.kind == 'ask' and asked.text == 'Who do you mean?'

@@ -709,6 +709,11 @@ def system_prompt():
     return (
         'You answer questions from the management team of Ascended Punks, a faction in the game Torn, '
         f'about their members. It is now {now} TCT (Torn time, same as UTC).\n'
+        'CHAT: if the message is just casual chat (greetings, jokes, how are you, random topics) and not '
+        'about members, wars, chains, OCs or strikes, reply like a friendly, witty faction mate in one to '
+        'three sentences, no tools needed. Never mention or describe any member in chat; anything about a '
+        'member must come from the tools. For general Torn game questions, answer only if you are sure, '
+        'and say so if you are not.\n'
         'RULES, follow them exactly:\n'
         '- You know NOTHING about members yourself. Always call a tool first, then answer only from what the '
         'tools returned.\n'
@@ -942,6 +947,29 @@ def tidy_answer(text, notices, question):
     return text
 
 
+# Words that make a message a question about faction records. If one of these
+# appears and the AI looked nothing up, the reply cannot be trusted as chat.
+DATA_WORDS = re.compile(
+    r'\b(hits?|strikes?|ocs?|organi[sz]ed crimes?|chains?|chaining|wars?|activity|inactive|offline|'
+    r'farmed|bleed(ing)?|respect|leave notices?|turtl\w*|hosp\w*|roster)\b', re.I)
+
+
+def is_small_talk(question, answer, facts):
+    """
+    True when a message and its AI reply are plain chat ("hi", "tell me a
+    joke"), safe to post without any records behind them. Not chat if the
+    question is about faction data, or if either side names a member: then
+    the AI should have looked them up, and anything it said is a guess.
+    """
+    if DATA_WORDS.search(question or ''):
+        return False
+    both = f'{question}\n{answer}'.lower()
+    for name in facts._known_names().values():
+        if len(name) >= 3 and re.search(rf'(?<![\w]){re.escape(name.lower())}(?![\w])', both):
+            return False
+    return True
+
+
 UNSURE_TEXT = ("I'm not sure what to look up for that. Which member or war do you mean, "
                'and what would you like to know?\n\n' + CAPABILITIES)
 
@@ -985,8 +1013,12 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
         # 2. Nothing was found at all. Whatever the AI wrote can only be a
         #    guess, so the bot's own "who do you mean?" goes out instead.
         if not facts.found_any and not earlier_facts:
-            msg = '\n\n'.join(facts.notices) if facts.notices else UNSURE_TEXT
-            return Answer(msg, pname, '', True, took(), kind='ask')
+            if facts.notices:
+                return Answer('\n\n'.join(facts.notices), pname, '', True, took(), kind='ask')
+            # ...unless it was just chit-chat, which needs no records at all.
+            if is_small_talk(question, text, facts):
+                return Answer(tidy_answer(text, [], ''), pname, '', True, took(), kind='chat')
+            return Answer(UNSURE_TEXT, pname, '', True, took(), kind='ask')
 
         # 3. A real answer: every number must be in the records.
         bad = unsupported_numbers(text, *sources())
