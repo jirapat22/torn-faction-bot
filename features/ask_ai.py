@@ -173,6 +173,9 @@ def _num(v):
     return 'unknown' if v is None else str(v)
 
 
+# The live copy synced from #faction-edicts (features/rules_sync.py) wins;
+# the copy in the repo is only the fallback for before the first sync.
+RULES_LIVE_FILE = os.path.join('data', 'faction_rules_live.md')
 RULES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'faction_rules.md')
 RULES_LIMIT = 3500   # characters of rulebook per answer, to stay inside Groq's per-minute budget
 _RULE_STOPWORDS = {
@@ -180,15 +183,26 @@ _RULE_STOPWORDS = {
     'does', 'we', 'me', 'my', 'to', 'it', 'and', 'or', 'with', 'can', 'you', 'are', 'if', 'get', 'gets', 'say',
     'says', 'tell', 'faction', 'there', 'any', 'be', 'when', 'at', 'by', 'this', 'that', 'per',
 }
-_rule_cache = None
+_rule_cache = {}   # path -> (modified time, sections): re-read only after a sync rewrites it
 
 
-def load_rule_sections(path=RULES_FILE):
-    """[(title, body)] per '## ' section, titled 'Post title > section'. Cached."""
-    global _rule_cache
-    if _rule_cache is not None and path == RULES_FILE:
-        return _rule_cache
+def rules_path(live=RULES_LIVE_FILE, bundled=RULES_FILE):
+    """The live synced rulebook if it exists and has text, else the repo copy."""
     try:
+        if os.path.getsize(live) > 200:
+            return live
+    except OSError:
+        pass
+    return bundled
+
+
+def load_rule_sections(path=None):
+    """[(title, body)] per '## ' section, titled 'Post title > section'."""
+    path = path or rules_path()
+    try:
+        mtime = os.path.getmtime(path)
+        if path in _rule_cache and _rule_cache[path][0] == mtime:
+            return _rule_cache[path][1]
         with open(path, encoding='utf-8') as f:
             text = re.sub(r'<!--.*?-->', '', f.read(), flags=re.S)
     except OSError:
@@ -207,8 +221,7 @@ def load_rule_sections(path=RULES_FILE):
         else:
             body.append(line)
     flush()
-    if path == RULES_FILE:
-        _rule_cache = sections
+    _rule_cache[path] = (mtime, sections)
     return sections
 
 
@@ -681,7 +694,7 @@ class FactBook:
     def faction_rules(self, topic):
         """
         The rulebook sections that match `topic`, quoted word for word from
-        features/faction_rules.md. No match lists the section names instead,
+        #faction-edicts (synced), or the repo copy before the first sync. No match lists the section names instead,
         so the AI can ask back rather than state a rule from memory.
         """
         sections = load_rule_sections()

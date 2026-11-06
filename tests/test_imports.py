@@ -8142,6 +8142,33 @@ def test_ask_ai_audit_fixes_chat_numbers_war_order_and_groq_hiccups():
         pass
 
 
+def test_rules_sync_renders_posts_and_live_copy_wins():
+    """
+    #faction-edicts is synced into a live rulebook: channel links become
+    readable names, URL links become 'text (url)', and the live copy is
+    preferred over the repo copy once it exists (an empty one is ignored,
+    so a failed sync can never blank the bot's rules).
+    """
+    import os, tempfile
+    from features.rules_sync import render_rules
+    from features.ask_ai import rules_path, load_rule_sections
+
+    md = render_rules(['# Rules\n## OCs  <#55> \n- Join within **24 hours**.  \n',
+                       'See [Target Finder](<https://ffscouter.com/target-finder>).', '   '], {55: 'oc-guide'})
+    assert md == ('# Rules\n## OCs  #oc-guide\n- Join within **24 hours**.\n\n'
+                  'See Target Finder (https://ffscouter.com/target-finder).'), md
+
+    d = tempfile.mkdtemp()
+    live, bundled = os.path.join(d, 'live.md'), os.path.join(d, 'bundled.md')
+    open(bundled, 'w').write('# B\n## X\n' + 'bundled rule\n' * 30)
+    assert rules_path(live, bundled) == bundled                 # no live copy yet
+    open(live, 'w').write('')
+    assert rules_path(live, bundled) == bundled                 # an empty live copy is ignored
+    open(live, 'w').write('# Live\n## OCs\n' + 'live rule\n' * 30)
+    assert rules_path(live, bundled) == live
+    assert load_rule_sections(live)[0][0] == 'Live > OCs'
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -8288,4 +8315,5 @@ if __name__ == '__main__':
     test_chain_log_slims_reports_and_summarises_members()
     test_ask_ai_quotes_rules_from_the_rulebook_copy()
     test_ask_ai_audit_fixes_chat_numbers_war_order_and_groq_hiccups()
+    test_rules_sync_renders_posts_and_live_copy_wins()
     print('All smoke tests passed.')

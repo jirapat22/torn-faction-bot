@@ -83,6 +83,12 @@ intents = discord.Intents.default()
 intents.members = True  # Required to see member info
 intents.guilds = True  # Required to see server info
 intents.guild_scheduled_events = True  # Required to see scheduled events
+# Read the text of messages that don't @mention the bot: the rules posts in
+# #faction-edicts (features/rules_sync.py) and pings of the bot's role.
+# Privileged: it must be switched on in the Discord developer portal FIRST
+# (it is, checked 07/11/2026, "limited" = under 100 servers), or Discord
+# refuses the connection and the bot cannot start at all.
+intents.message_content = True
 
 # Create bot instance
 bot = commands.Bot(command_prefix=COMMAND_PREFIX, intents=intents)
@@ -436,6 +442,8 @@ async def on_ready():
             timezone_board_check.start()
         if not chain_log_check.is_running():
             chain_log_check.start()
+        if not rules_sync_check.is_running():
+            rules_sync_check.start()
 
         if not loop_watchdog.is_running():
             loop_watchdog.start()
@@ -902,6 +910,23 @@ async def before_chain_log_check():
     logger.info('Chain log started (checks for finished chains every 5 minutes)')
 
 
+@tasks.loop(minutes=30)
+async def rules_sync_check():
+    """Copy #faction-edicts into data/faction_rules_live.md so "@ApexPunk what's
+    the OC rule?" quotes the rules as posted (features/rules_sync.py)."""
+    try:
+        from features.rules_sync import refresh
+        await refresh(bot)
+    except Exception as e:
+        logger.error(f'Error in rules sync: {e!r}')
+
+
+@rules_sync_check.before_loop
+async def before_rules_sync_check():
+    await bot.wait_until_ready()
+    logger.info('Rules sync started (reads #faction-edicts every 30 minutes)')
+
+
 def _background_loops():
     """Every feature loop, by name. One list, shared by the health page and
     the watchdog, so a new loop cannot be added to one and forgotten in the other."""
@@ -919,6 +944,7 @@ def _background_loops():
         'target_board_check': target_board_check,
         'timezone_board_check': timezone_board_check,
         'chain_log_check': chain_log_check,
+        'rules_sync_check': rules_sync_check,
     }
 
 

@@ -1,6 +1,6 @@
-<!-- The faction rulebook (November 2026 version), so "@ApexPunk what is the OC rule?" can quote it.
-     The bot cannot read #faction-edicts itself (Discord hides other people's message text from bots
-     without the Message Content intent), so this copy MUST be updated whenever the rules change. -->
+<!-- FALLBACK copy of the rulebook (November 2026). The bot now reads #faction-edicts itself
+     (features/rules_sync.py, into data/faction_rules_live.md) and only uses this file before its
+     first successful sync, or if the channel cannot be read. -->
 
 # Ascended Punks Faction Rules
 Welcome to Ascended Punks! We're a growing faction that helps newer players get stronger while we build up together. We alternate **war weeks** and **training weeks**. These rules keep things fair for everyone who shows up and puts in the work.
