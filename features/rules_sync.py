@@ -64,6 +64,14 @@ async def refresh(bot, path=LIVE_FILE):
         logger.warning(f'Rules sync: {len(msgs)} message(s) but no readable text, keeping the last copy')
         return None
     names = {c.id: c.name for c in channel.guild.channels}
+    names.update({t.id: t.name for t in channel.guild.threads})
+    # Links to forum guide posts (threads, often archived) aren't in either
+    # list, and showed up as "#channel". Look each one up once.
+    for cid in {int(x) for p in posts for x in re.findall(r'<#(\d+)>', p)} - set(names):
+        try:
+            names[cid] = (await bot.fetch_channel(cid)).name
+        except Exception:
+            pass   # deleted or hidden: stays "#channel"
     body = render_rules(posts, names)
     header = (f'<!-- Synced from #{channel.name} at {time.strftime("%d/%m/%Y %H:%M", time.gmtime())} UTC '
               f'by features/rules_sync.py. Edit the Discord posts, not this file. -->\n\n')
