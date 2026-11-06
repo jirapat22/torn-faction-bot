@@ -326,10 +326,11 @@ class FactBook:
             return None
         oldest = min(c.get('end', 0) for c in chains.values())
         txt = f'Chain history on record from {_date(oldest)} ({len(chains)} chains).'
-        if not log.get('backfill_done'):
-            txt += ' Older chains are still being filled in, so totals further back may be incomplete.'
-        if log.get('queue'):
-            txt += f' {len(log["queue"])} recent chain(s) not saved yet.'
+        if log.get('queue') or not log.get('backfill_done'):
+            # The queue is mostly the 60-day backfill, i.e. OLDER chains. It was
+            # once worded "recent chain(s)" and read back as "184 recent chain hits".
+            txt += (f' The history is still being filled in from Torn ({len(log.get("queue") or {})} more chains '
+                    'to fetch), so ALL chain totals below are incomplete for now and will grow.')
         if log.get('missing'):
             txt += f' {len(log["missing"])} chain(s) could not be read from Torn and are missing.'
         return txt
