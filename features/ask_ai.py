@@ -24,8 +24,8 @@ Layer 2 catches invented numbers; it cannot catch a REAL number put in the
 wrong place (e.g. war A's hits quoted for war B). That is what layer 3 and
 the prompt's "quote numbers exactly as given" are for.
 
-Who answers: the local AI on the Mac (Ollama, free, private) first, Groq as a
-backup if it is slow or down, the same arrangement I.O. uses.
+Who answers: Groq first (about 1 second), the local AI on the Mac (Ollama,
+~40 seconds) as the backup when Groq is down or over its free limits.
 """
 
 import asyncio
@@ -351,7 +351,8 @@ class FactBook:
             first = datetime.strptime(p['first_seen'], '%Y-%m-%d').strftime('%d/%m/%Y') if p.get('first_seen') else 'unknown'
             lines.append(f'Activity tracking since: {first}.')
             if pct is not None:
-                lines.append(f'Online or idle in {pct}% of hourly checks (weighted to recent weeks). '
+                lines.append(f'Online or idle in {pct}% of hourly checks since tracking began (recent weeks count '
+                             'more; this is NOT a last-14-days figure). '
                              'Idle counts as online, so a high number can just mean Torn was left open.')
             if days:
                 fmt = lambda x: datetime.strptime(x, '%Y-%m-%d').strftime('%d/%m/%Y')
@@ -741,7 +742,11 @@ async def _ask_groq(session, messages, facts, used):
     raise NotCapable('Groq kept calling tools without answering')
 
 
-PROVIDERS = [('local AI', _ask_local), ('Groq', _ask_groq)]
+# Groq first: measured 1.2s vs 40s for the Mac's AI on the same question
+# (07/11/2026), and Pat is fine with Torn stats leaving the Mac. Free plan,
+# no card: 1,000 requests/day, 8,000 tokens/min. Over the limit Groq refuses
+# (HTTP 429), which is a NotCapable like any outage, so the Mac answers instead.
+PROVIDERS = [('Groq', _ask_groq), ('local AI', _ask_local)]
 
 
 class Answer:

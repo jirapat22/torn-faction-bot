@@ -130,7 +130,7 @@ The cooldown is stamped only when a warning actually goes out, so an outage or a
 
 ### Asking the bot (`features/ask_ai.py`)
 
-Management `@mention`s the bot (any channel; everyone else is told they lack permission) with a plain-English question; an AI answers from the bot's own records. Local Ollama (`qwen3.5:9b` on the Mac, reached at `host.docker.internal:11434`) first, Groq (`GROQ_API_KEY`) as backup, the same arrangement as Pat's I.O. bot. Bots may read the content of messages that mention them without the privileged Message Content intent, so no portal change is needed.
+Management `@mention`s the bot (any channel; everyone else is told they lack permission) with a plain-English question; an AI answers from the bot's own records. Groq (`GROQ_API_KEY`, free plan: 1,000 requests/day, 8,000 tokens/min) first, about 1s; local Ollama (`qwen3.5:9b` on the Mac, `host.docker.internal:11434`, about 40s) as the backup when Groq fails or rate-limits. Bots may read the content of messages that mention them without the privileged Message Content intent, so no portal change is needed.
 
 The design rule is **the AI must not make up numbers**, because strikes get decided on these answers:
 
