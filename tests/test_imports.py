@@ -8307,6 +8307,34 @@ def test_ask_ai_knows_who_is_not_in_discord():
     assert 'unknown' in FactBook(d, roster=roster).faction_table().split('In the Discord server: ')[1][:10]
 
 
+def test_ask_ai_backup_ai_never_words_records():
+    """
+    The Mac's backup AI twice quoted a real number from the wrong row (the
+    wrong war; another member's "697 days since an OC"), which the number
+    check cannot catch. So its records answers are replaced by the records
+    themselves; chat from it is still fine.
+    """
+    import asyncio, json, os, tempfile, time
+    from features.ask_ai import FactBook, answer_question
+
+    d = tempfile.mkdtemp()
+    with open(os.path.join(d, 'oc_participation.json'), 'w') as f:
+        json.dump({'data': {'5': time.time() - 2 * 86400}}, f)
+    with open(os.path.join(d, 'activity_profile.json'), 'w') as f:
+        json.dump({'5': {'name': 'Bob'}}, f)
+
+    async def local(session, messages, fb, used):
+        used.append(('member_report', {'name': 'Bob'}, fb.run('member_report', {'name': 'Bob'})))
+        return 'Bob: 697 days since an OC.', list(messages)
+    ans = asyncio.run(answer_question(None, 'how is Bob?', FactBook(d, roster={}), providers=[('local AI', local)]))
+    assert ans.fallback and '697' not in ans.text and 'MEMBER: Bob' in ans.text and '(2 days ago)' in ans.text
+
+    async def chat(session, messages, fb, used):
+        return 'Yo! 😎', list(messages)
+    hi = asyncio.run(answer_question(None, 'hi', FactBook(d, roster={}), providers=[('local AI', chat)]))
+    assert hi.kind == 'chat' and hi.text == 'Yo! 😎'
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -8456,4 +8484,5 @@ if __name__ == '__main__':
     test_rules_sync_renders_posts_and_live_copy_wins()
     test_rules_posts_links_publish_and_takeover()
     test_ask_ai_knows_who_is_not_in_discord()
+    test_ask_ai_backup_ai_never_words_records()
     print('All smoke tests passed.')

@@ -956,20 +956,22 @@ async def _ask_groq(session, messages, facts, used):
     if not key:
         raise NotCapable('no Groq key set')
     msgs = list(messages)
-    waited = retried = False
-    for _ in range(MAX_ROUNDS + 2):   # +2: one wait for the rate limit, one retry after a 400
+    waits, waited_s, retried = 0, 0.0, False
+    for _ in range(MAX_ROUNDS + 3):   # +3: two waits for the rate limit, one retry after a 400
         try:
             async with session.post('https://api.groq.com/openai/v1/chat/completions',
                                     timeout=aiohttp.ClientTimeout(total=GROQ_TIMEOUT_S),
                                     headers={'Authorization': f'Bearer {key}'},
                                     json={'model': GROQ_MODEL, 'messages': msgs, 'tools': TOOL_SPECS,
                                           'tool_choice': 'auto', 'temperature': 0.2}) as r:
-                if r.status == 429 and not waited:
+                if r.status == 429 and waits < 2:
                     # Free plan: 8,000 tokens/min. A big question can hit it;
-                    # waiting a few seconds beats the ~40-90s local fallback.
+                    # waiting beats the local fallback. Two waits, because one
+                    # was measured not to be enough (refused again after 12s).
                     wait = _retry_after(r.headers)
-                    if wait is not None and wait <= GROQ_MAX_WAIT_S:
-                        waited = True
+                    if wait is not None and waited_s + wait <= GROQ_MAX_WAIT_S:
+                        waits += 1
+                        waited_s += wait
                         logger.info(f'ask_ai: Groq rate limit, waiting {wait:.0f}s')
                         await asyncio.sleep(wait + 0.5)
                         continue
@@ -1164,6 +1166,20 @@ def is_small_talk(question, answer, facts):
     return not names_in(f'{question}\n{answer}', facts)
 
 
+def raw_records_text(facts, limit=1500):
+    """The records themselves as the reply, cut at a line break to fit."""
+    intro = ("My fast brain is busy right now, so here are the records straight from the files "
+             '(no AI wording):\n')
+    body, size = [], 0
+    for line in facts.split('\n'):
+        if size + len(line) + 1 > limit:
+            body.append('... more in 📎 Show data.')
+            break
+        body.append(line)
+        size += len(line) + 1
+    return intro + '```\n' + '\n'.join(body) + '\n```'
+
+
 UNSURE_TEXT = ("Not sure what you're after, boss. Which member or war do you mean, "
                'and what do you want to know?\n\n' + CAPABILITIES)
 
@@ -1221,7 +1237,15 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
                               f'"how active is {named[0]}?"', pname, '', True, took(), kind='ask')
             return Answer(UNSURE_TEXT, pname, '', True, took(), kind='ask')
 
-        # 3. A real answer: every number must be in the records.
+        # 3. A records answer from the BACKUP AI is not used: twice measured
+        #    quoting a real number from the wrong row (the wrong war; another
+        #    member's 697 days since an OC), which the number check can't see.
+        #    The records go out as they are instead.
+        if pname == 'local AI':
+            return Answer(raw_records_text(_facts_text(used)), pname, _facts_text(used), True, took(),
+                          fallback=True)
+
+        # 4. A real answer: every number must be in the records.
         bad = unsupported_numbers(text, *sources())
         if bad:
             logger.warning(f'ask_ai: {pname} used numbers not in the data {bad}; asking for a rewrite')
@@ -1243,7 +1267,7 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
                     'Tap 📎 Show data for the records exactly as they are.', pname, _facts_text(used), True,
                     took(), fallback=True)
 
-        # 4. Part of the question couldn't be answered (e.g. one of two names
+        # 5. Part of the question couldn't be answered (e.g. one of two names
         #    was wrong): say so under the answer, in the bot's words.
         text = tidy_answer(text, facts.notices, question)
         return Answer(text, pname, _facts_text(used), True, took())
@@ -1397,11 +1421,13 @@ class AskAI:
         ref_id = getattr(message.reference, 'message_id', None)
         is_followup = ref_id in self.memory
         roles = bot_role_ids(message.role_mentions, self.bot.user.id)
-        # Questions are @mentions of the bot (or of its role), or replies to
-        # one of its answers. A reply pings by default, so most are mentions too.
+        # Only an @ApexPunk TYPED in the message counts (the bot or its role).
+        # Replying to one of its answers is not enough on its own: people reply
+        # to show an answer to someone else ("@alantheknife look"), and the
+        # bot used to butt in (Pat, 07/11/2026). Reply + @ApexPunk = follow-up.
         explicit = (f'<@{self.bot.user.id}>' in message.content or f'<@!{self.bot.user.id}>' in message.content
                     or bool(roles))
-        if not explicit and not is_followup:
+        if not explicit:
             return
 
         if not member_is_management(message.author):
@@ -1453,10 +1479,6 @@ class AskAI:
         logger.info(f'ask_ai: {message.author} asked {question[:80]!r} -> {ans.provider}, '
                     f'{ans.seconds:.0f}s, kind={ans.kind}, fallback={ans.fallback}')
         text = ans.text if len(ans.text) <= ANSWER_LIMIT else ans.text[:ANSWER_LIMIT - 3] + '...'
-        if ans.provider == 'local AI' and ans.kind == 'answer':
-            # The backup is a much smaller model: every number is still checked,
-            # but it can quote a real number from the wrong war or member.
-            text += '\n-# Answered by my backup brain on the Mac, double-check with 📎 Show data.'
         # The records go behind a button instead of under every answer: they
         # are long, and most of the time nobody reads them (Pat, 07/11/2026).
         view = ShowDataView(self) if ans.facts_text else None
