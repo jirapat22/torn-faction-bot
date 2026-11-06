@@ -7,7 +7,7 @@ A Discord bot for a Torn.com faction (Ascended Punks), running on Pat's home Mac
 ## Commands
 
 ```bash
-<py> -m pytest -q tests/          # full suite (147 tests), the one to trust
+<py> -m pytest -q tests/          # full suite (148 tests), the one to trust
 <py> -m pytest -q tests/test_imports.py::test_flytrack_logic   # single test
 <py> tests/test_imports.py        # runs test_imports.py ONLY, see note below
 <py> bot.py                       # run locally (needs .env)
@@ -140,6 +140,8 @@ The design rule is **the AI must not make up numbers**, because strikes get deci
 - The facts used are attached under every answer so a manager can check them.
 - **Unsure means ask, never guess.** Names match only exactly, by ID, or by a piece fitting one member; typos and multi-matches return "did you mean...?" (`FactBook.resolve`). If no tool found anything, the bot's own question replaces whatever the AI wrote. `ask_back` / `cannot_answer` tools let the AI stop and ask. `tidy_answer()` strips AI sentences about unfound names and adds "I don't keep battle stats" etc. (`NOT_RECORDED`): asked for battle stats, the model once answered with war hits.
 - Both `@ApexPunk` choices work: the bot user and its same-named managed role (`bot_role_ids`). A message the bot is not allowed to read (reply with ping off) arrives blank and gets a hint instead of silence.
+
+**Personality and chat.** `PERSONALITY` in the prompt (Pat's choices, 07/11/2026): punk, cheeky, loyal, mild swearing, Torn slang and emojis in chat, one neutral flavour line at most in records answers, never judges a member. Plain chat (no tools) is only posted when `is_small_talk()` passes: no stats word in the question, no member named on either side, and no sentence putting a number next to a stats word (otherwise "we made 500 hits" would pass as chat). "Is X lazy?" gets an in-character refusal plus an offer of the records. Rules questions go through the `faction_rules` tool over `features/faction_rules.md`, a copy of the November rulebook, because the bot cannot read #faction-edicts (no Message Content intent): **update that file whenever the rules change.** Rule numbers were taken out of the prompt on purpose: anything in the prompt counts as an allowed number in every answer.
 
 Wars 40834 and 46089 were archived with no members; `scripts/backfill_empty_wars.py` restored hits made from the v2 war report and marks them `incoming_unknown` (hits taken/hosps left out, too old for the attacks log; `_hosp()` shows them as unknown). The 📎 data is behind a private button (`ShowDataView`, one fixed custom_id).
 

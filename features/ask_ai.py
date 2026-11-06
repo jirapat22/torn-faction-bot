@@ -17,12 +17,16 @@ How that promise is kept, in three layers:
    returned (plus the question and the rules in the prompt). One number the
    facts don't contain and the answer is rejected: the AI gets one chance to
    rewrite it, and if it fails again the bot posts the raw facts instead.
-3. The facts it used are attached under every answer, so a manager can
-   check any line in seconds.
+3. The facts it used sit behind a "📎 Show data" button on every answer,
+   so a manager can check any line in seconds.
 
 Layer 2 catches invented numbers; it cannot catch a REAL number put in the
-wrong place (e.g. war A's hits quoted for war B). That is what layer 3 and
-the prompt's "quote numbers exactly as given" are for.
+wrong place (e.g. war A's hits quoted for war B). That is what layer 3, the
+ready-made rankings and the prompt's "quote numbers exactly" are for.
+
+It also chats (greetings, jokes) in character as ApexPunk, and quotes the
+faction rules from features/faction_rules.md. Chat is only let through when
+it names no member and puts no number next to a stats word.
 
 Who answers: Groq first (about 1 second), the local AI on the Mac (Ollama,
 ~40 seconds) as the backup when Groq is down or over its free limits.
@@ -50,7 +54,7 @@ OLLAMA_URL = os.getenv('OLLAMA_URL', 'http://host.docker.internal:11434')
 LOCAL_MODEL = os.getenv('OLLAMA_MODEL', 'qwen3.5:9b')
 GROQ_MODEL = os.getenv('GROQ_MODEL', 'openai/gpt-oss-120b')
 MAX_ROUNDS = 5          # tool calls per question, so a confused model can't loop forever
-LOCAL_BUDGET_S = 120    # after this the local AI has had its chance; Groq takes over
+LOCAL_BUDGET_S = 120    # the local AI (the backup) gets this long before giving up
 GROQ_TIMEOUT_S = 60
 FACTS_EMBED_LIMIT = 3900   # Discord embed descriptions max out at 4096
 ANSWER_LIMIT = 1900        # Discord messages max out at 2000
@@ -156,6 +160,12 @@ def _hosp(war, member, field):
     if war.get('incoming_unknown') and field not in member:
         return 'unknown'
     return member.get(field, 0)
+
+
+def _stype(strike):
+    """'Farmed while offline, not turtled' rather than the internal 'war_farmed'."""
+    from features.strikes import STRIKE_TYPES
+    return STRIKE_TYPES.get(strike.get('type'), strike.get('type') or 'unknown')
 
 
 def _num(v):
@@ -388,6 +398,11 @@ class FactBook:
                                                     if last else 'none on record.'))
         return out
 
+    def _latest_war(self):
+        """The newest war by date, not by position in the file (rebuilt wars
+        get appended out of order)."""
+        return max(self.wars, key=lambda w: w.get('timestamp', 0)) if self.wars else None
+
     def _member_wars(self, tid):
         return [w for w in self.wars if tid in (w.get('members') or {})]
 
@@ -465,13 +480,13 @@ class FactBook:
         missing = [w for w in with_data if w not in wars]
         if missing:
             gap += (' Not in the member list of: ' + ', '.join(f'War {w.get("war_id")}' for w in missing)
-                    + ' (possibly not in the faction yet).')
+                    + ' (possibly not in the faction at the time).')
         if wars or gap:
             lines.append(f'WARS: the bot keeps the last {len(self.wars)} wars and has member stats for '
                          f'{len(with_data)} of them; this member appears in {len(wars)}.{gap}')
         if wars:
             made = taken = outside = 0
-            unknown_taken = False
+            unknown_taken = unknown_outside = False
             for w in wars:
                 m = w['members'][tid]
                 result = w.get('result', 'unknown')
@@ -488,10 +503,14 @@ class FactBook:
                     unknown_taken = True
                 else:
                     taken += m['defends']
-                outside += m.get('outside_incoming') or 0
+                if m.get('outside_incoming') is None:
+                    unknown_outside = True
+                else:
+                    outside += m['outside_incoming']
             lines.append(f'War totals: hits made {made}, hits taken from the enemy '
                          + (f'at least {taken} (some wars unknown)' if unknown_taken else str(taken))
-                         + f', hits taken from outside {outside}.')
+                         + ', hits taken from outside '
+                         + (f'at least {outside} (some wars unknown).' if unknown_outside else f'{outside}.'))
         else:
             lines.append('WARS: not in any of the wars the bot has stats for.')
 
@@ -512,7 +531,7 @@ class FactBook:
         history = [s for s in self._strikes_all() if str(s.get('torn_id')) == str(tid)]
         lines.append(f'Strikes active now: {len(active)}. Strikes ever recorded: {len(history)}.')
         for s in history:
-            lines.append(f'- {s.get("type")} strike on {_date(s.get("issued_at", 0))} ({s.get("status", "active")}): '
+            lines.append(f'- {_stype(s)} strike on {_date(s.get("issued_at", 0))} ({s.get("status", "active")}): '
                          f'{(s.get("reason") or "").strip()[:160]}')
         return '\n'.join(lines)
 
@@ -522,7 +541,7 @@ class FactBook:
             return self._notice('Torn isn\'t answering right now, so I can\'t see the current member list. '
                                 'Try again in a few minutes.')
         self.found_any = True
-        last_war = self.wars[-1] if self.wars else None
+        last_war = self._latest_war()
         rows = []
         for tid, m in self.roster.items():
             tid = str(tid)
@@ -601,7 +620,7 @@ class FactBook:
         q = str(war or 'latest').strip().lower()
         pick = None
         if q in ('latest', 'last', ''):
-            pick = self.wars[-1]
+            pick = self._latest_war()
         else:
             for w in reversed(self.wars):
                 if q == str(w.get('war_id')) or q in str(w.get('enemy_name', '')).lower():
@@ -649,7 +668,7 @@ class FactBook:
         active = self._strikes_active()
         out = [f'ACTIVE STRIKES: {len(active)} (they clear {STRIKE_EXPIRY_DAYS} days after a member\'s latest strike).']
         for s in active:
-            out.append(f'- {s.get("torn_name")} [{s.get("torn_id")}]: {s.get("type")} on {_date(s.get("issued_at", 0))}: '
+            out.append(f'- {s.get("torn_name")} [{s.get("torn_id")}]: {_stype(s)} on {_date(s.get("issued_at", 0))}: '
                        f'{(s.get("reason") or "").strip()[:160]}')
         pending = (self.sm.pending if self.sm is not None else (self._strike_file or {}).get('pending', {})) or {}
         out.append(f'CANDIDATES waiting for a management decision: {len(pending)}.')
@@ -790,7 +809,8 @@ PERSONALITY = (
     'loyal to the crew. You are cheeky, a bit rebellious and sarcastic, but always on the faction\'s side '
     'and genuinely helpful. Mild swearing is fine (damn, hell, crap, bloody); never the f-word, slurs, '
     'harassment, or anything sexual. You can roast the person talking to you lightly if they ask for it, '
-    'but you never mock or judge a real member by name.\n'
+    'but you never mock or judge a real member by name. If asked to judge or insult a member ("is X '
+    'lazy?"), do not; call member_report and give their records neutrally instead.\n'
     'CHAT (casual messages, greetings, jokes, random topics, nothing about members/wars/chains/OCs/strikes): '
     'reply in character in one to three sentences, Torn slang welcome (Xanax, FHC, hosp, mug, bonus hit, '
     'turtle up, stacking, happy jump), a couple of emojis is fine, no tools needed. Never mention or '
@@ -846,7 +866,7 @@ def system_prompt():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# The AI loop (local first, Groq as backup)
+# The AI loop (Groq first, the Mac's local AI as backup)
 # ─────────────────────────────────────────────────────────────────────────────
 
 class NotCapable(Exception):
@@ -867,9 +887,11 @@ async def _ask_local(session, messages, facts, used):
                     'options': {'num_ctx': 16384, 'temperature': 0.2}}) as r:
                 r.raise_for_status()
                 data = await r.json()
+            msg = data.get('message') or {}
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             raise NotCapable(f'local AI error: {type(e).__name__}')
-        msg = data.get('message', {})
+        except (AttributeError, TypeError, ValueError) as e:
+            raise NotCapable(f'local AI sent an odd reply ({type(e).__name__})')
         calls = msg.get('tool_calls') or []
         if not calls:
             text = (msg.get('content') or '').strip()
@@ -878,7 +900,8 @@ async def _ask_local(session, messages, facts, used):
             return text, msgs
         msgs.append({'role': 'assistant', 'content': msg.get('content', ''), 'tool_calls': calls})
         for c in calls:
-            name, args = c['function']['name'], c['function'].get('arguments') or {}
+            fn = c.get('function') or {}
+            name, args = fn.get('name', ''), fn.get('arguments') or {}
             if isinstance(args, str):
                 try:
                     args = json.loads(args)
@@ -897,8 +920,8 @@ async def _ask_groq(session, messages, facts, used):
     if not key:
         raise NotCapable('no Groq key set')
     msgs = list(messages)
-    waited = False
-    for _ in range(MAX_ROUNDS + 1):   # +1: one round may be spent waiting out the rate limit
+    waited = retried = False
+    for _ in range(MAX_ROUNDS + 2):   # +2: one wait for the rate limit, one retry after a 400
         try:
             async with session.post('https://api.groq.com/openai/v1/chat/completions',
                                     timeout=aiohttp.ClientTimeout(total=GROQ_TIMEOUT_S),
@@ -914,11 +937,20 @@ async def _ask_groq(session, messages, facts, used):
                         logger.info(f'ask_ai: Groq rate limit, waiting {wait:.0f}s')
                         await asyncio.sleep(wait + 0.5)
                         continue
+                if r.status == 400 and not retried:
+                    # gpt-oss sometimes writes a malformed tool call and Groq
+                    # answers 400 "tool_use_failed". A second try usually works,
+                    # and is far quicker than the local fallback.
+                    retried = True
+                    logger.info('ask_ai: Groq 400, retrying once')
+                    continue
                 r.raise_for_status()
                 data = await r.json()
+            msg = data['choices'][0]['message']
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             raise NotCapable(f'Groq error: {type(e).__name__} {getattr(e, "status", "")}'.strip())
-        msg = data['choices'][0]['message']
+        except (KeyError, IndexError, TypeError, ValueError) as e:
+            raise NotCapable(f'Groq sent an odd reply ({type(e).__name__})')
         calls = msg.get('tool_calls') or []
         if not calls:
             text = (msg.get('content') or '').strip()
@@ -927,14 +959,17 @@ async def _ask_groq(session, messages, facts, used):
             return text, msgs
         msgs.append({'role': 'assistant', 'content': msg.get('content') or '', 'tool_calls': calls})
         for c in calls:
-            name = c['function']['name']
+            fn = c.get('function') or {}
+            name = fn.get('name', '')
             try:
-                args = json.loads(c['function'].get('arguments') or '{}')
-            except ValueError:
+                args = json.loads(fn.get('arguments') or '{}')
+            except (ValueError, TypeError):
+                args = {}
+            if not isinstance(args, dict):
                 args = {}
             result = facts.run(name, args)
             used.append((name, args, result))
-            msgs.append({'role': 'tool', 'tool_call_id': c['id'], 'content': result})
+            msgs.append({'role': 'tool', 'tool_call_id': c.get('id', ''), 'content': result})
         if facts.final:
             return facts.final, msgs
     raise NotCapable('Groq kept calling tools without answering')
@@ -1046,6 +1081,13 @@ DATA_WORDS = re.compile(
     r'farmed|bleed(ing)?|respect|leave notices?|turtl\w*|hosp\w*|roster)\b', re.I)
 
 
+def names_in(text, facts):
+    """Known member names that appear as whole words in `text`."""
+    low = (text or '').lower()
+    return [n for n in sorted(set(facts._known_names().values()))
+            if len(n) >= 3 and re.search(rf'(?<![\w]){re.escape(n.lower())}(?![\w])', low)]
+
+
 def is_small_talk(question, answer, facts):
     """
     True when a message and its AI reply are plain chat ("hi", "tell me a
@@ -1055,15 +1097,16 @@ def is_small_talk(question, answer, facts):
     """
     if DATA_WORDS.search(question or ''):
         return False
-    both = f'{question}\n{answer}'.lower()
-    for name in facts._known_names().values():
-        if len(name) >= 3 and re.search(rf'(?<![\w]){re.escape(name.lower())}(?![\w])', both):
+    # "We smashed it, 500 hits last war!" is a made-up stat, not chat: no
+    # sentence may put a number next to a stats word. ("bonus hit" alone is fine.)
+    for sentence in re.split(r'(?<=[.!?\n])\s*', answer or ''):
+        if numbers_in(sentence) and DATA_WORDS.search(sentence):
             return False
-    return True
+    return not names_in(f'{question}\n{answer}', facts)
 
 
-UNSURE_TEXT = ("I'm not sure what to look up for that. Which member or war do you mean, "
-               'and what would you like to know?\n\n' + CAPABILITIES)
+UNSURE_TEXT = ("Not sure what you're after, boss. Which member or war do you mean, "
+               'and what do you want to know?\n\n' + CAPABILITIES)
 
 
 async def answer_question(session, question, facts, history=None, earlier_facts='', providers=None):
@@ -1110,6 +1153,13 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
             # ...unless it was just chit-chat, which needs no records at all.
             if is_small_talk(question, text, facts):
                 return Answer(tidy_answer(text, [], ''), pname, '', True, took(), kind='chat')
+            # A member was named but nothing looked up: usually "is X lazy?"
+            # style judging. Don't pass on whatever the AI said about them.
+            named = names_in(question, facts)
+            if named:
+                who = ', '.join(f'**{n}**' for n in named[:3])
+                return Answer(f"I don't trash-talk the crew 😤 but I can pull {who}'s records. Try "
+                              f'"how active is {named[0]}?"', pname, '', True, took(), kind='ask')
             return Answer(UNSURE_TEXT, pname, '', True, took(), kind='ask')
 
         # 3. A real answer: every number must be in the records.
@@ -1130,15 +1180,17 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
             if bad or facts.final:
                 logger.warning(f'ask_ai: {pname} rewrite still had {bad}; showing raw facts instead')
                 return Answer(
-                    "I couldn't word that without risking a wrong number, so here are the bot's records "
-                    'as they are (see below).', pname, _facts_text(used), True, took(), fallback=True)
+                    "I couldn't word that without risking a wrong number, so I'm not going to. "
+                    'Tap 📎 Show data for the records exactly as they are.', pname, _facts_text(used), True,
+                    took(), fallback=True)
 
         # 4. Part of the question couldn't be answered (e.g. one of two names
         #    was wrong): say so under the answer, in the bot's words.
         text = tidy_answer(text, facts.notices, question)
         return Answer(text, pname, _facts_text(used), True, took())
-    return Answer("Sorry, I couldn't answer that right now (" + '; '.join(problems) + ').',
-                  'none', '', True, time.monotonic() - t0)
+    logger.warning(f'ask_ai: no AI could answer: {"; ".join(problems)}')
+    return Answer("Both my brains are offline right now 🔌 (the cloud AI and the one on the Mac). "
+                  'Give it a few minutes and try again.', 'none', '', True, time.monotonic() - t0)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1178,13 +1230,13 @@ def describe_mentions(content, bot_id, mentions, facts, bot_roles=()):
 
 
 HELP_TEXT = (
-    'Ask me about members in plain English, for example:\n'
-    '- `@bot how active was BunnyBull?`\n'
-    '- `@bot who has been offline longest?`\n'
-    '- `@bot who got farmed most last war?`\n'
-    '- `@bot what strikes are open?`\n'
-    'Reply to my answer to ask a follow-up. Every number I give is checked against the bot\'s records, '
-    'and if I\'m not sure who or what you mean, I\'ll ask.\n\n' + CAPABILITIES
+    "Yo, ApexPunk here 🤘 Ask me stuff in plain English, like:\n"
+    '- `@ApexPunk how active was BunnyBull?`\n'
+    '- `@ApexPunk who has been offline longest?`\n'
+    '- `@ApexPunk who got farmed most last war?`\n'
+    '- `@ApexPunk what\'s the OC rule?`\n'
+    'Reply to my answer to ask a follow-up, or just chat. Every number I give is checked against the '
+    'records, and if I\'m not sure who you mean, I\'ll ask.\n\n' + CAPABILITIES
 )
 
 
@@ -1315,6 +1367,18 @@ class AskAI:
         if is_followup:
             history, earlier = self.memory[ref_id]
 
+        try:
+            await self._answer(message, history, earlier, roles)
+        except Exception:
+            # Never leave someone staring at "typing..." that just stops.
+            logger.exception('ask_ai: answering failed')
+            try:
+                await message.reply('My circuits sparked 🔧 something broke on my end. Try again in a bit.',
+                                    mention_author=False)
+            except discord.HTTPException:
+                pass
+
+    async def _answer(self, message, history, earlier, roles):
         async with message.channel.typing():
             async with self.lock:
                 roster = await torn_api.fetch_faction_members()   # None = Torn unreachable (handled)
@@ -1329,8 +1393,6 @@ class AskAI:
         logger.info(f'ask_ai: {message.author} asked {question[:80]!r} -> {ans.provider}, '
                     f'{ans.seconds:.0f}s, kind={ans.kind}, fallback={ans.fallback}')
         text = ans.text if len(ans.text) <= ANSWER_LIMIT else ans.text[:ANSWER_LIMIT - 3] + '...'
-        if ans.fallback:
-            text += '\n-# Tap 📎 Show data for the records.'
         # The records go behind a button instead of under every answer: they
         # are long, and most of the time nobody reads them (Pat, 07/11/2026).
         view = ShowDataView(self) if ans.facts_text else None

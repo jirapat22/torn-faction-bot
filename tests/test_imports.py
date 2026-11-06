@@ -7908,6 +7908,9 @@ def test_ask_ai_wrong_name_gets_a_question_not_an_ai_guess():
     gossip = asyncio.run(answer_question(None, 'tell me something fun', FactBook(d, roster={}), providers=[
         ('fake', provider([], 'BunnyBull never sleeps!'))]))
     assert gossip.kind == 'ask' and 'BunnyBull' not in gossip.text
+    judge = asyncio.run(answer_question(None, 'is BunnyBull a lazy idiot?', FactBook(d, roster={}), providers=[
+        ('fake', provider([], 'Yeah, total slacker.'))]))
+    assert judge.kind == 'ask' and 'trash-talk' in judge.text and 'slacker' not in judge.text
     data_q = asyncio.run(answer_question(None, 'who made the most hits?', FactBook(d, roster={}), providers=[
         ('fake', provider([], 'Probably the leader.'))]))
     assert data_q.kind == 'ask'
@@ -8080,6 +8083,65 @@ def test_ask_ai_quotes_rules_from_the_rulebook_copy():
     assert '60 days' not in prompt and 'Chain minimum 10' not in prompt
 
 
+def test_ask_ai_audit_fixes_chat_numbers_war_order_and_groq_hiccups():
+    """
+    Re-audit (07/11/2026) of the @ApexPunk chat:
+    - chat that slips in a stat ("500 hits") is not chat, so it is blocked;
+    - "outside" war totals say "at least" when some wars are unknown;
+    - "last war" is the newest by date, not the last line of the file;
+    - Groq's occasional 400 is retried once, and an odd reply moves on to
+      the next AI instead of crashing (which left people with silence).
+    """
+    import asyncio, json, os, tempfile, time
+    import features.ask_ai as a
+
+    d = tempfile.mkdtemp()
+    now = time.time()
+    with open(os.path.join(d, 'war_member_stats.json'), 'w') as f:
+        json.dump({'wars': [
+            {'war_id': '2', 'timestamp': now - 5 * 86400, 'enemy_name': 'Newest', 'result': 'defeat',
+             'members': {'5': {'name': 'Bob', 'attacks': 3, 'defends': 1, 'outside_incoming': 2}}},
+            {'war_id': '1', 'timestamp': now - 90 * 86400, 'enemy_name': 'Old', 'incoming_unknown': True,
+             'members': {'5': {'name': 'Bob', 'attacks': 7, 'defends': None, 'outside_incoming': None}}}]}, f)
+    fb = a.FactBook(d, roster={'5': {'name': 'Bob', 'level': 3, 'last_action': {'timestamp': now}}}, now=now)
+
+    assert a.is_small_talk('how did we do lately?', 'We smashed it, 500 hits!', fb) is False
+    assert a.is_small_talk('hi', 'Yo! Ready for a bonus hit? 😎', fb) is True
+    report = fb.member_report('Bob')
+    assert 'hits taken from outside at least 2 (some wars unknown)' in report, report
+    assert 'friendly hosps given unknown' in report
+    assert fb.war_report('latest').startswith('WAR 2 vs Newest')
+    assert '"Last war" = war 2 vs Newest' in fb.faction_table()
+
+    class Resp:
+        def __init__(self, status, body):
+            self.status, self.body, self.headers = status, body, {}
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *exc):
+            return False
+        def raise_for_status(self):
+            if self.status >= 400:
+                raise a.aiohttp.ClientResponseError(None, (), status=self.status)
+        async def json(self):
+            return self.body
+    class Session:
+        def __init__(self, replies):
+            self.replies = list(replies)
+        def post(self, *args, **kwargs):
+            return self.replies.pop(0)
+
+    os.environ.setdefault('GROQ_API_KEY', 'test-not-a-real-key')
+    ok = {'choices': [{'message': {'content': 'Yo!'}}]}
+    text, _ = asyncio.run(a._ask_groq(Session([Resp(400, {}), Resp(200, ok)]), [], fb, []))
+    assert text == 'Yo!'
+    try:
+        asyncio.run(a._ask_groq(Session([Resp(200, {'oops': True})]), [], fb, []))
+        assert False, 'an odd reply must raise NotCapable'
+    except a.NotCapable:
+        pass
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -8225,4 +8287,5 @@ if __name__ == '__main__':
     test_ask_ai_faction_rankings_and_record_gaps()
     test_chain_log_slims_reports_and_summarises_members()
     test_ask_ai_quotes_rules_from_the_rulebook_copy()
+    test_ask_ai_audit_fixes_chat_numbers_war_order_and_groq_hiccups()
     print('All smoke tests passed.')
