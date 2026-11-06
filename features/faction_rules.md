@@ -187,8 +187,7 @@ We'd rather warn than kick. Strikes keep it fair for everyone.
 
 ## Recruiters
 Recruiters scout and invite players, post recruitment ads, onboard new members and keep an eye on trials. Want to help? Let management know.
-- Level **15+** only, and active in the last 24 hours.
--# The leader may review this if things change.
+- We welcome any level, as long as they've been active in the last 24 hours.
 
 ## Leaving
 - Let management know before you go.
