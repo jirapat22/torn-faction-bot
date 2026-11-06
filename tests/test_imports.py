@@ -8044,6 +8044,42 @@ def test_chain_log_slims_reports_and_summarises_members():
     assert all(len(p) <= 3900 for p in parts) and len(parts) <= 5
 
 
+def test_ask_ai_quotes_rules_from_the_rulebook_copy():
+    """
+    "@ApexPunk what's the OC rule?" must quote the real rulebook, not the
+    AI's memory: the rules tool returns the matching section word for word
+    (so its numbers pass the number check), and the bot's copy must contain
+    the November rules. No match lists the sections rather than guessing.
+    """
+    import asyncio, tempfile
+    from features.ask_ai import FactBook, answer_question, load_rule_sections, system_prompt
+
+    sections = load_rule_sections()
+    assert len(sections) > 20
+    text = '\n'.join(b for _, b in sections)
+    assert '3 days offline with no notice = 1 strike' in text           # November change
+    assert 'Your OC time is excused' in text and '2 wars in a row' in text
+    assert '<#' not in text, 'channel links must be readable names, not Discord IDs'
+
+    fb = FactBook(tempfile.mkdtemp(), roster={})
+    oc = fb.faction_rules('OC')
+    assert oc.startswith('RULEBOOK, Organized Crimes') and '24 hours' in oc and fb.found_any
+    assert 'none matched' in FactBook(tempfile.mkdtemp(), roster={}).faction_rules('pizza')
+
+    async def ask(session, messages, f, used):
+        used.append(('faction_rules', {'topic': 'chain'}, f.run('faction_rules', {'topic': 'chain minimum'})))
+        return 'Minimum 10 hits per chain, 5 if you are under level 15.', list(messages)
+    ans = asyncio.run(answer_question(None, 'whats the chain minimum?', FactBook(tempfile.mkdtemp(), roster={}),
+                                      providers=[('fake', ask)]))
+    assert ans.kind == 'answer' and '10 hits' in ans.text
+
+    # The personality is part of every prompt; the old inline rule numbers
+    # are not (they were "allowed numbers" in every answer).
+    prompt = system_prompt()
+    assert 'You are ApexPunk' in prompt and 'never mock or judge a real member' in prompt
+    assert '60 days' not in prompt and 'Chain minimum 10' not in prompt
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -8188,4 +8224,5 @@ if __name__ == '__main__':
     test_ask_ai_reads_member_and_bot_role_mentions()
     test_ask_ai_faction_rankings_and_record_gaps()
     test_chain_log_slims_reports_and_summarises_members()
+    test_ask_ai_quotes_rules_from_the_rulebook_copy()
     print('All smoke tests passed.')
