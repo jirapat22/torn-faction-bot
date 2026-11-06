@@ -29,6 +29,7 @@ backup if it is slow or down, the same arrangement I.O. uses.
 """
 
 import asyncio
+import difflib
 import json
 import logging
 import os
@@ -180,13 +181,31 @@ class FactBook:
         self.oc = _load(d('oc_participation.json'), {}).get('data', {})
         self.chains = _load(d('chain_session.json'), {}).get('chains', [])
         self.left = _load(d('left_faction.json'), {})
-        self.linked = set(str(v) for v in _load(d('discord_to_torn.json'), {}).values())
+        links = {str(k): str(v) for k, v in _load(d('discord_to_torn.json'), {}).items()}
+        for k, v in _load(d('verified_users.json'), {}).items():
+            if isinstance(v, dict) and v.get('torn_id'):
+                links.setdefault(str(k), str(v['torn_id']))
+        self.discord_links = links          # discord id -> torn id
+        self.linked = set(links.values())
         self.bleed = _load(d('bleed_streaks.json'), {})
         # None = the live roster could not be fetched. Then "in the faction?" is
         # unknown, and we say so instead of guessing from old files.
         self.roster = roster
         self.sm = strike_manager
         self._strike_file = _load(d('strikes.json'), {}) if strike_manager is None else None
+        # What the tools could NOT answer, in words ready to post ("Which
+        # member do you mean: X or Y?"). If nothing was found at all, these are
+        # posted INSTEAD of the AI's answer, so a wrong name always gets a
+        # question back and never a guess dressed up as an answer.
+        self.notices = []
+        self.found_any = False     # True once any tool returned real data
+        self.final = None          # set by ask_back / cannot_answer: ends the AI loop
+
+    def _notice(self, text):
+        if text not in self.notices:
+            self.notices.append(text)
+        # The bot posts the notice itself, so the AI is told not to repeat it.
+        return 'NO DATA: ' + text + ' (The bot tells the user this itself. Do not repeat it.)'
 
     # ---------- name lookup ----------
 
@@ -207,20 +226,41 @@ class FactBook:
         return {k: v for k, v in names.items() if v}
 
     def resolve(self, query):
-        """(torn_id, name, other_matches). Exact name or ID first, then partial."""
-        q = str(query or '').strip().lower().lstrip('@')
-        m = re.search(r'\[(\d+)\]|^(\d{3,})$', q)
+        """
+        (torn_id, name, suggestions). Only three things count as a match: the
+        exact name (any case), a Torn ID, or a piece of a name that fits
+        exactly ONE member ("bunny" -> BunnyBull, at least 3 letters). Anything
+        else returns no match plus suggestions, so the bot asks "did you
+        mean...?" instead of guessing who a typo meant.
+        """
+        q = str(query or '').strip().lower().lstrip('@').strip()
         names = self._known_names()
+        if not q:
+            return None, None, []
+        m = re.search(r'\[(\d+)\]|^(\d{3,})$', q)
         if m:
             tid = m.group(1) or m.group(2)
-            return (tid, names.get(tid, tid), []) if tid in names else (None, None, [])
+            return (tid, names[tid], []) if tid in names else (None, None, [])
         exact = [t for t, n in names.items() if n.lower() == q]
         if exact:
             return exact[0], names[exact[0]], []
-        partial = [t for t, n in names.items() if q and q in n.lower()]
-        if len(partial) == 1:
+        partial = [t for t, n in names.items() if q in n.lower()]
+        if len(partial) == 1 and len(q) >= 3:
             return partial[0], names[partial[0]], []
-        return None, None, [names[t] for t in partial][:10]
+        if len(partial) > 1:
+            return None, None, sorted(names[t] for t in partial)[:8]
+        # Typos ("bunybull"): close spellings become suggestions, never an answer.
+        lower = {n.lower(): n for n in names.values()}
+        close = difflib.get_close_matches(q, list(lower), n=5, cutoff=0.6)
+        return None, None, [lower[c] for c in close]
+
+    def describe_discord_user(self, discord_id, display_name):
+        """How an @member in a question is shown to the AI: their Torn name
+        and ID when linked, otherwise a plain statement that it isn't."""
+        tid = self.discord_links.get(str(discord_id))
+        if tid:
+            return f'{self._known_names().get(tid, "Torn ID")} [{tid}]'
+        return f'{display_name} (Discord user not linked to a Torn account)'
 
     # ---------- strikes ----------
 
@@ -277,10 +317,19 @@ class FactBook:
     def member_report(self, name):
         tid, real, others = self.resolve(name)
         if not tid:
+            if not str(name or '').strip():
+                return self._notice('Which member do you mean? Give me their Torn name or ID.')
             if others:
-                return f'No exact match for "{name}". Did you mean: {", ".join(others)}?'
-            return f'No member called "{name}" in the bot\'s records.'
+                return self._notice(f'I couldn\'t find anyone called **{name}**. Did you mean '
+                                    + ', '.join(f'**{o}**' for o in others[:-1])
+                                    + (' or ' if len(others) > 1 else '') + f'**{others[-1]}**? '
+                                    'Reply with the right name.')
+            return self._notice(f'I have no records of anyone called **{name}**. Check the spelling, '
+                                'or give me their Torn ID.')
+        self.found_any = True
         lines = [f'MEMBER: {real} [{tid}]']
+        if str(name).strip().lower() not in (real.lower(), tid):
+            lines.append(f'(Matched "{name}" to {real}.)')
 
         # In the faction now?
         if self.roster is None:
@@ -385,7 +434,9 @@ class FactBook:
     def faction_table(self, sort_by='name'):
         """One line per current member, for 'who...' questions across the faction."""
         if self.roster is None:
-            return 'The live roster could not be fetched from Torn just now, so the faction list is unavailable.'
+            return self._notice('Torn isn\'t answering right now, so I can\'t see the current member list. '
+                                'Try again in a few minutes.')
+        self.found_any = True
         last_war = self.wars[-1] if self.wars else None
         rows = []
         for tid, m in self.roster.items():
@@ -434,7 +485,7 @@ class FactBook:
     def war_report(self, war='latest'):
         """One war's per-member stats. `war` = 'latest', a war ID or part of the enemy's name."""
         if not self.wars:
-            return 'The bot has no war stats saved.'
+            return self._notice('I have no war stats saved yet.')
         q = str(war or 'latest').strip().lower()
         pick = None
         if q in ('latest', 'last', ''):
@@ -447,7 +498,9 @@ class FactBook:
         listing = '; '.join(f'{w.get("war_id")} vs {w.get("enemy_name")} ({_date(w.get("timestamp", 0))})'
                             for w in self.wars)
         if not pick:
-            return f'No war matching "{war}". Wars on record: {listing}.'
+            return self._notice(f'I couldn\'t find a war matching **{war}**. The wars I have stats for are: '
+                                f'{listing}. Which one do you mean?')
+        self.found_any = True
         w = pick
         out = [f'WAR {w.get("war_id")} vs {w.get("enemy_name")} ended {_date(w.get("timestamp", 0))}: '
                f'{w.get("result", "unknown")}, our score {w.get("our_score")}, enemy score {w.get("enemy_score")}.'
@@ -480,6 +533,7 @@ class FactBook:
         return '\n'.join(out)
 
     def strikes_overview(self):
+        self.found_any = True
         active = self._strikes_active()
         out = [f'ACTIVE STRIKES: {len(active)} (they clear {STRIKE_EXPIRY_DAYS} days after a member\'s latest strike).']
         for s in active:
@@ -503,6 +557,14 @@ class FactBook:
                 return self.war_report(args.get('war', 'latest'))
             if name == 'strikes_overview':
                 return self.strikes_overview()
+            if name == 'ask_back':
+                q = str(args.get('question') or '').strip()
+                self.final = q or 'Could you say a bit more about what you want to know?'
+                return 'Question sent to the user.'
+            if name == 'cannot_answer':
+                reason = str(args.get('reason') or '').strip()
+                self.final = ((reason + '\n\n') if reason else '') + CAPABILITIES
+                return 'Told the user.'
             return f'Unknown tool "{name}".'
         except Exception as e:  # a bad record must not crash the answer
             logger.exception(f'ask_ai: tool {name} failed')
@@ -534,7 +596,36 @@ TOOL_SPECS = [
         'name': 'strikes_overview',
         'description': 'All active strikes and the strike candidates waiting for management.',
         'parameters': {'type': 'object', 'properties': {}, 'required': []}}},
+    {'type': 'function', 'function': {
+        'name': 'ask_back',
+        'description': 'Ask the user a short question instead of answering, when the question is unclear: '
+                       'which member, which war, or what they want to know. Use this rather than guessing.',
+        'parameters': {'type': 'object', 'properties': {
+            'question': {'type': 'string', 'description': 'The question to ask the user'}}, 'required': ['question']}}},
+    {'type': 'function', 'function': {
+        'name': 'cannot_answer',
+        'description': 'Tell the user the bot keeps no records that could answer this (e.g. battle stats, '
+                       'money, items, Xanax use, chat messages). The list of what it CAN answer is added for you.',
+        'parameters': {'type': 'object', 'properties': {
+            'reason': {'type': 'string', 'description': 'One short sentence: what is not recorded'}},
+            'required': ['reason']}}},
 ]
+
+# What the bot can and cannot answer. Shown to the AI in the prompt, and to the
+# user whenever a question falls outside it.
+CAPABILITIES = (
+    'I can answer from the bot\'s records about:\n'
+    '- a member\'s activity: when they were last on, online pattern, days online\n'
+    '- wars: hits made, hits taken (from the enemy and from outside), friendly hosps, for the last 10 wars\n'
+    '- chains: hits in the latest chain session\n'
+    '- OCs: when someone was last in one\n'
+    '- strikes: active strikes, history, and candidates waiting for a decision\n'
+    '- who has left the faction (kept for a year)\n'
+    'I don\'t have battle stats, money, items, Xanax use, or chat messages.'
+)
+
+# Short tool results that mean "nothing here" rather than data.
+_CONTROL_RESULTS = {'Question sent to the user.', 'Told the user.'}
 
 
 def system_prompt():
@@ -550,6 +641,16 @@ def system_prompt():
         'numbers that are not in the tool results are rejected automatically.\n'
         '- "unknown" means the bot could not read it: say it is unknown, never treat it as 0.\n'
         '- If the tools have no data, say so plainly.\n'
+        '- NEVER guess. If the question is unclear (which member? which war? what do they want to know?), '
+        'call ask_back. If a tool says NO DATA, pass that on; do not fill the gap yourself. If the bot keeps '
+        'no records that could answer it, call cannot_answer.\n'
+        '- "Battle stats" means strength, defence, speed and dexterity. The bot has NONE. War hits are not '
+        'battle stats: if that is all they asked, call cannot_answer.\n'
+        '- A name that is not an exact match is NOT the same person. Never treat a "did you mean" '
+        'suggestion as the answer.\n'
+        '- "he", "she", "they", "them" refer to the member from earlier in the conversation; if there is no '
+        'earlier member, ask_back.\n'
+        f'What the bot keeps:\n{CAPABILITIES}\n'
         '- For "who is most / least / top" questions, use the ready-made "Most ..." lines or the order of a '
         'sorted faction_table. Never rank members yourself.\n'
         '- Be short and friendly, plain English, Discord markdown, bullet points. Under 150 words unless asked '
@@ -606,6 +707,8 @@ async def _ask_local(session, messages, facts, used):
             result = facts.run(name, args)
             used.append((name, args, result))
             msgs.append({'role': 'tool', 'tool_name': name, 'content': result})
+        if facts.final:
+            return facts.final, msgs
     raise NotCapable('local AI kept calling tools without answering')
 
 
@@ -642,6 +745,8 @@ async def _ask_groq(session, messages, facts, used):
             result = facts.run(name, args)
             used.append((name, args, result))
             msgs.append({'role': 'tool', 'tool_call_id': c['id'], 'content': result})
+        if facts.final:
+            return facts.final, msgs
     raise NotCapable('Groq kept calling tools without answering')
 
 
@@ -649,7 +754,8 @@ PROVIDERS = [('local AI', _ask_local), ('Groq', _ask_groq)]
 
 
 class Answer:
-    def __init__(self, text, provider, facts_text, checked, seconds, fallback=False):
+    def __init__(self, text, provider, facts_text, checked, seconds, fallback=False, kind='answer'):
+        self.kind = kind                # 'answer', or 'ask' = a question back / "I don't have that"
         self.text = text
         self.provider = provider
         self.facts_text = facts_text    # the tool output the answer was built on
@@ -661,16 +767,82 @@ class Answer:
 def _facts_text(used):
     seen, parts = set(), []
     for _, _, result in used:
+        if result in _CONTROL_RESULTS or result.startswith('NO DATA: '):
+            continue
         if result not in seen:
             seen.add(result)
             parts.append(result)
     return '\n\n'.join(parts)
 
 
+# Things people ask for that the bot simply doesn't record. "Battle stats" in
+# Torn means strength/defence/speed/dexterity; asked for them, the AI once
+# answered with WAR stats instead, every number real, the answer still wrong.
+# So when a question names one of these, the bot itself says it has none.
+NOT_RECORDED = [
+    (re.compile(r'battle ?stats?|\bbs\b|strength|defen[cs]e|\bspeed\b|dexterity|\bstats? estimate', re.I),
+     'battle stats (strength, defence, speed, dexterity)'),
+    (re.compile(r'net ?worth|\bmoney\b|\bcash\b|\bbank\b', re.I), 'money or networth'),
+    (re.compile(r'\bitems?\b|inventory|\barmou?ry\b', re.I), 'items or the armoury'),
+    (re.compile(r'xan(ax)?s? (used|taken|use)|refills?|energy cans?', re.I), 'Xanax or refill use'),
+    (re.compile(r'\bmessages?\b|\bchat\b|said', re.I), 'chat messages'),
+]
+
+
+def not_recorded_note(question):
+    """'⚠️ I don't keep ...' for anything asked that the bot never records, or ''."""
+    missing = [label for rx, label in NOT_RECORDED if rx.search(question or '')]
+    if not missing:
+        return ''
+    return "⚠️ I don't keep " + ', '.join(missing) + ', so that part is not in this answer.'
+
+
+_NEGATION = re.compile(r"\b(don'?t|do not|doesn'?t|does not|no|not|none)\b", re.I)
+
+
+def tidy_answer(text, notices, question):
+    """
+    Final pass over an AI answer, in Python so it always happens:
+    - Sentences about a name the tools could NOT find are removed. The AI
+      can only be guessing about them, and the bot's own note says it better.
+    - A "not recorded" note is added for things the bot never keeps, unless
+      the AI already said so in a sentence of its own.
+    - Em dashes become commas (house style).
+    """
+    missing = {n.lower() for note in notices for n in re.findall(r'\*\*(.+?)\*\*', note)}
+    if missing:
+        kept = []
+        for line in text.split('\n'):
+            parts = re.split(r'(?<=[.!?])\s+', line)
+            parts = [p for p in parts if not any(m in p.lower() for m in missing)]
+            if parts or not line.strip():
+                kept.append(' '.join(parts))
+        text = re.sub(r'\n{3,}', '\n\n', '\n'.join(kept)).strip()
+    if notices:
+        text = (text + '\n\n' if text else '') + '\n'.join(f'⚠️ {n}' for n in notices)
+    for rx, label in NOT_RECORDED:
+        if not rx.search(question or ''):
+            continue
+        said = any(rx.search(sent) and _NEGATION.search(sent) for sent in re.split(r'(?<=[.!?\n])\s*', text))
+        if not said:
+            text = text.rstrip() + f"\n\n⚠️ I don't keep {label}, so that part is not in this answer."
+    text = re.sub(r'\s*[\u2014]\s*', ', ', text)
+    return text
+
+
+UNSURE_TEXT = ("I'm not sure what to look up for that. Which member or war do you mean, "
+               'and what would you like to know?\n\n' + CAPABILITIES)
+
+
 async def answer_question(session, question, facts, history=None, earlier_facts='', providers=None):
     """
-    Ask the AI, then enforce the number check. Returns an Answer whose text is
-    safe to post: either a checked AI answer, or the raw facts.
+    Ask the AI, then enforce the rules in Python. The returned text is always
+    one of:
+      - a question back, or "I don't have that" (ask_back / cannot_answer, or a
+        name or war the tools couldn't find), with no AI guesswork mixed in,
+      - an AI answer whose every number is in the bot's records, plus a note
+        for anything that could not be found,
+      - the raw records, when the AI kept using numbers that aren't in them.
     """
     providers = providers or PROVIDERS
     sys_txt = system_prompt()
@@ -682,15 +854,30 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
     t0, problems = time.monotonic(), []
     for pname, ask in providers:
         used = []
+        facts.notices, facts.found_any, facts.final = [], False, None   # fresh state per provider
         try:
             text, msgs = await ask(session, base, facts, used)
         except NotCapable as e:
             problems.append(f'{pname}: {e}')
             continue
-        # No tools used means no facts, so any number at all in the answer
-        # (beyond the question and the rules) fails the check below.
-        sources = (_facts_text(used), earlier_facts, question, sys_txt)
-        bad = unsupported_numbers(text, *sources)
+        took = lambda: time.monotonic() - t0
+        sources = lambda: (_facts_text(used), earlier_facts, question, sys_txt)
+
+        # 1. The AI chose to ask back or to say "not recorded". Its wording is
+        #    kept, but it may not slip in numbers either.
+        if facts.final:
+            if unsupported_numbers(facts.final, *sources()):
+                return Answer(UNSURE_TEXT, pname, '', True, took(), kind='ask')
+            return Answer(tidy_answer(facts.final, [], ''), pname, '', True, took(), kind='ask')
+
+        # 2. Nothing was found at all. Whatever the AI wrote can only be a
+        #    guess, so the bot's own "who do you mean?" goes out instead.
+        if not facts.found_any and not earlier_facts:
+            msg = '\n\n'.join(facts.notices) if facts.notices else UNSURE_TEXT
+            return Answer(msg, pname, '', True, took(), kind='ask')
+
+        # 3. A real answer: every number must be in the records.
+        bad = unsupported_numbers(text, *sources())
         if bad:
             logger.warning(f'ask_ai: {pname} used numbers not in the data {bad}; asking for a rewrite')
             fix = msgs + [{'role': 'assistant', 'content': text},
@@ -703,15 +890,17 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
             except NotCapable as e:
                 problems.append(f'{pname} rewrite: {e}')
                 continue
-            sources = (_facts_text(used), earlier_facts, question, sys_txt)
-            bad = unsupported_numbers(text, *sources)
-            if bad:
+            bad = unsupported_numbers(text, *sources())
+            if bad or facts.final:
                 logger.warning(f'ask_ai: {pname} rewrite still had {bad}; showing raw facts instead')
                 return Answer(
                     "I couldn't word that without risking a wrong number, so here are the bot's records "
-                    'as they are (see below).', pname, _facts_text(used), True,
-                    time.monotonic() - t0, fallback=True)
-        return Answer(text, pname, _facts_text(used), True, time.monotonic() - t0)
+                    'as they are (see below).', pname, _facts_text(used), True, took(), fallback=True)
+
+        # 4. Part of the question couldn't be answered (e.g. one of two names
+        #    was wrong): say so under the answer, in the bot's words.
+        text = tidy_answer(text, facts.notices, question)
+        return Answer(text, pname, _facts_text(used), True, took())
     return Answer("Sorry, I couldn't answer that right now (" + '; '.join(problems) + ').',
                   'none', '', True, time.monotonic() - t0)
 
@@ -720,13 +909,46 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
 # Discord side
 # ─────────────────────────────────────────────────────────────────────────────
 
+MAX_HISTORY = 8   # messages of conversation carried into a follow-up
+MAX_EARLIER_FACTS = 6000
+
+
+def bot_role_ids(role_mentions, bot_id):
+    """
+    IDs of the bot's own role among the roles pinged. Discord gives every bot
+    a role with the same name, so typing "@ApexPunk" offers two choices (the
+    bot and the pink role) and people pick either. Both must work.
+    """
+    out = set()
+    for r in role_mentions or []:
+        tags = getattr(r, 'tags', None)
+        if tags is not None and getattr(tags, 'bot_id', None) == bot_id:
+            out.add(r.id)
+    return out
+
+
+def describe_mentions(content, bot_id, mentions, facts, bot_roles=()):
+    """Swap '<@123>' for 'BunnyBull [4474400]' so "@BunnyBull how active
+    is he?" works, and drop the bot's own mention (user or role)."""
+    content = re.sub(rf'<@!?{bot_id}>', '', content or '')
+    for rid in bot_roles:
+        content = content.replace(f'<@&{rid}>', '')
+    for u in mentions:
+        if u.id == bot_id:
+            continue
+        label = facts.describe_discord_user(u.id, getattr(u, 'display_name', None) or u.name)
+        content = re.sub(rf'<@!?{u.id}>', label, content)
+    return content.strip()
+
+
 HELP_TEXT = (
     'Ask me about members in plain English, for example:\n'
     '- `@bot how active was BunnyBull?`\n'
     '- `@bot who has been offline longest?`\n'
     '- `@bot who got farmed most last war?`\n'
     '- `@bot what strikes are open?`\n'
-    'Reply to my answer to ask a follow-up. Every number I give is checked against the bot\'s records.'
+    'Reply to my answer to ask a follow-up. Every number I give is checked against the bot\'s records, '
+    'and if I\'m not sure who or what you mean, I\'ll ask.\n\n' + CAPABILITIES
 )
 
 
@@ -758,13 +980,14 @@ class AskAI:
     async def on_message(self, message):
         if message.author.bot or not message.guild or self.bot.user is None:
             return
-        if self.bot.user not in message.mentions:
-            return
-        # A reply to the bot pings it by default; only treat it as a question
-        # if it's a reply to one of OUR answers or an explicit @mention.
         ref_id = getattr(message.reference, 'message_id', None)
-        explicit = f'<@{self.bot.user.id}>' in message.content or f'<@!{self.bot.user.id}>' in message.content
-        if not explicit and ref_id not in self.memory:
+        is_followup = ref_id in self.memory
+        roles = bot_role_ids(message.role_mentions, self.bot.user.id)
+        # Questions are @mentions of the bot (or of its role), or replies to
+        # one of its answers. A reply pings by default, so most are mentions too.
+        explicit = (f'<@{self.bot.user.id}>' in message.content or f'<@!{self.bot.user.id}>' in message.content
+                    or bool(roles))
+        if not explicit and not is_followup:
             return
 
         if not member_is_management(message.author):
@@ -776,26 +999,34 @@ class AskAI:
                                 mention_author=False, delete_after=30)
             return
 
-        question = self.strip_mention(message.content, self.bot.user.id)
-        if not question:
-            await message.reply(HELP_TEXT, mention_author=False)
+        if not (message.content or '').strip():
+            # Discord only lets the bot read messages that @mention the bot
+            # itself. Anything else (a reply with the ping off, maybe a ping of
+            # the role) arrives with its text blanked out.
+            hint = ('Discord doesn\'t let me read messages that ping my **role** (the coloured @ApexPunk). '
+                    'Pick the other @ApexPunk, the bot itself.' if roles else
+                    "I can't read replies with the @ping switched off. Reply again with the ping on, "
+                    'or @mention me.')
+            await message.reply(hint + ' 🙂', mention_author=False, delete_after=60)
             return
 
         history, earlier = [], ''
-        if ref_id in self.memory:
-            q0, a0, f0 = self.memory[ref_id]
-            history = [{'role': 'user', 'content': q0}, {'role': 'assistant', 'content': a0}]
-            earlier = f0
+        if is_followup:
+            history, earlier = self.memory[ref_id]
 
         async with message.channel.typing():
             async with self.lock:
                 roster = await torn_api.fetch_faction_members()   # None = Torn unreachable (handled)
                 roster = {str(k): v for k, v in roster.items()} if roster is not None else None
                 facts = FactBook(self.data_dir, roster=roster, strike_manager=self.strike_manager)
+                question = describe_mentions(message.content, self.bot.user.id, message.mentions, facts, roles)
+                if not question:
+                    await message.reply(HELP_TEXT, mention_author=False)
+                    return
                 ans = await answer_question(await self.session(), question, facts, history, earlier)
 
         logger.info(f'ask_ai: {message.author} asked {question[:80]!r} -> {ans.provider}, '
-                    f'{ans.seconds:.0f}s, fallback={ans.fallback}')
+                    f'{ans.seconds:.0f}s, kind={ans.kind}, fallback={ans.fallback}')
         embed = None
         if ans.facts_text:
             body = ans.facts_text
@@ -809,6 +1040,11 @@ class AskAI:
         sent = await message.reply(text, embed=embed, mention_author=False,
                                    allowed_mentions=discord.AllowedMentions.none())
         if ans.provider != 'none':
-            self.memory[sent.id] = (question, ans.text, ans.facts_text)
+            # Remember the whole conversation, so a reply to "Did you mean X or
+            # Y?" with just "the first one" still makes sense.
+            turns = (history + [{'role': 'user', 'content': question},
+                                {'role': 'assistant', 'content': ans.text}])[-MAX_HISTORY:]
+            facts_so_far = '\n\n'.join(x for x in (earlier, ans.facts_text) if x)[-MAX_EARLIER_FACTS:]
+            self.memory[sent.id] = (turns, facts_so_far)
             while len(self.memory) > MEMORY_SIZE:
                 self.memory.pop(next(iter(self.memory)))

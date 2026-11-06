@@ -7,7 +7,7 @@ A Discord bot for a Torn.com faction (Ascended Punks), running on Pat's home Mac
 ## Commands
 
 ```bash
-<py> -m pytest -q tests/          # full suite (141 tests), the one to trust
+<py> -m pytest -q tests/          # full suite (144 tests), the one to trust
 <py> -m pytest -q tests/test_imports.py::test_flytrack_logic   # single test
 <py> tests/test_imports.py        # runs test_imports.py ONLY, see note below
 <py> bot.py                       # run locally (needs .env)
@@ -138,6 +138,8 @@ The design rule is **the AI must not make up numbers**, because strikes get deci
 - `unsupported_numbers()` rejects any answer containing a number (digits or words) absent from the tool output, question or prompt. One rewrite, then the raw records are posted instead.
 - The check cannot catch a real number in the wrong place. Measured: asked "who took the most hits", the model named the runner-up (60) over the top (68), whose record had no name. So **rankings are computed in Python** ("Most hits taken (top 3): ...") and the AI only copies them. Any new "who is most/least" question needs the same treatment.
 - The facts used are attached under every answer so a manager can check them.
+- **Unsure means ask, never guess.** Names match only exactly, by ID, or by a piece fitting one member; typos and multi-matches return "did you mean...?" (`FactBook.resolve`). If no tool found anything, the bot's own question replaces whatever the AI wrote. `ask_back` / `cannot_answer` tools let the AI stop and ask. `tidy_answer()` strips AI sentences about unfound names and adds "I don't keep battle stats" etc. (`NOT_RECORDED`): asked for battle stats, the model once answered with war hits.
+- Both `@ApexPunk` choices work: the bot user and its same-named managed role (`bot_role_ids`). A message the bot is not allowed to read (reply with ping off) arrives blank and gets a hint instead of silence.
 
 Activity profiles of leavers are now kept 365 days (not 7) so they can be asked about; every faction-wide view reads `current_ids()` so ex-members don't skew Coverage or the roster.
 

@@ -7754,8 +7754,11 @@ def test_ask_ai_facts_say_unknown_and_left_instead_of_guessing():
     offline = FactBook(d, roster=None, now=now).member_report('4474400')
     assert 'In the faction now: unknown' in offline
 
-    assert 'No member called' in FactBook(d, roster={}, now=now).member_report('nobody')
-    assert 'faction list is unavailable' in FactBook(d, roster=None, now=now).faction_table()
+    nobody = FactBook(d, roster={}, now=now)
+    assert 'no records of anyone called **nobody**' in nobody.member_report('nobody')
+    assert nobody.notices and not nobody.found_any
+    torn_down = FactBook(d, roster=None, now=now)
+    assert "can't see the current member list" in torn_down.faction_table() and not torn_down.found_any
 
 
 def test_ask_ai_rejects_made_up_numbers_then_falls_back_to_records():
@@ -7831,6 +7834,127 @@ def test_member_is_management_refuses_plain_users():
         pass
     assert member_is_management(None) is False
     assert member_is_management(PlainUser()) is False
+
+
+def test_ask_ai_asks_back_instead_of_guessing_who_was_meant():
+    """
+    Pat's rule for the @bot questions: unsure means ask, never guess. A typo
+    gets "did you mean...?", a name matching several members gets a choice,
+    and only an exact name, an ID or a piece fitting ONE member counts.
+    """
+    import json, os, tempfile
+    from features.ask_ai import FactBook
+
+    d = tempfile.mkdtemp()
+    with open(os.path.join(d, 'activity_profile.json'), 'w') as f:
+        json.dump({'1': {'name': 'BunnyBull'}, '2': {'name': 'BunnyB'}, '3': {'name': 'GaryHollis42'}}, f)
+    fb = FactBook(d, roster={})
+
+    assert fb.resolve('bunnybull')[0] == '1'           # exact, any case
+    assert fb.resolve('3')[0] is None                   # too short to be an ID
+    assert fb.resolve('[3]')[0] == '3'                  # explicit ID
+    assert fb.resolve('gary')[0] == '3'                 # piece fitting one member
+    tid, _, options = fb.resolve('bunny')               # piece fitting two: ask
+    assert tid is None and options == ['BunnyB', 'BunnyBull']
+    tid, _, options = fb.resolve('bunybul')             # typo: suggest, never pick
+    assert tid is None and 'BunnyBull' in options
+    text = fb.member_report('bunybul')
+    assert text.startswith('NO DATA: ') and 'Did you mean' in text and '**BunnyBull**' in text
+    assert 'Which member' in fb.member_report('')
+
+
+def test_ask_ai_wrong_name_gets_a_question_not_an_ai_guess():
+    """
+    Even if the AI writes a confident answer after a tool said "no such
+    member", the bot's own question goes out instead: nothing was found, so
+    anything the AI said could only be a guess. Partial misses ride along as
+    a warning; ask_back ends the loop with the AI's own question.
+    """
+    import asyncio, json, os, tempfile
+    from features.ask_ai import FactBook, answer_question
+
+    d = tempfile.mkdtemp()
+    with open(os.path.join(d, 'activity_profile.json'), 'w') as f:
+        json.dump({'1': {'name': 'BunnyBull', 'hours': {'1': [1, 2]}}}, f)
+
+    def provider(calls, reply):
+        async def ask(session, messages, fb, used):
+            for name, args in calls:
+                used.append((name, args, fb.run(name, args)))
+                if fb.final:
+                    return fb.final, list(messages)
+            return reply, list(messages)
+        return ask
+
+    guess = asyncio.run(answer_question(None, 'how active is bunybul?', FactBook(d, roster={}), providers=[
+        ('fake', provider([('member_report', {'name': 'bunybul'})], 'They were very active!'))]))
+    assert guess.kind == 'ask' and 'Did you mean' in guess.text and 'very active' not in guess.text
+
+    nothing = asyncio.run(answer_question(None, 'hello?', FactBook(d, roster={}), providers=[
+        ('fake', provider([], 'BunnyBull is great.'))]))
+    assert nothing.kind == 'ask' and 'Which member or war' in nothing.text
+
+    partial = asyncio.run(answer_question(None, 'BunnyBull and Ghosty?', FactBook(d, roster={}), providers=[
+        ('fake', provider([('member_report', {'name': 'BunnyBull'}), ('member_report', {'name': 'Ghosty'})],
+                          'BunnyBull: online in 50% of checks.'))]))
+    assert partial.kind == 'answer' and '⚠️' in partial.text and 'Ghosty' in partial.text
+
+    asked = asyncio.run(answer_question(None, 'how did they do?', FactBook(d, roster={}), providers=[
+        ('fake', provider([('ask_back', {'question': 'Who do you mean?'})], 'unused'))]))
+    assert asked.kind == 'ask' and asked.text == 'Who do you mean?'
+
+    nope = asyncio.run(answer_question(None, "what's BunnyBull's networth?", FactBook(d, roster={}), providers=[
+        ('fake', provider([('cannot_answer', {'reason': 'The bot does not record networth.'})], 'unused'))]))
+    assert nope.kind == 'ask' and 'networth' in nope.text and "I don't have battle stats" in nope.text
+
+    # Asked for something never recorded, the bot itself says so, even if
+    # the AI answered with something else that happens to be real.
+    swap = asyncio.run(answer_question(None, "BunnyBull's battle stats?", FactBook(d, roster={}), providers=[
+        ('fake', provider([('member_report', {'name': 'BunnyBull'})], 'BunnyBull: online in 50% of checks.'))]))
+    assert "I don't keep battle stats" in swap.text
+    from features.ask_ai import not_recorded_note, tidy_answer
+    assert not_recorded_note('how many hits did Bob make last war?') == ''
+
+    # The bot's own notes replace the AI's lines about unfound names (no
+    # duplicates, no guesses), and em dashes never reach Discord.
+    notice = "I have no records of anyone called **Ghosty**. Check the spelling."
+    out = tidy_answer('Bob made 3 hits. Ghosty was very active — online daily.', [notice], 'Bob and Ghosty?')
+    assert out == 'Bob made 3 hits.\n\n⚠️ ' + notice, out
+    said = tidy_answer("I don't have battle stats for Bob.", [], "Bob's battle stats?")
+    assert said.count('battle stats') == 1
+
+
+def test_ask_ai_reads_member_and_bot_role_mentions():
+    """
+    "@ApexPunk how active is @Bob?": Bob's ping becomes his Torn name, and
+    the bot answers whether it was pinged as the bot or as its same-named
+    role (Discord offers both when you type @ApexPunk).
+    """
+    import json, os, tempfile
+    from features.ask_ai import FactBook, bot_role_ids, describe_mentions
+
+    d = tempfile.mkdtemp()
+    with open(os.path.join(d, 'discord_to_torn.json'), 'w') as f:
+        json.dump({'111': '4474400'}, f)
+    with open(os.path.join(d, 'activity_profile.json'), 'w') as f:
+        json.dump({'4474400': {'name': 'BunnyBull'}}, f)
+    fb = FactBook(d, roster={})
+
+    class U:
+        def __init__(self, i, n):
+            self.id, self.name, self.display_name = i, n, n
+    class Tags:
+        def __init__(self, b):
+            self.bot_id = b
+    class R:
+        def __init__(self, i, b):
+            self.id, self.tags = i, Tags(b)
+
+    roles = bot_role_ids([R(55, 999), R(66, 12345), R(77, None)], 999)
+    assert roles == {55}
+    q = describe_mentions('<@&55> how active is <@111> vs <@!222>?', 999,
+                          [U(111, 'bun'), U(222, 'Stranger'), U(999, 'ApexPunk')], fb, roles)
+    assert q == 'how active is BunnyBull [4474400] vs Stranger (Discord user not linked to a Torn account)?', q
 
 
 if __name__ == '__main__':
@@ -7972,4 +8096,7 @@ if __name__ == '__main__':
     test_ask_ai_rejects_made_up_numbers_then_falls_back_to_records()
     test_activity_views_skip_leavers_kept_for_lookups()
     test_member_is_management_refuses_plain_users()
+    test_ask_ai_asks_back_instead_of_guessing_who_was_meant()
+    test_ask_ai_wrong_name_gets_a_question_not_an_ai_guess()
+    test_ask_ai_reads_member_and_bot_role_mentions()
     print('All smoke tests passed.')
