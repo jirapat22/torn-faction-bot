@@ -150,6 +150,16 @@ def _days_ago(ts, now):
     return int((now - float(ts)) // DAY)
 
 
+def _ago(ts, now):
+    """'5 hours ago' under two days, else '3 days ago'. Whole days alone read
+    as "0 days offline" for anyone active today, which the AI turned into
+    "everyone is online right now"."""
+    secs = max(0, now - float(ts))
+    if secs < 2 * DAY:
+        return f'{int(secs // 3600)} hours ago'
+    return f'{int(secs // DAY)} days ago'
+
+
 def _num(v):
     """None (unknown) must read as unknown, never as 0: see the None-vs-empty contract."""
     return 'unknown' if v is None else str(v)
@@ -281,7 +291,7 @@ class FactBook:
             lines.append(f'In the faction now: yes. Level {m.get("level", "unknown")}.')
             if la.get('timestamp'):
                 lines.append(f'Last action in Torn: {_date(la["timestamp"])} '
-                             f'({_days_ago(la["timestamp"], self.now)} days ago), status now {la.get("status", "unknown")}.')
+                             f'({_ago(la["timestamp"], self.now)}), status now {la.get("status", "unknown")}.')
         else:
             gone = (self.profiles.get(tid) or {}).get('last_seen_in_faction')
             left = self.left.get(tid, {}).get('first_gone')
@@ -385,7 +395,8 @@ class FactBook:
             wm = (last_war or {}).get('members', {}).get(tid)
             rows.append({
                 'name': self._name(tid, m), 'tid': tid, 'level': m.get('level'),
-                'off': _days_ago(la, self.now) if la else None,
+                'la': la,   # last action timestamp, for exact sorting
+                'off': _ago(la, self.now) if la else None,
                 'pct': pct,
                 'days': self._days_online_14(tid),
                 'made': wm.get('attacks', 0) if wm else None,
@@ -396,7 +407,7 @@ class FactBook:
         big = 10 ** 9
         keys = {
             'name': lambda r: r['name'].lower(),
-            'days_offline': lambda r: -(r['off'] if r['off'] is not None else -1),
+            'days_offline': lambda r: r['la'] if r['la'] else 0,   # oldest last action first
             'online_share': lambda r: r['pct'] if r['pct'] is not None else big,
             'last_war_hits_made': lambda r: r['made'] if r['made'] is not None else big,
             'last_war_hits_taken': lambda r: -(r['taken'] if r['taken'] is not None else -1),
@@ -411,7 +422,7 @@ class FactBook:
         for r in rows:
             out.append(
                 f'- {r["name"]} [{r["tid"]}] lvl {r["level"]}: '
-                f'days offline {"-" if r["off"] is None else r["off"]}, '
+                f'last action {"unknown" if r["off"] is None else r["off"]}, '
                 f'online share {"-" if r["pct"] is None else str(r["pct"]) + "%"}, '
                 f'days online in last 14 days {r["days"]}, '
                 f'last war hits made {"-" if r["made"] is None else r["made"]}, '
