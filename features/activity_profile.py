@@ -38,7 +38,12 @@ DECAY_FACTOR = 0.98
 # this many days straight - avoids stale ex-members quietly skewing Coverage
 # and cluttering the roster view forever. A grace period (not "first miss")
 # so one API hiccup doesn't wipe real history.
-PRUNE_AFTER_DAYS = 7
+# A year, not a week: management asks the bot about people after they leave
+# ("how active was X?"), and a profile is ~1.6 KB, so a year of leavers costs
+# a few hundred KB. Leavers' profiles are frozen (no new samples, no decay).
+# Keeping them means every faction-wide view must skip them: see
+# current_ids(), or ex-members would skew Coverage and the roster for a year.
+PRUNE_AFTER_DAYS = 365
 
 
 def _hour_probabilities(profile: dict) -> Optional[dict]:
@@ -245,6 +250,24 @@ class ActivityProfileManager:
             logger.info(f'Activity profile: pruning {name} ({torn_id}) - absent from faction {PRUNE_AFTER_DAYS}+ days')
             del self.profiles[torn_id]
 
+    def current_ids(self):
+        """
+        Torn IDs of members still in the faction: those seen in the newest
+        roster snapshot (or the day before, since snapshots straddle midnight).
+        Leavers keep their profile for PRUNE_AFTER_DAYS so management can look
+        them up, but they must not count in faction-wide views.
+        """
+        seen = {tid: p.get('last_seen_in_faction') for tid, p in self.profiles.items()}
+        dates = [d for d in seen.values() if d]
+        if not dates:
+            return list(self.profiles)   # legacy data with no dates: nothing to tell apart
+        newest = datetime.strptime(max(dates), '%Y-%m-%d').date()
+        out = []
+        for tid, d in seen.items():
+            if not d or (newest - datetime.strptime(d, '%Y-%m-%d').date()).days <= 1:
+                out.append(tid)
+        return out
+
     def has_enough_data(self, torn_id: str) -> bool:
         return _total_samples(self.profiles.get(torn_id)) >= MIN_SAMPLES_FOR_PROFILE
 
@@ -284,7 +307,8 @@ class ActivityProfileManager:
         """
         ready = []
         warming_up = []
-        for torn_id, profile in self.profiles.items():
+        for torn_id in self.current_ids():
+            profile = self.profiles[torn_id]
             name = profile.get('name', torn_id)
             if not self.has_enough_data(torn_id):
                 warming_up.append(name)
@@ -308,7 +332,7 @@ class ActivityProfileManager:
         the windows get_coverage reports.
         """
         ready = []
-        for torn_id in self.profiles:
+        for torn_id in self.current_ids():
             if not self.has_enough_data(torn_id):
                 continue
             probs = _hour_probabilities(self.profiles[torn_id])
@@ -325,7 +349,7 @@ class ActivityProfileManager:
         best/quiet windows are (start_hour, end_hour, avg_prob) tuples.
         """
         ready_probs = []
-        for torn_id in self.profiles:
+        for torn_id in self.current_ids():
             if not self.has_enough_data(torn_id):
                 continue
             probs = _hour_probabilities(self.profiles[torn_id])

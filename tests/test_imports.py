@@ -7699,6 +7699,140 @@ def test_poll_names_who_did_not_answer():
         'without the role there is no defensible pool, so name nobody')
 
 
+def test_ask_ai_number_check_catches_invented_numbers():
+    """
+    The promise behind "@bot how active was X?": no number reaches Discord
+    unless the bot's own records contain it. This is the check that enforces
+    it, so it must not be fooled by formatting or by spelling numbers out.
+    """
+    from features.ask_ai import numbers_in, unsupported_numbers
+
+    facts = 'hits made 0, hits taken from the enemy 54, our score 1952, score 384.33, last online 28/10/2026'
+    # Formatting differences are not mismatches.
+    assert unsupported_numbers('They took 54 hits; score 1,952 on 28/10/2026.', facts) == []
+    assert unsupported_numbers('About 384 points.', facts) == []          # rounding a real decimal is fine
+    # Invented numbers are caught, in digits or in words.
+    assert unsupported_numbers('They took 74 hits.', facts) == ['74']
+    assert unsupported_numbers('They took seventy hits.', facts) == ['70']
+    # Prose "one" is not a number ("no one", "one of").
+    assert '1' not in numbers_in('No one in the faction, one of the quiet ones.')
+    # Numbers in the question are allowed back in the answer.
+    assert unsupported_numbers('Yes, 3 days offline.', facts, 'were they offline 3 days?') == []
+
+
+def test_ask_ai_facts_say_unknown_and_left_instead_of_guessing():
+    """
+    The fact tools are what the AI is limited to, so they must not do the
+    None-vs-empty thing themselves: an unreadable hits-taken is "unknown"
+    (never 0), a leaver is reported as left, and an unreachable roster means
+    "in the faction now: unknown" rather than "left".
+    """
+    import json, os, tempfile, time
+    from features.ask_ai import FactBook
+
+    d = tempfile.mkdtemp()
+    now = time.time()
+    def w(name, data):
+        with open(os.path.join(d, name), 'w') as f:
+            json.dump(data, f)
+    w('activity_profile.json', {'4474400': {
+        'name': 'BunnyBull', 'first_seen': '2026-09-04', 'last_seen_in_faction': '2026-11-01',
+        'hours': {'10': [24, 25], '11': [24, 25]}, 'days': ['2026-10-27', '2026-10-28']}})
+    w('war_member_stats.json', {'wars': [
+        {'war_id': '1', 'timestamp': now - 9 * 86400, 'enemy_name': 'Foes', 'result': 'defeat',
+         'members': {'4474400': {'name': 'BunnyBull', 'attacks': 0, 'defends': None, 'outside_incoming': 3}}},
+        {'war_id': '2', 'timestamp': now - 2 * 86400, 'enemy_name': 'Kids', 'result': 'defeat',
+         'members': {'4474400': {'name': 'BunnyBull', 'attacks': 0, 'defends': 20, 'outside_incoming': 0}}}]})
+
+    left = FactBook(d, roster={'1': {'name': 'Someone'}}, now=now).member_report('bunnybull')
+    assert 'BunnyBull [4474400]' in left
+    assert 'no, they have left' in left and '01/11/2026' in left
+    assert 'hits taken from the enemy unknown' in left, left
+    assert 'at least 20 (some wars unknown)' in left, 'an unknown war must not be summed as 0'
+    assert '96%' in left and 'Idle counts as online' in left
+
+    offline = FactBook(d, roster=None, now=now).member_report('4474400')
+    assert 'In the faction now: unknown' in offline
+
+    assert 'No member called' in FactBook(d, roster={}, now=now).member_report('nobody')
+    assert 'faction list is unavailable' in FactBook(d, roster=None, now=now).faction_table()
+
+
+def test_ask_ai_rejects_made_up_numbers_then_falls_back_to_records():
+    """
+    The full answer loop with fake AIs: a clean answer passes; an invented
+    number gets one rewrite; a second invention means the raw records are
+    shown instead; a broken provider hands over to the next one.
+    """
+    import asyncio, json, os, tempfile, time
+    from features.ask_ai import FactBook, NotCapable, answer_question
+
+    d = tempfile.mkdtemp()
+    with open(os.path.join(d, 'war_member_stats.json'), 'w') as f:
+        json.dump({'wars': [{'war_id': '7', 'timestamp': time.time(), 'enemy_name': 'Kids', 'result': 'defeat',
+                             'members': {'5': {'name': 'Bob', 'attacks': 12, 'defends': 4}}}]}, f)
+    facts = FactBook(d, roster={'5': {'name': 'Bob', 'level': 20}})
+
+    def provider(replies):
+        """A fake AI that reads the member report once, then says each reply in turn."""
+        replies = list(replies)
+        async def ask(session, messages, fb, used):
+            if replies and replies[0] == 'FAIL':
+                replies.pop(0)
+                raise NotCapable('down')
+            used.append(('member_report', {'name': 'Bob'}, fb.run('member_report', {'name': 'Bob'})))
+            return replies.pop(0), list(messages)
+        return ask
+
+    ok = asyncio.run(answer_question(None, 'how did Bob do?', facts,
+                                     providers=[('fake', provider(['Bob made 12 hits and took 4.']))]))
+    assert ok.text == 'Bob made 12 hits and took 4.' and not ok.fallback and 'hits made 12' in ok.facts_text
+
+    fixed = asyncio.run(answer_question(None, 'how did Bob do?', facts, providers=[
+        ('fake', provider(['Bob made 15 hits.', 'Bob made 12 hits.']))]))
+    assert fixed.text == 'Bob made 12 hits.' and not fixed.fallback
+
+    stubborn = asyncio.run(answer_question(None, 'how did Bob do?', facts, providers=[
+        ('fake', provider(['Bob made 15 hits.', 'Bob made 16 hits.']))]))
+    assert stubborn.fallback and '15' not in stubborn.text and '16' not in stubborn.text
+    assert 'hits made 12' in stubborn.facts_text, 'the fallback must show the real records'
+
+    handover = asyncio.run(answer_question(None, 'how did Bob do?', facts, providers=[
+        ('local', provider(['FAIL'])), ('backup', provider(['Bob made 12 hits.']))]))
+    assert handover.provider == 'backup'
+
+
+def test_activity_views_skip_leavers_kept_for_lookups():
+    """
+    Leavers' activity profiles are now kept for a year so management can ask
+    about them, which must not drag ex-members back into Coverage or the
+    roster, the original reason profiles were pruned at all.
+    """
+    from features.activity_profile import ActivityProfileManager
+
+    mgr = ActivityProfileManager(bot=None)
+    full = {str(h): [10, 50] for h in range(24)}
+    mgr.profiles = {
+        '1': {'name': 'Here', 'last_seen_in_faction': '2026-11-06', 'hours': dict(full), 'days': []},
+        '2': {'name': 'AlsoHere', 'last_seen_in_faction': '2026-11-05', 'hours': dict(full), 'days': []},
+        '3': {'name': 'Gone', 'last_seen_in_faction': '2026-10-01', 'hours': dict(full), 'days': []},
+    }
+    assert sorted(mgr.current_ids()) == ['1', '2']
+    assert mgr.get_coverage()[2] == 2, 'the leaver must not count in Coverage'
+    ready, warming = mgr.get_roster_summary()
+    assert 'Gone' not in [r[1] for r in ready] + warming
+
+
+def test_member_is_management_refuses_plain_users():
+    """A DM author is a User with no server roles: never management."""
+    from utils.helpers import member_is_management
+
+    class PlainUser:
+        pass
+    assert member_is_management(None) is False
+    assert member_is_management(PlainUser()) is False
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -7833,4 +7967,9 @@ if __name__ == '__main__':
     test_retals_show_live_status_and_the_board_keeps_reasons()
     test_targets_cap_is_ten_and_management_can_pin_permanent_ones()
     test_targets_channel_is_created_once_when_both_loops_start_together()
+    test_ask_ai_number_check_catches_invented_numbers()
+    test_ask_ai_facts_say_unknown_and_left_instead_of_guessing()
+    test_ask_ai_rejects_made_up_numbers_then_falls_back_to_records()
+    test_activity_views_skip_leavers_kept_for_lookups()
+    test_member_is_management_refuses_plain_users()
     print('All smoke tests passed.')

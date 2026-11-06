@@ -7,7 +7,7 @@ A Discord bot for a Torn.com faction (Ascended Punks), running on Pat's home Mac
 ## Commands
 
 ```bash
-<py> -m pytest -q tests/          # full suite (136 tests), the one to trust
+<py> -m pytest -q tests/          # full suite (141 tests), the one to trust
 <py> -m pytest -q tests/test_imports.py::test_flytrack_logic   # single test
 <py> tests/test_imports.py        # runs test_imports.py ONLY, see note below
 <py> bot.py                       # run locally (needs .env)
@@ -128,11 +128,24 @@ Two dials keep it off the noise cliff, and both matter: the faction rejected an 
 
 The cooldown is stamped only when a warning actually goes out, so an outage or a filtered-out weakling never silences the next real threat.
 
+### Asking the bot (`features/ask_ai.py`)
+
+Management `@mention`s the bot in a management channel with a plain-English question; an AI answers from the bot's own records. Local Ollama (`qwen3.5:9b` on the Mac, reached at `host.docker.internal:11434`) first, Groq (`GROQ_API_KEY`) as backup, the same arrangement as Pat's I.O. bot. Bots may read the content of messages that mention them without the privileged Message Content intent, so no portal change is needed.
+
+The design rule is **the AI must not make up numbers**, because strikes get decided on these answers:
+
+- The AI only sees facts through four read-only tools (`FactBook`), which are plain Python over `data/*.json` plus one live roster read. `None`/missing stays "unknown", never 0.
+- `unsupported_numbers()` rejects any answer containing a number (digits or words) absent from the tool output, question or prompt. One rewrite, then the raw records are posted instead.
+- The check cannot catch a real number in the wrong place. Measured: asked "who took the most hits", the model named the runner-up (60) over the top (68), whose record had no name. So **rankings are computed in Python** ("Most hits taken (top 3): ...") and the AI only copies them. Any new "who is most/least" question needs the same treatment.
+- The facts used are attached under every answer so a manager can check them.
+
+Activity profiles of leavers are now kept 365 days (not 7) so they can be asked about; every faction-wide view reads `current_ids()` so ex-members don't skew Coverage or the roster.
+
 ### State and persistence
 
 `data/*.json` is gitignored and lives in `~/Projects/mac-server/data/apexpunk/` on the Mac, mounted into the container (it survives rebuilds). Files are written atomically via `utils/helpers.py`. There is no migration system, new fields must be read defensively with `.get(...)` and backfilled on write, because live records predate them.
 
-Anything accumulating per-player needs an explicit retention policy; several files grow forever otherwise. Current ones: activity profiles prune after 7 days absent from the roster, chain_session keeps 24 hours.
+Anything accumulating per-player needs an explicit retention policy; several files grow forever otherwise. Current ones: activity profiles prune after 365 days absent from the roster (kept for "@bot" lookups), chain_session keeps 24 hours.
 
 ## Conventions
 

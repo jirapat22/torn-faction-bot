@@ -352,6 +352,14 @@ async def on_ready():
         bot.add_view(RetalView(target_manager))
         await setup_target_commands(bot, target_manager)
 
+        # "@bot how active was X?": management asks in plain English and an AI
+        # answers from the bot's own records, every number checked against
+        # them (see features/ask_ai.py). add_listener, not @bot.event, so it
+        # sits beside discord.py's own on_message instead of replacing it.
+        from features.ask_ai import AskAI
+        ask_ai = AskAI(bot, strike_manager=strike_manager)
+        bot.add_listener(ask_ai.on_message, 'on_message')
+
         # Initialize faction tools
         await setup_faction_commands(bot)
 

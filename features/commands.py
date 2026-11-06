@@ -219,7 +219,9 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
                         '`/createevent` - Schedule event\n'
                         '`/verify` - Verification tools\n'
                         '`/rolesync` - Sync Torn positions to Discord roles\n'
-                        '`/test <feature>` - Manually trigger a background check'
+                        '`/test <feature>` - Manually trigger a background check\n'
+                        '`@bot <question>` - Ask about members in plain English, '
+                        'e.g. "how active was X?" (management channels)'
                     ),
                     'inline': False,
                 },

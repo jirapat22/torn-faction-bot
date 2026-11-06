@@ -245,9 +245,17 @@ def is_management(interaction: discord.Interaction) -> bool:
     """
     if not interaction.guild:
         return False
-    member = interaction.guild.get_member(interaction.user.id)
-    if not member:
-        return False
+    return member_is_management(interaction.guild.get_member(interaction.user.id))
+
+
+def member_is_management(member) -> bool:
+    """
+    The same check for a guild Member directly. Messages (the @mention
+    questions in features/ask_ai.py) have an author, not an interaction, so
+    the rule lives here once and both paths share it.
+    """
+    if not member or not hasattr(member, 'guild_permissions'):
+        return False   # a plain User (e.g. a DM) has no roles in our server
     if member.guild_permissions.manage_guild:
         return True
     if MANAGEMENT_ROLE_IDS:
