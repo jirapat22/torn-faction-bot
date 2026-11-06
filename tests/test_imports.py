@@ -8233,11 +8233,13 @@ def test_rules_posts_links_publish_and_takeover():
 
     store.data['posts'][1] = 'post B v2'
     assert asyncio.run(store.publish()) == '1 post(s) updated in place.'
-    assert store.data['message_ids'] == first_ids and ch.msgs[first_ids[1]].content == 'post B v2'
+    assert store.data['message_ids'] == first_ids and ch.msgs[first_ids[1]].content == 'post B v2' + rp.SEPARATOR
 
     del ch.msgs[first_ids[0]]                       # someone deleted post 1 by hand
     assert 'posted fresh' in asyncio.run(store.publish())
-    assert [ch.msgs[i].content for i in store.data['message_ids']] == ['post A', 'post B v2']
+    assert [ch.msgs[i].content for i in store.data['message_ids']] == [p + rp.SEPARATOR for p in ['post A', 'post B v2']]
+    from features.rules_sync import render_rules
+    assert render_rules(['# Post' + rp.SEPARATOR], {}) == '# Post', 'the divider is not part of the rules'
 
     # Takeover: old human posts are saved (with ✅ reactors) before deletion.
     class User:

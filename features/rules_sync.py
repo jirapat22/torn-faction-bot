@@ -36,6 +36,7 @@ def render_rules(posts, channel_names):
     for text in posts:
         t = re.sub(r'<#(\d+)>', lambda m: '#' + channel_names.get(int(m.group(1)), 'channel'), text)
         t = re.sub(r'\[([^\]]+)\]\(<?(https?://[^)>\s]+)>?\)', r'\1 (\2)', t)
+        t = re.sub(r'^-{10,}\s*$', '', t, flags=re.M)    # the divider line under each post
         t = re.sub(r'[ \t]+\n', '\n', t).strip()
         if t:
             out.append(t)

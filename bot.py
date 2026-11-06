@@ -925,6 +925,12 @@ async def rules_sync_check():
         # One-time handover of the rules posts from Pat to the bot.
         if rules_store is not None and rules_store.data.get('takeover_pending'):
             await rules_store.takeover()
+        elif rules_store is not None and rules_store.data.get('message_ids'):
+            # Keep Discord matching data/rules_posts.json: edits only what
+            # differs, and reposts in order if a post was deleted by hand.
+            summary = await rules_store.publish()
+            if not summary.startswith('0 '):
+                logger.info(f'Rules posts: {summary}')
         from features.rules_sync import refresh
         await refresh(bot)
     except Exception as e:

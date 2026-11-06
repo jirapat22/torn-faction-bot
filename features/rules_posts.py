@@ -37,6 +37,10 @@ DATA_FILE = 'data/rules_posts.json'
 OLD_POSTS_FILE = 'data/rules_old_posts.json'
 POST_LIMIT = 2000      # Discord's message limit
 CONFIRM_EMOJI = '✅'
+# Blank lines and a dashed line under every post, copied from Pat's original
+# posts, so each post stands apart when scrolling. Added at publish time, so
+# nobody has to keep it in the text they edit.
+SEPARATOR = '\n\n\n\n\n\n' + '-' * 99
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -127,6 +131,10 @@ class RulesPosts:
     def posts(self):
         return self.data['posts']
 
+    def rendered(self):
+        """The posts exactly as they appear in Discord: text plus the separator."""
+        return [p.rstrip() + SEPARATOR for p in self.posts]
+
     async def _channel(self):
         channel = self.bot.get_channel(RULES_CHANNEL_ID)
         if channel is None and RULES_CHANNEL_ID:
@@ -157,7 +165,7 @@ class RulesPosts:
 
         if msgs is not None:
             edited = 0
-            for msg, content in zip(msgs, self.posts):
+            for msg, content in zip(msgs, self.rendered()):
                 if msg.content != content:
                     await msg.edit(content=content, allowed_mentions=discord.AllowedMentions.none())
                     edited += 1
@@ -171,7 +179,7 @@ class RulesPosts:
             except discord.NotFound:
                 pass
         new_ids, last = [], None
-        for content in self.posts:
+        for content in self.rendered():
             last = await channel.send(content, allowed_mentions=discord.AllowedMentions.none())
             new_ids.append(last.id)
         self.data['message_ids'] = new_ids
@@ -246,9 +254,10 @@ class EditPostModal(discord.ui.Modal):
 
     async def on_submit(self, interaction: discord.Interaction):
         text, unknown = names_to_links(self.body.value.strip(), self.names)
-        if len(text) > POST_LIMIT:
+        if len(text) + len(SEPARATOR) > POST_LIMIT:
             await interaction.response.send_message(
-                f'That post is {len(text)} characters with the links in, over Discord\'s {POST_LIMIT}. '
+                f'That post is {len(text) + len(SEPARATOR)} characters with the links and the divider line '
+                f'in, over Discord\'s {POST_LIMIT}. '
                 'Trim it and try again. (Nothing was changed.)', ephemeral=True)
             return
         await interaction.response.defer(ephemeral=True)
