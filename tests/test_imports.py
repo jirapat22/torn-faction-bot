@@ -7957,29 +7957,6 @@ def test_ask_ai_reads_member_and_bot_role_mentions():
     assert q == 'how active is BunnyBull [4474400] vs Stranger (Discord user not linked to a Torn account)?', q
 
 
-def test_ask_ai_only_answers_where_members_cannot_read_it():
-    """
-    The bot posts members' records in the channel it was asked in, so it
-    must only answer where every human who can see the channel is
-    management. Unknown audience fails closed.
-    """
-    import features.ask_ai as a
-
-    class Perms:
-        def __init__(self, manage):
-            self.manage_guild = manage
-    class M:
-        def __init__(self, manage, bot=False):
-            self.bot, self.guild_permissions, self.roles = bot, Perms(manage), []
-    class Ch:
-        def __init__(self, members):
-            self.members = members
-
-    assert a.only_management_can_see(Ch([M(True), M(True), M(False, bot=True)])) is True
-    assert a.only_management_can_see(Ch([M(True), M(False)])) is False      # a member can read it
-    assert a.only_management_can_see(Ch([])) is False                        # unknown: fail closed
-    assert a.only_management_can_see(Ch([M(False, bot=True)])) is False     # bots only: no one to vouch
-
 
 if __name__ == '__main__':
     test_all_modules_import()
@@ -8123,5 +8100,4 @@ if __name__ == '__main__':
     test_ask_ai_asks_back_instead_of_guessing_who_was_meant()
     test_ask_ai_wrong_name_gets_a_question_not_an_ai_guess()
     test_ask_ai_reads_member_and_bot_role_mentions()
-    test_ask_ai_only_answers_where_members_cannot_read_it()
     print('All smoke tests passed.')

@@ -221,7 +221,7 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
                         '`/rolesync` - Sync Torn positions to Discord roles\n'
                         '`/test <feature>` - Manually trigger a background check\n'
                         '`@bot <question>` - Ask about members in plain English, '
-                        'e.g. "how active was X?" (management channels)'
+                        'e.g. "how active was X?" (any channel; answers are public)'
                     ),
                     'inline': False,
                 },
