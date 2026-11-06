@@ -8169,6 +8169,115 @@ def test_rules_sync_renders_posts_and_live_copy_wins():
     assert load_rule_sections(live)[0][0] == 'Live > OCs'
 
 
+def test_rules_posts_links_publish_and_takeover():
+    """
+    The bot owns the rules posts (features/rules_posts.py):
+    - '#war-room' typed in the editor becomes a real link, with or without
+      the channel's emoji prefix, and forum posts round-trip as '#[Name]';
+      URLs, headings and Discord's '-#' subtext are left alone;
+    - publish edits messages in place when they all exist, and reposts all
+      in order when one is missing;
+    - the takeover saves the old posts and their ✅ reactors BEFORE deleting.
+    """
+    import asyncio, json, os, tempfile
+    import discord
+    import features.rules_posts as rp
+
+    chans = {1: '⚔️-war-room', 2: '📚-guides-hub', 3: 'OC Guide'}
+    shown = rp.links_to_names('Ask in <#1>. Read <#3> and <#2>.', chans)
+    assert shown == 'Ask in #⚔️-war-room. Read #[OC Guide] and #📚-guides-hub.'
+    back, unknown = rp.names_to_links(shown, chans)
+    assert back == 'Ask in <#1>. Read <#3> and <#2>.' and unknown == []
+    typed, unknown = rp.names_to_links(
+        '# Rules\n## Fighting\n-# small print\nAsk in #war-room, see #[oc guide] '
+        'and preferences.php#tab=api. Strike #1. Also #nope-room.', chans)
+    assert typed == ('# Rules\n## Fighting\n-# small print\nAsk in <#1>, see <#3> '
+                     'and preferences.php#tab=api. Strike #1. Also #nope-room.'), typed
+    assert unknown == ['nope-room']
+
+    class Msg:
+        def __init__(self, ch, mid, content):
+            self.ch, self.id, self.content, self.reactions = ch, mid, content, []
+        async def edit(self, content, **kw):
+            self.content = content
+            self.ch.edits += 1
+        async def delete(self):
+            self.ch.log.append(('delete', self.id))
+            self.ch.msgs.pop(self.id, None)
+        async def add_reaction(self, e):
+            self.ch.log.append(('react', self.id, e))
+    class Chan:
+        def __init__(self):
+            self.msgs, self.next, self.edits, self.log = {}, 100, 0, []
+        async def fetch_message(self, mid):
+            if mid not in self.msgs:
+                raise discord.NotFound(type('R', (), {'status': 404, 'reason': 'x'})(), 'gone')
+            return self.msgs[mid]
+        async def send(self, content, **kw):
+            self.next += 1
+            m = Msg(self, self.next, content)
+            self.msgs[m.id] = m
+            self.log.append(('send', m.id))
+            return m
+    ch = Chan()
+    class Bot:
+        def get_channel(self, cid):
+            return ch
+    d = tempfile.mkdtemp()
+    store = rp.RulesPosts(Bot(), path=os.path.join(d, 'rules.json'))
+    store.data['posts'] = ['post A', 'post B']
+    rp.RULES_CHANNEL_ID = 1
+    asyncio.run(store.publish())
+    first_ids = list(store.data['message_ids'])
+    assert len(first_ids) == 2 and ('react', first_ids[-1], '✅') in ch.log
+
+    store.data['posts'][1] = 'post B v2'
+    assert asyncio.run(store.publish()) == '1 post(s) updated in place.'
+    assert store.data['message_ids'] == first_ids and ch.msgs[first_ids[1]].content == 'post B v2'
+
+    del ch.msgs[first_ids[0]]                       # someone deleted post 1 by hand
+    assert 'posted fresh' in asyncio.run(store.publish())
+    assert [ch.msgs[i].content for i in store.data['message_ids']] == ['post A', 'post B v2']
+
+    # Takeover: old human posts are saved (with ✅ reactors) before deletion.
+    class User:
+        def __init__(self, i, n, bot=False):
+            self.id, self.display_name, self.bot = i, n, bot
+    class Reaction:
+        def __init__(self, emoji, users):
+            self.emoji, self._users, self.me = emoji, users, False
+        async def users(self):
+            for u in self._users:
+                yield u
+    class Old(Msg):
+        def __init__(self, c, mid, content, reactions):
+            super().__init__(c, mid, content)
+            import datetime
+            self.author, self.reactions = User(9, 'pat'), reactions
+            self.created_at = datetime.datetime(2026, 10, 17)
+    ch2 = Chan()
+    old = [Old(ch2, 1, 'old rules 1', []),
+           Old(ch2, 2, 'old rules 2', [Reaction('✅', [User(5, 'Amy'), User(6, 'Bob'), User(7, 'Bot', True)])])]
+    for m in old:
+        ch2.msgs[m.id] = m
+    async def history(limit=50, oldest_first=True):
+        for m in old:
+            yield m
+    ch2.history = history
+    rp.OLD_POSTS_FILE = os.path.join(d, 'old.json')
+    class Bot2:
+        def get_channel(self, cid):
+            return ch2 if cid == 1 else None
+    store2 = rp.RulesPosts(Bot2(), path=os.path.join(d, 'rules2.json'))
+    store2.data.update(posts=['new 1', 'new 2'], takeover_pending=True)
+    asyncio.run(store2.takeover())
+    saved = json.load(open(rp.OLD_POSTS_FILE))['posts']
+    assert [p['content'] for p in saved] == ['old rules 1', 'old rules 2']
+    assert [u['name'] for u in saved[1]['reactions']['✅']] == ['Amy', 'Bob']
+    assert ch2.log.index(('delete', 1)) < ch2.log.index(('send', 101)), 'old posts go before new ones post'
+    assert not store2.data['takeover_pending'] and len(store2.data['message_ids']) == 2
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -8316,4 +8425,5 @@ if __name__ == '__main__':
     test_ask_ai_quotes_rules_from_the_rulebook_copy()
     test_ask_ai_audit_fixes_chat_numbers_war_order_and_groq_hiccups()
     test_rules_sync_renders_posts_and_live_copy_wins()
+    test_rules_posts_links_publish_and_takeover()
     print('All smoke tests passed.')

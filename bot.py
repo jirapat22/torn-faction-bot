@@ -125,6 +125,7 @@ fly_tracker = None
 chain_event_manager = None
 target_manager = None
 chain_log = None
+rules_store = None
 _initialized = False  # Prevent re-initialization on reconnect
 
 
@@ -187,7 +188,7 @@ async def on_ready():
     global inactivity_tracker, chain_tracker, war_tracker, verification_system
     global role_sync_manager, activity_profile_manager, enemy_watchlist, availability_manager
     global event_reminder_manager, stakeout_manager, fly_tracker, _initialized
-    global strike_manager, chain_event_manager, target_manager, chain_log
+    global strike_manager, chain_event_manager, target_manager, chain_log, rules_store
 
     try:
         logger.info(f'Bot logged in as {bot.user.name} (ID: {bot.user.id})')
@@ -358,6 +359,12 @@ async def on_ready():
         # "Add to targets" button working on every retal posted before a restart.
         bot.add_view(RetalView(target_manager))
         await setup_target_commands(bot, target_manager)
+
+        # The bot posts the rulebook in #faction-edicts itself, so /rules can
+        # edit it (features/rules_posts.py).
+        from features.rules_posts import RulesPosts, setup_rules_commands
+        rules_store = RulesPosts(bot)
+        await setup_rules_commands(bot, rules_store)
 
         # "@bot how active was X?": management asks in plain English and an AI
         # answers from the bot's own records, every number checked against
@@ -915,6 +922,9 @@ async def rules_sync_check():
     """Copy #faction-edicts into data/faction_rules_live.md so "@ApexPunk what's
     the OC rule?" quotes the rules as posted (features/rules_sync.py)."""
     try:
+        # One-time handover of the rules posts from Pat to the bot.
+        if rules_store is not None and rules_store.data.get('takeover_pending'):
+            await rules_store.takeover()
         from features.rules_sync import refresh
         await refresh(bot)
     except Exception as e:

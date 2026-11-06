@@ -58,7 +58,11 @@ async def refresh(bot, path=LIVE_FILE):
     except Exception as e:   # Forbidden, HTTP errors: keep the last good copy
         logger.warning(f'Rules sync: could not read the rules channel ({e!r}), keeping the last copy')
         return None
-    posts = [m.content for m in msgs if not m.author.bot and (m.content or '').strip()]
+    # People's posts, plus the bot's OWN (it posts the rulebook itself now,
+    # features/rules_posts.py). Other bots' messages are never rules.
+    me = bot.user.id if bot.user else None
+    posts = [m.content for m in msgs
+             if (not m.author.bot or m.author.id == me) and (m.content or '').strip()]
     if not posts:
         # Blank posts usually mean the Message Content intent is off again.
         logger.warning(f'Rules sync: {len(msgs)} message(s) but no readable text, keeping the last copy')
