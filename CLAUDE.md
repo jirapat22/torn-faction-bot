@@ -141,13 +141,15 @@ The design rule is **the AI must not make up numbers**, because strikes get deci
 - **Unsure means ask, never guess.** Names match only exactly, by ID, or by a piece fitting one member; typos and multi-matches return "did you mean...?" (`FactBook.resolve`). If no tool found anything, the bot's own question replaces whatever the AI wrote. `ask_back` / `cannot_answer` tools let the AI stop and ask. `tidy_answer()` strips AI sentences about unfound names and adds "I don't keep battle stats" etc. (`NOT_RECORDED`): asked for battle stats, the model once answered with war hits.
 - Both `@ApexPunk` choices work: the bot user and its same-named managed role (`bot_role_ids`). A message the bot is not allowed to read (reply with ping off) arrives blank and gets a hint instead of silence.
 
+Wars 40834 and 46089 were archived with no members; `scripts/backfill_empty_wars.py` restored hits made from the v2 war report and marks them `incoming_unknown` (hits taken/hosps left out, too old for the attacks log; `_hosp()` shows them as unknown). The 📎 data is behind a private button (`ShowDataView`, one fixed custom_id).
+
 Activity profiles of leavers are now kept 365 days (not 7) so they can be asked about; every faction-wide view reads `current_ids()` so ex-members don't skew Coverage or the roster.
 
 ### State and persistence
 
 `data/*.json` is gitignored and lives in `~/Projects/mac-server/data/apexpunk/` on the Mac, mounted into the container (it survives rebuilds). Files are written atomically via `utils/helpers.py`. There is no migration system, new fields must be read defensively with `.get(...)` and backfilled on write, because live records predate them.
 
-Anything accumulating per-player needs an explicit retention policy; several files grow forever otherwise. Current ones: activity profiles prune after 365 days absent from the roster (kept for "@bot" lookups), chain_session keeps 24 hours.
+Anything accumulating per-player needs an explicit retention policy; several files grow forever otherwise. Current ones: activity profiles prune after 365 days absent from the roster (kept for "@bot" lookups), chain_session keeps 24 hours (live board only; it keys chains by LENGTH, so two same-length chains in a day collide), `chain_log.json` keeps a year of per-member chain hits keyed by Torn's real chain ID (`features/chain_log.py`, ~2 MB/year, backfilled 60 days at 15 reports per 5-minute tick).
 
 ## Conventions
 
