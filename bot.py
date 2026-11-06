@@ -378,6 +378,8 @@ async def on_ready():
         bot.add_listener(ask_ai.on_message, 'on_message')
         from features.ask_ai import ShowDataView
         bot.add_view(ShowDataView(ask_ai))   # keeps old 📎 buttons answering after a restart
+        from features.announce import DraftView
+        bot.add_view(DraftView(ask_ai.drafts))   # draft buttons say "expired" after a restart
 
         # Initialize faction tools
         await setup_faction_commands(bot)

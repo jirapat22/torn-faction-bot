@@ -7,7 +7,7 @@ A Discord bot for a Torn.com faction (Ascended Punks), running on Pat's home Mac
 ## Commands
 
 ```bash
-<py> -m pytest -q tests/          # full suite (152 tests), the one to trust
+<py> -m pytest -q tests/          # full suite (154 tests), the one to trust
 <py> -m pytest -q tests/test_imports.py::test_flytrack_logic   # single test
 <py> tests/test_imports.py        # runs test_imports.py ONLY, see note below
 <py> bot.py                       # run locally (needs .env)
@@ -142,6 +142,10 @@ The design rule is **the AI must not make up numbers**, because strikes get deci
 - Both `@ApexPunk` choices work: the bot user and its same-named managed role (`bot_role_ids`). A message the bot is not allowed to read (reply with ping off) arrives blank and gets a hint instead of silence.
 
 **Personality and chat.** `PERSONALITY` in the prompt (Pat's choices, 07/11/2026): punk, cheeky, loyal, mild swearing, Torn slang and emojis in chat, one neutral flavour line at most in records answers, never judges a member. Plain chat (no tools) is only posted when `is_small_talk()` passes: no stats word in the question, no member named on either side, and no sentence putting a number next to a stats word (otherwise "we made 500 hits" would pass as chat). "Is X lazy?" gets an in-character refusal plus an offer of the records. Rules questions go through the `faction_rules` tool. Its source is `data/faction_rules_live.md`, synced from #faction-edicts on startup and every 30 min (`features/rules_sync.py`, needs the **Message Content intent**, enabled in the portal 07/11/2026 as "limited"). A failed or blank read keeps the last good copy; `features/faction_rules.md` is only the fallback before the first sync. **The bot posts the rulebook itself** (`features/rules_posts.py`, since 07/11/2026): `data/rules_posts.json` is the source of truth, `/rules action:Edit post:N` (management) opens a box and edits the bot's message in place, typed `#war-room` becomes a real `<#id>` link (`names_to_links`, also matching names without their emoji prefix). Pat's original posts and their ✅ reactors are saved in `data/rules_old_posts.json`. Rule numbers were taken out of the prompt on purpose: anything in the prompt counts as an allowed number in every answer.
+
+**Announcements by chat** (`features/announce.py`, Pat's design 07/11/2026): "@ApexPunk make an announcement about..." makes the AI ask one question at a time (`announce_ask`) until it has what, when, channel (default `ANNOUNCEMENTS_CHANNEL_ID`) and who to ping (always asked), then `announce_draft` shows a card with ✅ Post / ✏️ Change / ❌ Cancel. Nothing posts until the drafter presses Post; only they can press. Every number in a draft must appear in what the person said (an invented time becomes a question). Channel and role names are resolved for real; the post only pings what the card shows. While drafting, the drafter's plain replies count without @ApexPunk (`AskAI.drafting`); everywhere else a typed @ApexPunk is required.
+
+Every answer is also written to `data/logs/ask_ai.jsonl` (question, answer, provider, data used; 2 MB, one old copy) so odd answers can be traced. When the AI gives up, the bot itself tries "did you mean <close name>?" (`near_names`) and, for rules-ish questions (`RULES_CUE`), quotes the rulebook directly.
 
 Wars 40834 and 46089 were archived with no members; `scripts/backfill_empty_wars.py` restored hits made from the v2 war report and marks them `incoming_unknown` (hits taken/hosps left out, too old for the attacks log; `_hosp()` shows them as unknown). The 📎 data is behind a private button (`ShowDataView`, one fixed custom_id).
 

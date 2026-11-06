@@ -7892,7 +7892,7 @@ def test_ask_ai_wrong_name_gets_a_question_not_an_ai_guess():
 
     nothing = asyncio.run(answer_question(None, 'hello?', FactBook(d, roster={}), providers=[
         ('fake', provider([], 'BunnyBull is great.'))]))
-    assert nothing.kind == 'ask' and 'Which member or war' in nothing.text
+    assert nothing.kind == 'ask' and 'Not sure what you' in nothing.text and 'BunnyBull' not in nothing.text
 
     partial = asyncio.run(answer_question(None, 'BunnyBull and Ghosty?', FactBook(d, roster={}), providers=[
         ('fake', provider([('member_report', {'name': 'BunnyBull'}), ('member_report', {'name': 'Ghosty'})],
@@ -7921,7 +7921,7 @@ def test_ask_ai_wrong_name_gets_a_question_not_an_ai_guess():
 
     nope = asyncio.run(answer_question(None, "what's BunnyBull's networth?", FactBook(d, roster={}), providers=[
         ('fake', provider([('cannot_answer', {'reason': 'The bot does not record networth.'})], 'unused'))]))
-    assert nope.kind == 'ask' and 'networth' in nope.text and "I don't have battle stats" in nope.text
+    assert nope.kind == 'ask' and 'networth' in nope.text and '@ApexPunk help' in nope.text
 
     # Asked for something never recorded, the bot itself says so, even if
     # the AI answered with something else that happens to be real.
@@ -8335,6 +8335,120 @@ def test_ask_ai_backup_ai_never_words_records():
     assert hi.kind == 'chat' and hi.text == 'Yo! 😎'
 
 
+def test_announcement_drafts_ask_check_numbers_and_resolve_targets():
+    """
+    Announcements by chat (features/announce.py): the AI asks for what's
+    missing, then shows a draft; an invented detail (a time nobody said)
+    becomes a question instead of a draft; channels resolve with or
+    without their emoji; pings only ever ping what the draft shows.
+    """
+    import asyncio, tempfile
+    import discord
+    import features.announce as an
+    from features.ask_ai import FactBook, answer_question
+
+    def provider(calls):
+        async def ask(session, messages, fb, used):
+            for name, args in calls:
+                used.append((name, args, fb.run(name, args)))
+                if fb.final:
+                    return fb.final, list(messages)
+            return 'unused', list(messages)
+        return ask
+    fb = lambda: FactBook(tempfile.mkdtemp(), roster={})
+
+    q = asyncio.run(answer_question(None, 'make an announcement about the war', fb(), providers=[
+        ('fake', provider([('announce_ask', {'question': 'When does it start, and who should I ping?'})]))]))
+    assert q.kind == 'announce_ask' and 'who should I ping' in q.text
+
+    history = [{'role': 'user', 'content': 'make an announcement about the war'},
+               {'role': 'assistant', 'content': 'When does it start?'}]
+    draft = asyncio.run(answer_question(None, 'friday 18:00 TCT, ping everyone', fb(), history=history, providers=[
+        ('fake', provider([('announce_draft', {'channel': '', 'ping': 'everyone',
+                                               'text': 'War starts **Friday 18:00 TCT**!'})]))]))
+    assert draft.kind == 'draft' and draft.draft['ping'] == 'everyone'
+
+    made_up = asyncio.run(answer_question(None, 'make an announcement about the war, ping nobody', fb(), providers=[
+        ('fake', provider([('announce_draft', {'channel': '', 'ping': 'none',
+                                               'text': 'War starts Friday at 20:00!'})]))]))
+    assert made_up.kind == 'announce_ask' and '20' in made_up.text and 'where do' in made_up.text
+
+    class Ch:
+        def __init__(self, i, name):
+            self.id, self.name, self.mention = i, name, f'<#{i}>'
+    class Role:
+        def __init__(self, i, name):
+            self.id, self.name, self.mention = i, name, f'<@&{i}>'
+    class Guild:
+        channels = [Ch(1, '📢-ascended-broadcasts'), Ch(2, '⚔️-war-room')]
+        threads = []
+        roles = [Role(7, 'Punks')]
+        def get_channel(self, i):
+            return next((c for c in self.channels if c.id == i), None)
+        def get_role(self, i):
+            return next((r for r in self.roles if r.id == i), None)
+    g = Guild()
+    an.ANNOUNCEMENTS_CHANNEL_ID = 1
+    assert an.resolve_channel(g, '').id == 1
+    assert an.resolve_channel(g, 'war-room').id == 2 and an.resolve_channel(g, '#⚔️-war-room').id == 2
+    assert an.resolve_channel(g, 'nowhere') is None
+    prefix, allowed, label = an.resolve_ping(g, 'none')
+    assert prefix == '' and allowed.everyone is False and allowed.roles is False
+    prefix, allowed, label = an.resolve_ping(g, '@everyone')
+    assert prefix == '@everyone' and allowed.everyone is True and allowed.roles is False
+    prefix, allowed, label = an.resolve_ping(g, 'punks')
+    assert prefix == '<@&7>' and allowed.roles == [g.roles[0]] and allowed.everyone is False
+    assert an.resolve_ping(g, 'Ghosts') is None
+
+
+def test_ask_ai_second_audit_fixes():
+    """
+    Second live audit (07/11/2026), 25 questions on real data:
+    - "how is mrdeth doing?" got "which member?"; now "did you mean MrDeath?";
+    - "what happens if I mug someone in war?" got "not sure"; now the rulebook;
+    - member 3340684's Torn name really is "3340684", not a missing name;
+    - "how many chains this week?" is answerable from the chain history;
+    - the raw-records fallback leads with the lines the question is about.
+    """
+    import asyncio, json, os, tempfile, time
+    import features.ask_ai as a
+
+    now = time.time()
+    d = tempfile.mkdtemp()
+    with open(os.path.join(d, 'activity_profile.json'), 'w') as f:
+        json.dump({'1': {'name': 'MrDeath'}, '2': {'name': '3340684'}}, f)
+    with open(os.path.join(d, 'chain_log.json'), 'w') as f:
+        json.dump({'chains': {'9': {'end': now - 86400, 'length': 25, 'respect': 40.5, 'hits': {'1': [20, 30.0]},
+                                    'present': ['2']},
+                              '8': {'end': now - 20 * 86400, 'length': 10, 'respect': 9.0, 'hits': {'2': [10, 9.0]},
+                                    'present': []}}, 'backfill_done': True}, f)
+    roster = {'1': {'name': 'MrDeath', 'level': 5}, '2': {'name': '3340684', 'level': 5}}
+    fb = lambda: a.FactBook(d, roster=roster, now=now)
+
+    assert a.near_names('how is mrdeth doing?', fb()) == ['MrDeath']
+    assert a.near_names('how is MrDeath doing?', fb()) == []
+    async def asks(session, messages, f, used):
+        used.append(('ask_back', {}, f.run('ask_back', {'question': 'Which member?'})))
+        return f.final, list(messages)
+    ans = asyncio.run(a.answer_question(None, 'how is mrdeth doing?', fb(), providers=[('fake', asks)]))
+    assert ans.kind == 'ask' and '**MrDeath**' in ans.text
+
+    async def no_tools(session, messages, f, used):
+        return 'No idea, mate.', list(messages)
+    rules = asyncio.run(a.answer_question(None, 'what happens if I mug someone in war?', fb(),
+                                          providers=[('fake', no_tools)]))
+    assert rules.kind == 'answer' and "rulebook says" in rules.text and 'mug' in rules.text.lower()
+
+    table = fb().faction_table()
+    assert '- 3340684 [2]' in table and 'name not on record' not in table
+    assert 'Faction chains finished in the last 7 days: 1 chains, 20 hits, 40.5 respect, longest chain 25.' in table
+    assert 'last 30 days: 2 chains, 30 hits' in table
+
+    raw = a.raw_records_text('Fewest days: x\nIn the Discord server but not linked to the bot (1): Bob.',
+                             'who is not linked to the bot?')
+    assert raw.index('not linked') < raw.index('Fewest days')
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -8485,4 +8599,6 @@ if __name__ == '__main__':
     test_rules_posts_links_publish_and_takeover()
     test_ask_ai_knows_who_is_not_in_discord()
     test_ask_ai_backup_ai_never_words_records()
+    test_announcement_drafts_ask_check_numbers_and_resolve_targets()
+    test_ask_ai_second_audit_fixes()
     print('All smoke tests passed.')
