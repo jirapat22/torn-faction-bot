@@ -7957,6 +7957,43 @@ def test_ask_ai_reads_member_and_bot_role_mentions():
     assert q == 'how active is BunnyBull [4474400] vs Stranger (Discord user not linked to a Torn account)?', q
 
 
+def test_ask_ai_faction_rankings_and_record_gaps():
+    """
+    Rankings come ready-made (ties included), Groq's "wait N seconds" is
+    parsed so the bot can wait instead of falling back to the slow local AI,
+    and a war saved without member stats is described as the BOT's gap, not
+    as the member missing that war (Pat: "I participated in all 5").
+    """
+    import json, os, tempfile, time
+    from features.ask_ai import FactBook, _retry_after
+
+    assert _retry_after({'retry-after': '7'}) == 7
+    assert _retry_after({'x-ratelimit-reset-tokens': '577ms'}) == 0.577
+    assert _retry_after({'x-ratelimit-reset-tokens': '1m2.5s'}) == 62.5
+    assert _retry_after({}) is None
+
+    now = time.time()
+    d = tempfile.mkdtemp()
+    with open(os.path.join(d, 'war_member_stats.json'), 'w') as f:
+        json.dump({'wars': [
+            {'war_id': '1', 'timestamp': now - 90 * 86400, 'enemy_name': 'Empty', 'members': {}},
+            {'war_id': '2', 'timestamp': now - 9 * 86400, 'enemy_name': 'Kids', 'result': 'defeat',
+             'members': {'5': {'name': 'Bob', 'attacks': 0, 'defends': 9},
+                         '6': {'name': 'Amy', 'attacks': 0, 'defends': 2},
+                         '7': {'name': 'Cid', 'attacks': 40, 'defends': 1}}}]}, f)
+    roster = {'5': {'name': 'Bob', 'level': 9, 'last_action': {'timestamp': now - 5 * 86400}},
+              '6': {'name': 'Amy', 'level': 9, 'last_action': {'timestamp': now - 3600}},
+              '7': {'name': 'Cid', 'level': 9, 'last_action': {'timestamp': now - 7200}}}
+    fb = FactBook(d, roster=roster, now=now)
+    table = fb.faction_table()
+    assert 'Longest since their last action: Bob (5 days ago)' in table, table
+    assert 'Fewest hits made last war: ' in table and 'Amy (0 hits)' in table and 'Bob (0 hits)' in table
+    assert 'Most hits taken from the enemy last war: Bob (9 taken)' in table
+
+    report = fb.member_report('Cid')
+    assert 'War 1 vs Empty were saved WITHOUT any member stats' in report
+    assert 'not a sign the member missed those wars' in report
+
 
 if __name__ == '__main__':
     test_all_modules_import()
@@ -8100,4 +8137,5 @@ if __name__ == '__main__':
     test_ask_ai_asks_back_instead_of_guessing_who_was_meant()
     test_ask_ai_wrong_name_gets_a_question_not_an_ai_guess()
     test_ask_ai_reads_member_and_bot_role_mentions()
+    test_ask_ai_faction_rankings_and_record_gaps()
     print('All smoke tests passed.')

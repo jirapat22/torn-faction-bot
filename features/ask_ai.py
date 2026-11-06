@@ -369,8 +369,21 @@ class FactBook:
 
         # Wars
         wars = self._member_wars(tid)
+        with_data = [w for w in self.wars if w.get('members')]
+        empty = [w for w in self.wars if not w.get('members')]
+        gap = ''
+        if empty:
+            gap = (' ' + ', '.join(f'War {w.get("war_id")} vs {w.get("enemy_name")}' for w in empty)
+                   + ' were saved WITHOUT any member stats, so nobody\'s hits are known for them. '
+                   'That is a gap in the bot\'s records, not a sign the member missed those wars.')
+        missing = [w for w in with_data if w not in wars]
+        if missing:
+            gap += (' Not in the member list of: ' + ', '.join(f'War {w.get("war_id")}' for w in missing)
+                    + ' (possibly not in the faction yet).')
+        if wars or gap:
+            lines.append(f'WARS: the bot keeps the last {len(self.wars)} wars and has member stats for '
+                         f'{len(with_data)} of them; this member appears in {len(wars)}.{gap}')
         if wars:
-            lines.append(f'WARS (bot keeps the last {len(self.wars)}; they were in {len(wars)}):')
             made = taken = outside = 0
             unknown_taken = False
             for w in wars:
@@ -402,11 +415,11 @@ class FactBook:
             hits = sum((c['members'][tid] or {}).get('attacks', 0) for c in chains)
             first = min(c.get('start') or c.get('timestamp', 0) for c in chains)
             last = max(c.get('end') or c.get('timestamp', 0) for c in chains)
-            lines.append(f'CHAINS (bot keeps only the latest chain session): they were in the faction for '
-                         f'{len(chains)} chains between {_date(first)} and {_date(last)}, and made {hits} chain hits '
-                         'in total across them.')
+            lines.append(f'CHAINS: the bot only saves per-member chain hits for about a day, so the only chains on '
+                         f'record are {len(chains)} chains between {_date(first)} and {_date(last)}. They made {hits} '
+                         'chain hits in total across those. Older chains are not on record.')
         else:
-            lines.append('CHAINS: not in any chain the bot still has on record (it keeps only the latest session).')
+            lines.append('CHAINS: none on record (the bot only saves per-member chain hits for about a day).')
 
         # OC
         if tid in self.oc:
@@ -460,18 +473,39 @@ class FactBook:
         rows.sort(key=keys.get(sort_by, keys['name']))
         war_txt = (f'war {last_war.get("war_id")} vs {last_war.get("enemy_name")} ({_date(last_war.get("timestamp", 0))})'
                    if last_war else 'no war on record')
-        out = [f'FACTION: {len(rows)} members now. Sorted by {sort_by}. "Last war" = {war_txt}. '
-               '"-" means not in that record.']
+
+        # Ready-made rankings: the AI copies these instead of ranking rows
+        # itself (it once answered "offline longest" from the days-online
+        # column). Ties are listed together so nobody is silently left out.
+        def ranked(label, key, fmt, worst_first=True, n=3, skip=lambda r: False):
+            pool = [r for r in rows if not skip(r)]
+            if not pool:
+                return f'{label}: no data.'
+            pool.sort(key=key, reverse=worst_first)
+            cut = key(pool[min(n, len(pool)) - 1])
+            pick = [r for r in pool if (key(r) >= cut if worst_first else key(r) <= cut)]
+            return f'{label}: ' + ', '.join(f'{r["name"]} ({fmt(r)})' for r in pick) + '.'
+        out = [f'FACTION: {len(rows)} members now. "Last war" = {war_txt}.',
+               ranked('Longest since their last action', lambda r: -(r['la'] or 0), lambda r: r['off'],
+                      skip=lambda r: not r['la']),
+               ranked('Fewest days online in the last 14 days', lambda r: -r['days'], lambda r: f'{r["days"]} days'),
+               ranked('Lowest online share', lambda r: -(r['pct'] if r['pct'] is not None else 101),
+                      lambda r: f'{r["pct"]}%', skip=lambda r: r['pct'] is None),
+               ranked('Fewest hits made last war', lambda r: -r['made'], lambda r: f'{r["made"]} hits',
+                      skip=lambda r: r['made'] is None),
+               ranked('Most hits taken from the enemy last war', lambda r: r['taken'], lambda r: f'{r["taken"]} taken',
+                      skip=lambda r: r['taken'] is None),
+               ranked('Longest since an OC', lambda r: r['oc'] if r['oc'] is not None else 10 ** 6,
+                      lambda r: 'never seen in one' if r['oc'] is None else f'{r["oc"]} days'),
+               ranked('Most active strikes', lambda r: r['strikes'], lambda r: f'{r["strikes"]}',
+                      skip=lambda r: not r['strikes']),
+               f'Every member, sorted by {sort_by} (columns: last action | online share | days online of last 14 '
+               '| last war hits made/taken | days since OC | active strikes; "-" = not in that record):']
         for r in rows:
-            out.append(
-                f'- {r["name"]} [{r["tid"]}] lvl {r["level"]}: '
-                f'last action {"unknown" if r["off"] is None else r["off"]}, '
-                f'online share {"-" if r["pct"] is None else str(r["pct"]) + "%"}, '
-                f'days online in last 14 days {r["days"]}, '
-                f'last war hits made {"-" if r["made"] is None else r["made"]}, '
-                f'last war hits taken {"-" if r["made"] is None else _num(r["taken"])}, '
-                f'days since OC {"never" if r["oc"] is None else r["oc"]}, '
-                f'active strikes {r["strikes"]}')
+            war = '-' if r['made'] is None else f'{r["made"]}/{_num(r["taken"])}'
+            out.append(f'- {r["name"]} [{r["tid"]}] L{r["level"]} | {r["off"] or "unknown"} | '
+                       f'{"-" if r["pct"] is None else str(r["pct"]) + "%"} | {r["days"]} | {war} | '
+                       f'{"never" if r["oc"] is None else r["oc"]} | {r["strikes"]}')
         return '\n'.join(out)
 
     def war_report(self, war='latest'):
@@ -638,6 +672,10 @@ def system_prompt():
         'no records that could answer it, call cannot_answer.\n'
         '- "Battle stats" means strength, defence, speed and dexterity. The bot has NONE. War hits are not '
         'battle stats: if that is all they asked, call cannot_answer.\n'
+        '- Whenever the user names someone, call member_report with that name EVEN IF it looks misspelt: '
+        'it finds near matches and suggests them. Only use ask_back for a name when no name was given.\n'
+        '- If the records have gaps (wars without member stats, chains not kept), say it is a gap in the '
+        'bot\'s records. Never present a gap as the member missing something.\n'
         '- A name that is not an exact match is NOT the same person. Never treat a "did you mean" '
         'suggestion as the answer.\n'
         '- "he", "she", "they", "them" refer to the member from earlier in the conversation; if there is no '
@@ -709,17 +747,27 @@ async def _ask_groq(session, messages, facts, used):
     if not key:
         raise NotCapable('no Groq key set')
     msgs = list(messages)
-    for _ in range(MAX_ROUNDS):
+    waited = False
+    for _ in range(MAX_ROUNDS + 1):   # +1: one round may be spent waiting out the rate limit
         try:
             async with session.post('https://api.groq.com/openai/v1/chat/completions',
                                     timeout=aiohttp.ClientTimeout(total=GROQ_TIMEOUT_S),
                                     headers={'Authorization': f'Bearer {key}'},
                                     json={'model': GROQ_MODEL, 'messages': msgs, 'tools': TOOL_SPECS,
                                           'tool_choice': 'auto', 'temperature': 0.2}) as r:
+                if r.status == 429 and not waited:
+                    # Free plan: 8,000 tokens/min. A big question can hit it;
+                    # waiting a few seconds beats the ~40-90s local fallback.
+                    wait = _retry_after(r.headers)
+                    if wait is not None and wait <= GROQ_MAX_WAIT_S:
+                        waited = True
+                        logger.info(f'ask_ai: Groq rate limit, waiting {wait:.0f}s')
+                        await asyncio.sleep(wait + 0.5)
+                        continue
                 r.raise_for_status()
                 data = await r.json()
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-            raise NotCapable(f'Groq error: {type(e).__name__}')
+            raise NotCapable(f'Groq error: {type(e).__name__} {getattr(e, "status", "")}'.strip())
         msg = data['choices'][0]['message']
         calls = msg.get('tool_calls') or []
         if not calls:
@@ -747,6 +795,21 @@ async def _ask_groq(session, messages, facts, used):
 # no card: 1,000 requests/day, 8,000 tokens/min. Over the limit Groq refuses
 # (HTTP 429), which is a NotCapable like any outage, so the Mac answers instead.
 PROVIDERS = [('Groq', _ask_groq), ('local AI', _ask_local)]
+GROQ_MAX_WAIT_S = 30
+
+
+def _retry_after(headers):
+    """Seconds Groq asks us to wait: 'retry-after: 7', or a reset like '6.5s' / '1m2s'."""
+    raw = headers.get('retry-after') or headers.get('x-ratelimit-reset-tokens') or ''
+    try:
+        return float(raw)
+    except ValueError:
+        pass
+    m = re.fullmatch(r'(?:(\d+)m)?([\d.]+)(m?s)', raw.strip())
+    if not m:
+        return None
+    secs = float(m.group(2)) / (1000 if m.group(3) == 'ms' else 1)
+    return secs + 60 * int(m.group(1) or 0)
 
 
 class Answer:
