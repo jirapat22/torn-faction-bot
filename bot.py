@@ -935,6 +935,9 @@ async def rules_sync_check():
                 logger.info(f'Rules posts: {summary}')
         from features.rules_sync import refresh
         await refresh(bot)
+        # Torn's event calendar for @ApexPunk (fetched at most once a day).
+        from features.torn_events import refresh as refresh_calendar
+        await refresh_calendar()
     except Exception as e:
         logger.error(f'Error in rules sync: {e!r}')
 

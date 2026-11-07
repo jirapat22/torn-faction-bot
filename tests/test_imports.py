@@ -8553,6 +8553,35 @@ def test_announcement_drafts_keep_only_what_was_said():
     assert len(cut) == 3
 
 
+def test_torn_events_from_the_official_calendar():
+    """
+    Event facts come from Torn's own calendar (saved by features/torn_events.py),
+    not AI memory: World Diabetes Day is "Candy effects are tripled", a
+    one-day event. "war" must not match "Awareness Week". Faction weekly
+    events are Pat's own descriptions.
+    """
+    import json, os, tempfile, time
+    from datetime import datetime, timezone
+    from features.torn_events import events_text
+
+    ts = lambda s: datetime.strptime(s, '%d/%m/%Y %H:%M').replace(tzinfo=timezone.utc).timestamp()
+    d = tempfile.mkdtemp()
+    path = os.path.join(d, 'torn_calendar.json')
+    json.dump({'fetched_at': time.time(), 'competitions': [], 'events': [
+        {'title': 'World Diabetes Day', 'start': ts('14/11/2026 00:00'), 'end': ts('14/11/2026 23:59'),
+         'description': 'Candy effects are tripled'},
+        {'title': 'Awareness Awareness Week', 'start': ts('19/01/2026 00:00'), 'end': ts('25/01/2026 23:59'),
+         'description': 'Increased awareness for one week'}]}, open(path, 'w'))
+    now = ts('07/11/2026 12:00')
+    wdd = events_text('worlds diabetes day', path=path, now=now)
+    assert 'World Diabetes Day (Torn event, upcoming): Saturday 14/11/2026 00:00' in wdd
+    assert '24 hours' in wdd and '"Candy effects are tripled"' in wdd and 'Awareness' not in wdd
+    war = events_text('war', path=path, now=now)
+    assert 'Ranked war (faction event)' in war and 'a week at most' in war and 'Awareness' not in war
+    assert 'Happy jump (faction event): A weekly faction event that lasts 24 hours.' in events_text('happy jump', path=path, now=now)
+    assert 'not saved yet' in events_text('', path=os.path.join(d, 'missing.json'), now=now)
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -8707,4 +8736,5 @@ if __name__ == '__main__':
     test_ask_ai_second_audit_fixes()
     test_announcement_preview_is_exactly_the_post()
     test_announcement_drafts_keep_only_what_was_said()
+    test_torn_events_from_the_official_calendar()
     print('All smoke tests passed.')

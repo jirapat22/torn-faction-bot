@@ -235,6 +235,7 @@ class FactBook:
 
     def __init__(self, data_dir='data', roster=None, strike_manager=None, now=None, discord_members=None):
         self.now = now or time.time()
+        self.data_dir = data_dir
         d = lambda f: os.path.join(data_dir, f)
         self.profiles = _load(d('activity_profile.json'), {})
         self.wars = _load(d('war_member_stats.json'), {}).get('wars', [])
@@ -784,6 +785,11 @@ class FactBook:
                 return self.strikes_overview()
             if name == 'faction_rules':
                 return self.faction_rules(args.get('topic', ''))
+            if name == 'torn_events':
+                from features.torn_events import events_text, CALENDAR_FILE
+                self.found_any = True
+                return events_text(args.get('query', ''), path=os.path.join(self.data_dir, 'torn_calendar.json'),
+                                   now=self.now)
             if name == 'announce_ask':
                 self.final = str(args.get('question') or '').strip() or 'What should the announcement say?'
                 self.final_kind = 'announce_ask'
@@ -848,6 +854,14 @@ TOOL_SPECS = [
             'topic': {'type': 'string', 'description': 'What the rule is about, e.g. "OC", "chain minimum", '
                                                        '"strikes", "leave notice"'}}, 'required': ['topic']}}},
     {'type': 'function', 'function': {
+        'name': 'torn_events',
+        'description': "Torn's official event calendar (dates in TCT, length, and the effect in Torn's own words, "
+                       'e.g. World Diabetes Day, Trick or Treat, Christmas Town) and our faction weekly events '
+                       '(ranked war, chain, happy jump). Use for ANY question or announcement that names an event.',
+        'parameters': {'type': 'object', 'properties': {
+            'query': {'type': 'string', 'description': 'Event name, or "" for what is coming up'}},
+            'required': []}}},
+    {'type': 'function', 'function': {
         'name': 'announce_ask',
         'description': 'While writing an announcement: ask the user ONE short question for a missing detail '
                        '(what it is about, exact date/time, which channel, who to ping).',
@@ -890,6 +904,7 @@ CAPABILITIES = (
     '- who has left the faction (kept for a year)\n'
     '- who is not in our Discord server, or in it but not linked to the bot\n'
     '- the faction rules, word for word\n'
+    '- Torn events (official dates and effects) and our weekly war, chain and happy jump\n'
     'I don\'t have battle stats, money, items, Xanax use, or chat messages.'
 )
 
@@ -966,8 +981,10 @@ def system_prompt():
         'it is about or who to ping. Do NOT ask which channel: use "" (the announcements channel) unless they '
         'name one. Never invent a detail (no made-up dates, times, numbers or names), and never add '
         'instructions or requirements they did not give. Never describe what an event or activity is, or what '
-        'people should do at it, unless they told you: each item is its name, its date/time, and only the '
-        'details they gave. Lines with things they did not say are cut automatically. Voice: clear and easy to '
+        'people should do at it, unless they told you or torn_events says it: call torn_events for any Torn '
+        'event they name and you may add its effect in Torn\'s own words (e.g. "candy effects are tripled"). '
+        'If their dates differ from Torn\'s, use THEIR dates (it is their plan). Each item is its name, its '
+        'date/time, and only the details they gave or torn_events gave. Lines with things they did not say are cut automatically. Voice: clear and easy to '
         'scan, key details in bold, at most one short cheeky punk line at the end (no Torn slang or advice in '
         'it), no more than 2 emojis, under 1500 characters. Write times exactly as given (TCT). If they reply to '
         'a draft with changes or extra details, call announce_draft again with the new version.\n'
@@ -1409,6 +1426,7 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
     """
     providers = providers or PROVIDERS
     sys_txt = system_prompt()
+    sys_static = re.sub(r'It is now [^\n]*', '', sys_txt)
     base = [{'role': 'system', 'content': sys_txt}]
     if earlier_facts:
         base.append({'role': 'system', 'content': 'Data from earlier in this conversation:\n' + earlier_facts})
@@ -1425,14 +1443,17 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
             problems.append(f'{pname}: {e}')
             continue
         took = lambda: time.monotonic() - t0
-        sources = lambda: (_facts_text(used), earlier_facts, question, sys_txt)
+        # The prompt's "It is now <date time>" must not count: whatever minute
+        # it happened to be became an "allowed" number (at 01:16, an invented
+        # "16 hits" passed the check).
+        sources = lambda: (_facts_text(used), earlier_facts, question, sys_static)
 
         # 0. Announcements. A draft's numbers (dates, times, amounts) must
         #    come from what the person actually said in this conversation;
         #    an invented "Friday 8pm" becomes a question, never a draft.
         if facts.final_kind in ('draft', 'announce_ask'):
             said = '\n'.join([question] + [t.get('content', '') for t in history or []
-                                            if t.get('role') == 'user'])
+                                            if t.get('role') == 'user'] + [_facts_text(used)])
             said += ' ' + clock_variants(said) + ' 0'   # ":00" minutes are never an invented number
             bad = unsupported_numbers(facts.final, said, earlier_facts)
             if bad and facts.final_kind == 'draft':
