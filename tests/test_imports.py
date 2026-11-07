@@ -8378,6 +8378,19 @@ def test_announcement_drafts_ask_check_numbers_and_resolve_targets():
         ('fake', provider([('announce_draft', {'channel': '', 'ping': 'none',
                                                'text': 'Happy jump **Saturday 13:00 TCT**'})]))]))
     assert pm.kind == 'draft' and pm.unsure == []
+    # Knows what + who to ping, but the AI asks for exact dates anyway: pushed to draft.
+    calls = {'n': 0}
+    async def stubborn(session, messages, f, used):
+        calls['n'] += 1
+        if calls['n'] == 1:
+            used.append(('announce_ask', {}, f.run('announce_ask', {'question': 'What are the exact dates?'})))
+            return f.final, list(messages)
+        used.append(('announce_draft', {}, f.run('announce_draft', {'channel': '', 'ping': 'everyone',
+                                                                     'text': 'War enlistment: the two weeks after'})))
+        return f.final, list(messages)
+    pushed = asyncio.run(answer_question(None, 'make an announcement: we enlist the two weeks after, ping everyone',
+                                         fb(), providers=[('fake', stubborn)]))
+    assert pushed.kind == 'draft' and calls['n'] == 2
     from features.ask_ai import fix_weekdays
     assert fix_weekdays('**Sunday 13/11/2026** to Thursday 15/11/2026, Sat 07/11/2026') == \
         '**Friday 13/11/2026** to Sunday 15/11/2026, Sat 07/11/2026'
@@ -8589,6 +8602,7 @@ def test_torn_events_from_the_official_calendar():
     facts = facts_for(found, path=path, now=now)
     assert 'Candy effects are tripled' in facts and 'lasts 24 hours' in facts and 'Tuesday' in facts
     assert 'Awareness' not in facts
+    assert '10:00 to 16:00 TCT' in facts and 'same time of day' in facts
 
 
 if __name__ == '__main__':

@@ -1333,6 +1333,8 @@ def raw_records_text(facts, question='', limit=1500):
 UNSURE_TEXT = ("Not sure what you're after, boss 🤔 Ask me about a member, a war, chains, OCs, strikes "
                'or the rules. Say `@ApexPunk help` for the full list.')
 ANNOUNCE_RX = re.compile(r'announc\w*', re.I)
+# "ping everyone", "@Ascended Punks", "no ping", "ping nobody": who to ping was said.
+PING_RX = re.compile(r'\bping\w*\b|@everyone|@here|@[A-Z]\w+|\bno\s*ping\b|\bnobody\b', re.I)
 
 
 _DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
@@ -1462,6 +1464,20 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
         # it happened to be became an "allowed" number (at 01:16, an invented
         # "16 hits" passed the check).
         sources = lambda: (_facts_text(used), earlier_facts, question, sys_static)
+
+        # 0a. Announcements: once what + who-to-ping are known, the AI may not
+        #     keep asking (it demanded "exact dates" for "the two weeks after
+        #     that" three times, despite the prompt). One push to draft.
+        if (facts.final_kind == 'announce_ask' or facts.final is not None and facts.final_kind is None) \
+                and ANNOUNCE_RX.search(convo) and PING_RX.search(convo) and not facts.draft:
+            push = msgs + [{'role': 'user', 'content':
+                            'You already have enough: what it is about and who to ping. Do not ask anything. '
+                            'Call announce_draft now, writing any vague timing exactly the way I said it.'}]
+            facts.final = facts.final_kind = None
+            try:
+                await ask(session, push, facts, used)
+            except NotCapable:
+                pass
 
         # 0. Announcements. A draft's numbers (dates, times, amounts) must
         #    come from what the person actually said in this conversation;

@@ -29,6 +29,14 @@ CALENDAR_FILE = 'data/torn_calendar.json'
 REFRESH_EVERY_S = 24 * 3600
 DAY = 86400
 
+# How Torn's calendar works for players (Pat, 07/11/2026): each player picks
+# their own start time in the calendar (seen: 10:00 to 16:00 TCT in 15-minute
+# steps; Pat isn't sure every event uses that window), and the event then ends
+# at that same time of day after its normal length (a one-day event picked at
+# 16:00 runs 16:00 to 16:00 the next day).
+PICK_START_NOTE = ('Players pick their own start time in the Torn calendar (10:00 to 16:00 TCT for at least some '
+                   'events); it then ends at that same time of day after its normal length.')
+
 # Pat's own descriptions. Only facts he gave: no durations or rules made up.
 FACTION_EVENTS = [
     ('Ranked war', 'A weekly faction event. A war lasts a week at most. We enlist first; Torn matchmakes '
@@ -109,7 +117,8 @@ def events_text(query='', path=CALENDAR_FILE, now=None, limit=8):
                      else 'finished' if (e.get('end') or 0) < now else 'upcoming')
             out.append(f'- {e.get("title")} ({e["kind"]}, {state}): {_fmt(e.get("start"))} to '
                        f'{_fmt(e.get("end"))} TCT, {_duration(e.get("start"), e.get("end"))}. '
-                       f'Effect, in Torn\'s words: "{(e.get("description") or "not stated").strip()}"')
+                       f'Effect, in Torn\'s words: "{(e.get("description") or "not stated").strip()}"'
+                       + (f' {PICK_START_NOTE}' if e['kind'] == 'Torn event' else ''))
         if torn and not picked and words:
             out.append(f'No Torn event matching "{query}" in this year\'s calendar.')
     faction = [f for f in FACTION_EVENTS if not words or _matches(words, f[0])]
