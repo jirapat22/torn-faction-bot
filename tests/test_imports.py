@@ -8609,6 +8609,15 @@ def test_torn_events_from_the_official_calendar():
     assert win('Slash Wednesday', '09/12/2026 00:00', '09/12/2026 23:59') == ('09/12 10:00', '11/12 10:00')
     assert win('Trick or Treat', '25/10/2026 00:00', '01/11/2026 23:59') == ('25/10 10:00', '01/11 10:00')
     assert win('Weekend Road Trip', '31/01/2026 12:00', '02/02/2026 11:59') == ('31/01 12:00', '02/02 11:59')
+
+    # Event questions: the bot writes the answer from the DISPLAY lines itself.
+    import asyncio
+    from features.ask_ai import FactBook, answer_question
+    async def dumps(session, messages, f, used):
+        used.append(('torn_events', {'query': ''}, f.run('torn_events', {'query': 'diabetes'})))
+        return 'EVENTS (official...) raw dump', list(messages)
+    ans = asyncio.run(answer_question(None, "what's coming up?", FactBook(d, roster={}), providers=[('fake', dumps)]))
+    assert ans.text.startswith('🍭 **World Diabetes Day** · starts') and 'raw dump' not in ans.text, ans.text
     war = events_text('war', path=path, now=now)
     assert 'Ranked war (faction event)' in war and 'a week at most' in war and 'Awareness' not in war
     assert 'Happy jump (faction event): A weekly faction event that lasts 24 hours.' in events_text('happy jump', path=path, now=now)

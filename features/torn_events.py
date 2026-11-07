@@ -179,6 +179,7 @@ def _event_line(e, now):
     """One event as a fact line, with a ready-to-copy DISPLAY line for answers."""
     title = e.get('title') or 'Unknown event'
     effect = (e.get('description') or 'not stated').strip().rstrip('.')
+    effect = re.split(r'(?<=[.!])\s', effect)[0].rstrip('.!')   # long ones (Christmas Town): first sentence
     emoji = next((v for k, v in EVENT_EMOJI.items() if k.lower() == title.lower()), '🎉')
     start, end, picks = api_window(e)
     if picks:

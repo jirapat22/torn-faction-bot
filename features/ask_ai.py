@@ -1677,6 +1677,15 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
                               f'"how active is {named[0]}?"', pname, '', True, took(), kind='ask')
             return Answer(UNSURE_TEXT, pname, '', True, took(), kind='ask')
 
+        # 2b. Event questions answered only from the event tool: the bot writes
+        #     the answer from the ready-made DISPLAY lines, so every model gives
+        #     the same clean list (the small model once pasted the raw facts).
+        tools = {name for name, _, _ in used}
+        if tools == {'torn_events'}:
+            displays = [l.split('DISPLAY: ', 1)[1] for l in _facts_text(used).split('\n') if 'DISPLAY: ' in l]
+            if displays:
+                return Answer('\n'.join(displays), pname, _facts_text(used), True, took())
+
         # 3. A records answer from the BACKUP AI is not used: twice measured
         #    quoting a real number from the wrong row (the wrong war; another
         #    member's 697 days since an OC), which the number check can't see.
