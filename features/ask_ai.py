@@ -1988,7 +1988,8 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
                     title, _, body = first.partition(':\n')
                     return Answer(f"Here's what the rulebook says ({title[len('RULEBOOK, '):]}):\n{body[:1500]}",
                                   pname, quoted, True, took())
-            named = names_in(question, facts)
+            # "is he lazy?" counts too: `who` is the member the pronoun means.
+            named = names_in(question, facts) or ([who.split(' [')[0]] if who else [])
             if named:
                 who = ', '.join(f'**{n}**' for n in named[:3])
                 return Answer(f"I don't trash-talk the crew 😤 but I can pull {who}'s records. Try "
