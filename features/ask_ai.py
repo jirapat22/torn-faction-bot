@@ -39,7 +39,7 @@ import logging
 import os
 import re
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import aiohttp
 import discord
@@ -1423,6 +1423,26 @@ def ground_draft(text, said):
     return out, cut
 
 
+def fix_durations(text):
+    """
+    "07/11/2026 13:00 – 14/11/2026 13:00 TCT (24 h)": when a range states its
+    length, recompute the end from the start. The AI got this wrong live (24
+    hours after 07/11 13:00 is 08/11 13:00).
+    """
+    rx = re.compile(r'(\d{1,2})/(\d{1,2})/(\d{4})\s+(\d{1,2}):(\d{2})(\s*(?:TCT)?\s*(?:–|—|-|to)\s*)'
+                    r'(\d{1,2})/(\d{1,2})/(\d{4})\s+(\d{1,2}):(\d{2})([^\n(]*)\((\d+)\s*(h|hrs?|hours?)\)', re.I)
+
+    def fix(m):
+        try:
+            start = datetime(int(m.group(3)), int(m.group(2)), int(m.group(1)), int(m.group(4)), int(m.group(5)))
+        except ValueError:
+            return m.group(0)
+        end = start + timedelta(hours=int(m.group(13)))
+        return (f'{m.group(1)}/{m.group(2)}/{m.group(3)} {m.group(4)}:{m.group(5)}{m.group(6)}'
+                f'{end:%d/%m/%Y %H:%M}{m.group(12)}({m.group(13)} {m.group(14)})')
+    return rx.sub(fix, text)
+
+
 def _dates(text):
     """{(day, month)} for every DD/MM or DD/MM/YYYY date in text."""
     return {(int(d), int(m)) for d, m in re.findall(r'\b(\d{1,2})/(\d{1,2})(?:/\d{2,4})?\b', text or '')}
@@ -1497,8 +1517,10 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
         # 0a. Announcements: once what + who-to-ping are known, the AI may not
         #     keep asking (it demanded "exact dates" for "the two weeks after
         #     that" three times, despite the prompt). One push to draft.
-        if (facts.final_kind == 'announce_ask' or facts.final is not None and facts.final_kind is None) \
-                and ANNOUNCE_RX.search(convo) and PING_RX.search(convo) and not facts.draft:
+        # Also when it wrote the announcement as a plain message: that skips the
+        # draft card and its Post button entirely (seen live).
+        if facts.final_kind != 'draft' and ANNOUNCE_RX.search(convo) and PING_RX.search(convo) \
+                and not facts.draft:
             push = msgs + [{'role': 'user', 'content':
                             'You already have enough: what it is about and who to ping. Do not ask anything. '
                             'Call announce_draft now, writing any vague timing exactly the way I said it.'}]
@@ -1533,8 +1555,12 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
                 # Full dates must be ones the PERSON wrote. Event facts carry real
                 # dates too (14/11 for Diabetes Day), so the number check let a
                 # miscalculated "07/11 13:00 to 14/11 13:00 (24 h)" through.
-                person = '\n'.join([question] + [t.get('content', '') for t in history or []
-                                                 if t.get('role') == 'user'])
+                before = facts.draft['text']
+                facts.draft['text'] = fix_durations(before)
+                # An end date the bot computed from their own start + length counts as theirs.
+                derived = ' '.join(f'{d}/{m}' for d, m in _dates(facts.draft['text']) - _dates(before))
+                person = '\n'.join([question, derived] + [t.get('content', '') for t in history or []
+                                                          if t.get('role') == 'user'])
                 bad = sorted(set(bad) | set(dates_not_given(facts.draft['text'], person)))
                 grounded, cut = ground_draft(fix_weekdays(facts.draft['text']), said)
                 if event_names:

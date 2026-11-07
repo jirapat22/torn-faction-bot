@@ -8623,6 +8623,10 @@ def test_torn_events_from_the_official_calendar():
     from features.ask_ai import dates_not_given
     said = 'saturday 7/11/2026 1pm happy jump, 13/11/2026 10:00 TCT to 15/11/2026 16:00 TCT diabetes day'
     assert dates_not_given('07/11/2026 13:00 – 14/11/2026 13:00 (24 h); 13/11 to 15/11', said) == ['14/11']
+    from features.ask_ai import fix_durations
+    assert fix_durations('Saturday 07/11/2026 13:00 – 14/11/2026 13:00 TCT (24 h)') == \
+        'Saturday 07/11/2026 13:00 – 08/11/2026 13:00 TCT (24 h)'
+    assert fix_durations('13/11/2026 10:00 – 15/11/2026 16:00 TCT') == '13/11/2026 10:00 – 15/11/2026 16:00 TCT'
 
 
 if __name__ == '__main__':
