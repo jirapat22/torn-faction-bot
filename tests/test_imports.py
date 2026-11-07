@@ -8595,8 +8595,20 @@ def test_torn_events_from_the_official_calendar():
          'description': 'Life and cooldown penalties for drawing blood are halved'}]}, open(path, 'w'))
     now = ts('07/11/2026 12:00')
     wdd = events_text('worlds diabetes day', path=path, now=now)
-    assert 'World Diabetes Day (Torn event, upcoming): Saturday 14/11/2026 00:00' in wdd
-    assert '24 hours' in wdd and '"Candy effects are tripled"' in wdd and 'Awareness' not in wdd
+    # The window players actually play (wiki-based, matches Pat's 13/11 10:00 to 15/11 16:00), not the
+    # API's nominal "14/11, 24 hours".
+    assert 'World Diabetes Day (Torn event, upcoming): starts Friday 13/11/2026; each player picks their start ' \
+           'between 10:00 and 16:00 TCT, and it lasts about 2 days' in wdd, wdd
+    assert '"Candy effects are tripled"' in wdd and 'Awareness' not in wdd
+    assert 'DISPLAY: 🍭 **World Diabetes Day** · starts Fri 13/11 (<t:1794564000:D>, <t:1794564000:R>)' in wdd
+    from features.torn_events import api_window
+    win = lambda title, a, b: tuple(f'{x:%d/%m %H:%M}' for x in api_window(
+        {'title': title, 'start': ts(a), 'end': ts(b), 'kind': 'Torn event'})[:2])
+    assert win('World Diabetes Day', '14/11/2026 00:00', '14/11/2026 23:59') == ('13/11 10:00', '15/11 10:00')
+    assert win('Black Friday', '27/11/2026 00:00', '27/11/2026 23:59') == ('27/11 10:00', '28/11 10:00')
+    assert win('Slash Wednesday', '09/12/2026 00:00', '09/12/2026 23:59') == ('09/12 10:00', '11/12 10:00')
+    assert win('Trick or Treat', '25/10/2026 00:00', '01/11/2026 23:59') == ('25/10 10:00', '01/11 10:00')
+    assert win('Weekend Road Trip', '31/01/2026 12:00', '02/02/2026 11:59') == ('31/01 12:00', '02/02 11:59')
     war = events_text('war', path=path, now=now)
     assert 'Ranked war (faction event)' in war and 'a week at most' in war and 'Awareness' not in war
     assert 'Happy jump (faction event): A weekly faction event that lasts 24 hours.' in events_text('happy jump', path=path, now=now)
@@ -8611,7 +8623,7 @@ def test_torn_events_from_the_official_calendar():
     assert 'Candy effects are tripled' in facts and 'lasts 24 hours' in facts and 'Tuesday' in facts
     assert 'drawing blood' not in facts, 'Diabetes Day must not pick up Blood Donor Day (both "World ...")'
     assert 'Awareness' not in facts
-    assert '10:00 to 16:00 TCT' in facts and 'same time of day' in facts
+    assert '10:00 and 16:00 TCT' in facts
     from features.torn_events import enrich_draft
     draft = ('**Happy Jump Day:** Saturday 07/11/2026 at 13:00 TCT.\n'
              '**World Diabetes Day:** 13/11/2026 10:00 TCT to 15/11/2026 16:00 TCT.\n'

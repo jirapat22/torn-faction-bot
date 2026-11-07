@@ -160,7 +160,10 @@ class EventReminderManager:
         """Post a 35h advance reminder for Torn's fixed annual calendar events."""
         now = datetime.now(timezone.utc)
 
-        for name, month, day in CALENDAR_EVENTS:
+        # Torn's own calendar where it has this year's date; the hand-kept
+        # list was stale for events that move (Black Friday, Slash Wednesday).
+        from features.torn_events import effective_calendar_events
+        for name, month, day in effective_calendar_events(now.timestamp()):
             start = self._next_calendar_start(month, day, now)
             hours_until = (start - now).total_seconds() / 3600
             key = f'calendar:{name}:{start.year}'

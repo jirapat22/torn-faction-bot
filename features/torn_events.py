@@ -18,7 +18,7 @@ import logging
 import os
 import re
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from utils import torn_api
 from utils.helpers import load_json, save_json
@@ -93,6 +93,111 @@ def _duration(start, end):
     return f'{round(secs / 3600)} hours'
 
 
+# Single-date events that are NOT staggered over two days (the wiki calendar
+# lists them as one date).
+SINGLE_DATE_EVENTS = {'torn anniversary', 'black friday'}
+# Staggered over two days but starting ON the API date, not the day before:
+# the wiki listed Slash Wednesday as starting on the Wednesday itself (10/12
+# in 2025). Not confirmed for 2026; Pat to check the in-game calendar.
+STARTS_ON_THE_DAY = {'slash wednesday'}
+
+
+def api_window(e):
+    """
+    (start, end, players_pick) for one API calendar entry: the window players
+    actually play it in. Torn's API gives one-day events as 00:00 to 23:59 on
+    the day, but players get them from the day BEFORE, each picking a start
+    between 10:00 and 16:00 TCT, for about two days: Pat's Diabetes Day window
+    (13/11 10:00 to 15/11 16:00) and the wiki calendar both say so. Datetimes
+    are the EARLIEST start and its end. Competitions keep Torn's fixed times.
+    """
+    s_ts, e_ts = int(e.get('start') or 0), int(e.get('end') or 0)
+    start = datetime.fromtimestamp(s_ts, timezone.utc)
+    end = datetime.fromtimestamp(e_ts, timezone.utc)
+    title = (e.get('title') or '').lower()
+    staggered = start.hour == 0 and start.minute == 0 and e.get('kind') != 'Torn competition'
+    if not staggered:
+        return start, end, False
+    first_day = start.replace(hour=10, minute=0)
+    if e_ts - s_ts < DAY and not any(t in title for t in SINGLE_DATE_EVENTS):
+        if not any(t in title for t in STARTS_ON_THE_DAY):
+            first_day -= timedelta(days=1)                # one-day events open the day before
+        return first_day, first_day + timedelta(days=2), True
+    if e_ts - s_ts < DAY:
+        return first_day, first_day + timedelta(days=1), True
+    return first_day, end.replace(hour=10, minute=0, second=0), True
+
+
+def _norm(name):
+    return re.sub(r'[^a-z]', '', (name or '').format(year='').lower())
+
+
+def _calendar_name_match(cal_name, api_title):
+    cal, key = _norm(cal_name), _norm(api_title)
+    # Exact, or the calendar name inside the API title ("Awareness Awareness
+    # Week"). Short leftovers never match: "420 Day" minus digits is "day".
+    return bool(cal) and (cal == key or (len(cal) >= 8 and cal in key))
+
+
+def player_window(title, now, path=CALENDAR_FILE):
+    """(start, end) players play the event in, from Torn's saved calendar."""
+    saved = load_json(path, default={}) or {}
+    for kind, items in (('Torn event', saved.get('events') or []), ('Torn competition', saved.get('competitions') or [])):
+        for e in items:
+            if (e.get('title') or '').lower() == (title or '').lower():
+                start, end, _ = api_window(dict(e, kind=kind))
+                return start, end
+    return None
+
+
+def effective_calendar_events(now=None, path=CALENDAR_FILE):
+    """
+    The reminders' and Events tab's (name, month, day) list, with this year's
+    dates taken from Torn's API where it has them. The hand-kept list is stale
+    for events that move each year (2026: Black Friday 27/11 not 29/11, Slash
+    Wednesday 09/12 not 10/12, Awareness Week 19/01 not 15/01) and stays only
+    as the fallback (no saved calendar, or this year's date already passed).
+    """
+    from features.event_reminders import CALENDAR_EVENTS
+    now = time.time() if now is None else now
+    saved = load_json(path, default={}) or {}
+    api = [dict(e, kind='Torn event') for e in saved.get('events') or []] + \
+          [dict(e, kind='Torn competition') for e in saved.get('competitions') or []]
+    out = []
+    for name, month, day in CALENDAR_EVENTS:
+        match = next((e for e in api if _calendar_name_match(name, e.get('title'))), None)
+        if match:
+            start, end, _ = api_window(match)
+            if end.timestamp() >= now:
+                out.append((name, start.month, start.day))
+                continue
+        out.append((name, month, day))
+    return out
+
+
+def _event_line(e, now):
+    """One event as a fact line, with a ready-to-copy DISPLAY line for answers."""
+    title = e.get('title') or 'Unknown event'
+    effect = (e.get('description') or 'not stated').strip().rstrip('.')
+    emoji = next((v for k, v in EVENT_EMOJI.items() if k.lower() == title.lower()), '🎉')
+    start, end, picks = api_window(e)
+    if picks:
+        s_ts, e_ts = int(start.timestamp()), int(end.timestamp())
+        days = round((e_ts - s_ts) / DAY)
+        state = 'on now' if s_ts <= now <= e_ts + 6 * 3600 else 'finished' if e_ts < now else 'upcoming'
+        when = (f'starts {start:%A %d/%m/%Y}; each player picks their start between 10:00 and 16:00 TCT, '
+                f'and it lasts about {days} day{"s" if days != 1 else ""}')
+        display = (f'{emoji} **{title}** · starts {start:%a %d/%m} (<t:{s_ts}:D>, <t:{s_ts}:R>), '
+                   f'pick 10:00 to 16:00 TCT, about {days} day{"s" if days != 1 else ""} · Torn: {effect}.')
+    else:
+        s_ts, e_ts = int(e.get('start') or 0), int(e.get('end') or 0)
+        state = 'on now' if s_ts <= now <= e_ts else 'finished' if e_ts < now else 'upcoming'
+        when = f'{_fmt(s_ts)} to {_fmt(e_ts)} TCT, {_duration(s_ts, e_ts)}'
+        display = (f'{emoji} **{title}** · {_fmt(s_ts)} TCT (<t:{s_ts}:D>, <t:{s_ts}:R>) · Torn: {effect}.')
+    return (f'- {title} ({e["kind"]}, {state}): {when}. Effect, in Torn\'s words: "{effect}". '
+            f'DISPLAY: {display}')
+
+
 def _matches(words, title):
     """Whole-word match, so "war" doesn't match "Awareness" and "worlds" still
     matches "World"."""
@@ -127,12 +232,7 @@ def events_text(query='', path=CALENDAR_FILE, now=None, limit=8):
             picked = [e for e in torn if (e.get('end') or 0) >= now]
         picked.sort(key=lambda e: e.get('start') or 0)
         for e in picked[:limit]:
-            state = ('on now' if (e.get('start') or 0) <= now <= (e.get('end') or 0)
-                     else 'finished' if (e.get('end') or 0) < now else 'upcoming')
-            out.append(f'- {e.get("title")} ({e["kind"]}, {state}): {_fmt(e.get("start"))} to '
-                       f'{_fmt(e.get("end"))} TCT, {_duration(e.get("start"), e.get("end"))}. '
-                       f'Effect, in Torn\'s words: "{(e.get("description") or "not stated").strip()}"'
-                       + (f' {PICK_START_NOTE}' if e['kind'] == 'Torn event' else ''))
+            out.append(_event_line(e, now))
         if torn and not picked and words:
             out.append(f'No Torn event matching "{query}" in this year\'s calendar.')
     faction = [f for f in FACTION_EVENTS if not words or _matches(words, f[0])]

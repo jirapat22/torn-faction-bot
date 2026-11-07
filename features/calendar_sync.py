@@ -193,7 +193,8 @@ async def sync(bot, guild, chain_event_manager=None, war_tracker=None,
         except Exception as e:
             logger.error(f'Calendar sync: upcoming war lookup failed: {e}')
 
-    want = desired(now, CALENDAR_EVENTS, chain_event, war)
+    from features.torn_events import effective_calendar_events
+    want = desired(now, effective_calendar_events(now.timestamp()), chain_event, war)
     state = load_json(state_file, default={}) or {}
 
     try:
