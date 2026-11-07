@@ -169,3 +169,54 @@ def facts_for(names, path=CALENDAR_FILE, now=None):
         t = events_text(n, path=path, now=now, limit=1)
         parts += [l for l in t.split('\n')[1:] if l.startswith('- ') and l not in parts]
     return 'EVENT FACTS for this announcement:\n' + '\n'.join(parts) if parts else ''
+
+
+# Short detail lines the bot adds under each event in an announcement, and the
+# words that show the AI already said it (so it isn't said twice).
+FACTION_DETAILS = {
+    'Ranked war': ('A war lasts a week at most. Torn matchmakes enlisted factions every Tuesday.', 'tuesday'),
+    'Happy jump': ('Lasts 24 hours.', '24 hours'),
+}
+_LINE_CUES = {
+    'Ranked war': re.compile(r'\b(wars?|enlist\w*)\b', re.I),
+    'Happy jump': re.compile(r'happy\s*jump', re.I),
+    'Chain': re.compile(r'\bchain', re.I),
+}
+
+
+def _torn_detail(title, path):
+    saved = load_json(path, default={}) or {}
+    for e in (saved.get('events') or []) + (saved.get('competitions') or []):
+        if e.get('title') == title:
+            desc = (e.get('description') or '').strip().rstrip('.')
+            if not desc:
+                return None
+            note = ' Pick your start time in the Torn calendar.' if e in (saved.get('events') or []) else ''
+            # Long descriptions (Christmas Town, Easter) are cut to their first sentence.
+            first = re.split(r'(?<=[.!])\s', desc)[0].rstrip('.')
+            return (f'Torn: {first}.{note}', first.split()[0].lower() if first else '')
+    return None
+
+
+def enrich_draft(text, names, path=CALENDAR_FILE):
+    """
+    Add each event's real details under its line in a draft. Done by the bot,
+    not the AI: given the facts and told to include them, the AI left them out.
+    A detail is skipped when the draft already says it.
+    """
+    lines = text.split('\n')
+    for name in names:
+        detail = FACTION_DETAILS.get(name) or _torn_detail(name, path)
+        if not detail:
+            continue
+        line_text, already = detail
+        if already and already in text.lower():
+            continue
+        cue = _LINE_CUES.get(name) or re.compile(
+            '|'.join(re.escape(w) for w in re.findall(r'[A-Za-z]{4,}', name)
+                     if w.lower() not in _GENERIC_TITLE_WORDS) or re.escape(name), re.I)
+        for i, l in enumerate(lines):
+            if cue.search(l):
+                lines.insert(i + 1, f'- {line_text}')
+                break
+    return '\n'.join(lines)

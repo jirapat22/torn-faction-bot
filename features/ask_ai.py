@@ -1436,14 +1436,15 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
     # mentions and hands the facts over, so the draft can carry the useful
     # details (how long, what it does) without the AI guessing them. Pat
     # wanted "the details and stuffs" in, and guessed details out.
-    event_facts = ''
+    event_facts, event_names = '', []
+    cal_path = os.path.join(getattr(facts, 'data_dir', 'data'), 'torn_calendar.json')
     convo = ' '.join([question] + [t.get('content', '') for t in history or [] if t.get('role') == 'user'])
     if ANNOUNCE_RX.search(convo):
         from features.torn_events import detect_events, facts_for
-        cal = os.path.join(getattr(facts, 'data_dir', 'data'), 'torn_calendar.json')
-        event_facts = facts_for(detect_events(convo, path=cal), path=cal, now=facts.now)
+        event_names = detect_events(convo, path=cal_path)
+        event_facts = facts_for(event_names, path=cal_path, now=facts.now)
         if event_facts:
-            base.append({'role': 'system', 'content': event_facts + '\nUnder each event in the draft, add its '
+            base.append({'role': 'system', 'content': event_facts + '\nUnder each event in the draft, you may add its '
                          'key facts from this list as a short line or two (how long it lasts, what Torn says it '
                          'does, and for war: lasts a week at most, matchmaking on Tuesdays). Keep the person\'s '
                          'own dates and times where they gave them.'})
@@ -1502,6 +1503,9 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
                 bad = unsupported_numbers(facts.final, said, earlier_facts)
             if facts.final_kind == 'draft':
                 grounded, cut = ground_draft(fix_weekdays(facts.draft['text']), said)
+                if event_names:
+                    from features.torn_events import enrich_draft
+                    grounded = enrich_draft(grounded, event_names, path=cal_path)
                 facts.draft['text'] = grounded
                 facts.draft['cut'] = cut
                 ans = Answer(facts.draft['text'], pname, '', True, took(), kind='draft')

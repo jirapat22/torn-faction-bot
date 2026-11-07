@@ -8603,6 +8603,16 @@ def test_torn_events_from_the_official_calendar():
     assert 'Candy effects are tripled' in facts and 'lasts 24 hours' in facts and 'Tuesday' in facts
     assert 'Awareness' not in facts
     assert '10:00 to 16:00 TCT' in facts and 'same time of day' in facts
+    from features.torn_events import enrich_draft
+    draft = ('**Happy Jump Day:** Saturday 07/11/2026 at 13:00 TCT.\n'
+             '**World Diabetes Day:** 13/11/2026 10:00 TCT to 15/11/2026 16:00 TCT.\n'
+             '**War Enlistment:** The two weeks following World Diabetes Day.\n\nStay sharp, punks.')
+    rich = enrich_draft(draft, found, path=path)
+    lines = rich.split('\n')
+    assert lines[1] == '- Lasts 24 hours.'
+    assert lines[3] == '- Torn: Candy effects are tripled. Pick your start time in the Torn calendar.'
+    assert lines[5].startswith('- A war lasts a week at most') and lines[-1] == 'Stay sharp, punks.'
+    assert enrich_draft('Happy jump lasts 24 hours', ['Happy jump'], path=path) == 'Happy jump lasts 24 hours'
 
 
 if __name__ == '__main__':
