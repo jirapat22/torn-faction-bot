@@ -8005,6 +8005,7 @@ def test_ask_ai_faction_rankings_and_record_gaps():
     assert 'Longest since their last action: Bob (5 days ago)' in table, table
     assert 'Fewest hits made last war: ' in table and 'Amy (0 hits)' in table and 'Bob (0 hits)' in table
     assert 'Most hits taken from the enemy last war: Bob (9 taken)' in table
+    assert 'Most hits made last war: ' in table and 'Most chain hits in the last 14 days' in table
 
     report = fb.member_report('Cid')
     assert 'War 1 vs Empty were saved WITHOUT any member stats' in report
@@ -8887,6 +8888,23 @@ def test_reaudit_fixes_chat_xanax_poll_names_and_enemy_faction():
     finally:
         api.fetch_any_faction_data = real
     assert asked[0] == '53421' and 'The Naughty Kids' in txt
+
+    # A bare day as a poll's END is the end of that day ("monday and tuesday").
+    from features.ask_actions import plan_action, describe
+    kind, plan = plan_action('action_poll', {'kind': 'custom', 'start': 'monday', 'end': 'tuesday'},
+                             'make an availability poll for monday and tuesday', 1794048336)
+    assert kind == 'plan' and plan['end'] - plan['start'] == 2 * 86400, plan
+
+    # A target already on the board gets a plain "already there", no card.
+    tm = SimpleNamespace(data={'targets': {'2120240': {'name': 'StepDad', 'permanent': True},
+                                           '3528931': {'name': 'IceDrago', 'permanent': False}}})
+    live = SimpleNamespace(target_manager=tm)
+    title, why = asyncio.run(describe({'kind': 'target_add', 'torn_id': '2120240', 'permanent': False,
+                                       'reason': ''}, live, None))
+    assert title is None and 'already on the target board' in why
+    title, lines = asyncio.run(describe({'kind': 'target_add', 'torn_id': '3528931', 'permanent': True,
+                                         'reason': ''}, live, None))
+    assert title == '🎯 Make a target permanent'
 
 
 def test_leave_notices_are_quoted_word_for_word():

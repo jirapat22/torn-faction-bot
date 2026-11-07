@@ -206,7 +206,11 @@ def plan_action(tool, args, said, now=None):
             return 'ask', ('Is the poll for the next ranked war (I take the times from Torn), or for times you '
                            'give me?')
         start, _ = when('start', 'when the poll\'s first block starts (a TCT day and time)')
-        end, _ = when('end', 'when the last block ends (a TCT day and time)')
+        end, end_raw = when('end', 'when the last block ends (a TCT day and time)')
+        # "monday and tuesday": a bare day as the END means the end of that
+        # day, not its first minute (which made a Monday-only poll).
+        if end and not re.search(r'\d', end_raw or '') and end % 86400 == 0:
+            end += 86400
         block = num('block_hours', '', required=False, hi=6)
         open_h = num('open_hours', '', required=False, hi=24 * 7)
         if start and end and end <= start:
@@ -264,6 +268,18 @@ async def describe(plan, live, guild, now=None):
             if t is None:
                 return None, f'Player {tid} is not on the target board.'
             return '🎯 Remove a target', [f'Take **{t.get("name", tid)}** [{tid}] off the target board.']
+        # Already on the board: say so instead of a card that would do nothing
+        # (add_target refuses duplicates). The one real change left is making
+        # a 7-day target permanent, which add_target does on a re-add.
+        existing = tm.data['targets'].get(tid)
+        if existing is not None:
+            who = existing.get('name', tid)
+            if not (plan['permanent'] and not existing.get('permanent')):
+                return None, (f'**{who}** [{tid}] is already on the target board'
+                              + (' (permanent).' if existing.get('permanent') else '.'))
+            plan['name'] = who
+            return '🎯 Make a target permanent', [f'**{who}** [{tid}] is on the board for 7 days. '
+                                                 'Make it **permanent** (until someone removes them)?']
         from utils.torn_api import fetch_player_data
         from config import TORN_FACTION_ID
         profile = await fetch_player_data(tid, 'profile')

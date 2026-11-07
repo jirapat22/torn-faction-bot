@@ -661,6 +661,12 @@ class FactBook:
                       lambda r: 'never seen in one' if r['oc'] is None else f'{r["oc"]} days'),
                ranked('Fewest chain hits in the last 14 days', lambda r: -r['chain14'],
                       lambda r: f'{r["chain14"]} hits', skip=lambda r: r['chain14'] is None),
+               # "Who has the most..." needs its own line: asked "most chain
+               # hits", the AI only had the lowest ones and couldn't answer.
+               ranked('Most chain hits in the last 14 days', lambda r: r['chain14'],
+                      lambda r: f'{r["chain14"]} hits', skip=lambda r: r['chain14'] is None),
+               ranked('Most hits made last war', lambda r: r['made'], lambda r: f'{r["made"]} hits',
+                      skip=lambda r: r['made'] is None),
                ranked('Most active strikes', lambda r: r['strikes'], lambda r: f'{r["strikes"]}',
                       skip=lambda r: not r['strikes']),
                *self._discord_lines(rows),
