@@ -147,6 +147,10 @@ The design rule is **the AI must not make up numbers**, because strikes get deci
 
 **Events:** `features/torn_events.py` saves Torn's official calendar (API v2 `torn/calendar`; the wiki blocks bots) to `data/torn_calendar.json` daily, with Torn's own effect text (World Diabetes Day = "Candy effects are tripled", 14/11). `FACTION_EVENTS` holds Pat's weekly events (ranked war, a week at most, matchmaking Tuesdays; chain; happy jump, 24h). Drafts are grounded against the user's words plus these facts (`ground_draft`). The prompt's "It is now" clock is excluded from allowed numbers (it once let an invented "16 hits" pass at 01:16). Note: `event_reminders.CALENDAR_EVENTS` dates are mostly one day earlier than Torn's API.
 
+**Groq limits that matter:** besides 8,000 tokens/min, the free plan allows **200,000 tokens per DAY per model** (not shown in the rate-limit headers; only in the 429 body). A question costs ~3-7k tokens, mostly the prompt, so the announcement rules (`ANNOUNCE_PROMPT`) are only sent in announcement conversations. Heavy testing burns the day's allowance and pushes real users onto the small model.
+
+Announcement layout (Pat's picks): bold emoji headings + bullets, blank line between events (`space_events`), Discord local-time stamps + countdown after each TCT time (`add_local_times`), standard details added by the bot (`torn_events.FACTION_DETAILS`, Torn effect + start-time pick).
+
 Every answer is also written to `data/logs/ask_ai.jsonl` (question, answer, provider, data used; 2 MB, one old copy) so odd answers can be traced. When the AI gives up, the bot itself tries "did you mean <close name>?" (`near_names`) and, for rules-ish questions (`RULES_CUE`), quotes the rulebook directly.
 
 Wars 40834 and 46089 were archived with no members; `scripts/backfill_empty_wars.py` restored hits made from the v2 war report and marks them `incoming_unknown` (hits taken/hosps left out, too old for the attacks log; `_hosp()` shows them as unknown). The 📎 data is behind a private button (`ShowDataView`, one fixed custom_id).
