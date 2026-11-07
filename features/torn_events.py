@@ -196,23 +196,19 @@ def facts_for(names, path=CALENDAR_FILE, now=None):
 # 07/11/2026). Each has a pattern that shows the draft already says it, so a
 # point is never made twice.
 FACTION_DETAILS = {
+    # Pat trimmed these (07/11/2026): war keeps only revives/turtle and
+    # stack/scout/guide; the rest merged into fewer lines to keep posts short.
     'Ranked war': [
-        ('Enlistment starts Tuesday, we war on the weekend. A war lasts a week at most.', r'tuesday'),
-        (f'Answer the availability poll in {WAR_AVAILABILITY} at least 24 hours before.', r'availability'),
         ('Revives OFF for the whole war. Going offline? Turtle first.', r'revive'),
-        ('Save your energy and stack for the start.', r'\bstack'),
-        ('Scout the enemy with FFScouter.', r'scout|ffscouter'),
-        (f'War guide: {WAR_GUIDE}', r'war guide'),
+        (f'Stack for the start and scout the enemy with FFScouter. War guide: {WAR_GUIDE}', r'scout|war guide'),
     ],
     'Chain': [
-        ('Normally runs 24 hours.', r'24\W*h'),
-        ('Minimum 10 hits (5 if you are under level 15).', r'minimum|10 hits'),
-        ('Stack your energy before it starts.', r'\bstack'),
-        (f"Can't make it? Post in {WAR_AVAILABILITY} at least 24 hours before.", r"can.?t make it"),
+        ('Normally runs 24 hours. Minimum 10 hits (5 if you are under level 15).', r'minimum|10 hits'),
+        (f"Stack your energy before it starts. Can't make it? Post in {WAR_AVAILABILITY} 24 hours before.",
+         r"can.?t make it|\bstack"),
     ],
     'Happy jump': [
-        ('Lasts 24 hours.', r'24\W*h'),
-        (f'Happy Jumping Guide: {HAPPY_JUMP_GUIDE}', r'jumping guide'),
+        (f'Lasts 24 hours. Happy Jumping Guide: {HAPPY_JUMP_GUIDE}', r'jumping guide'),
     ],
 }
 _LINE_CUES = {
@@ -230,12 +226,13 @@ def _torn_detail(title, path):
         if e.get('title') == title:
             desc = (e.get('description') or '').strip().rstrip('.')
             out = []
+            pick = ' Pick your start time in the Torn calendar.' if e in (saved.get('events') or []) else ''
             if desc:
                 # Long descriptions (Christmas Town, Easter) are cut to their first sentence.
                 first = re.split(r'(?<=[.!])\s', desc)[0].rstrip('.')
-                out.append((f'Torn: {first}.', re.escape(first.split()[0]) if first else r'$^'))
-            if e in (saved.get('events') or []):
-                out.append(('Pick your start time in the Torn calendar.', r'start time'))
+                out.append((f'Torn: {first}.{pick}', re.escape(first.split()[0]) if first else r'$^'))
+            elif pick:
+                out.append((pick.strip(), r'start time'))
             return out
     return []
 

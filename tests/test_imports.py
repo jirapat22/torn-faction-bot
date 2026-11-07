@@ -8619,14 +8619,13 @@ def test_torn_events_from_the_official_calendar():
     rich = enrich_draft(draft, found, path=path)
     lines = rich.split('\n')
     hj = lines.index('**Happy Jump Day:** Saturday 07/11/2026 at 13:00 TCT.')
-    assert lines[hj + 1:hj + 3] == ['- Lasts 24 hours.', '- Happy Jumping Guide: <#1560218041751437405>']
+    assert lines[hj + 1] == '- Lasts 24 hours. Happy Jumping Guide: <#1560218041751437405>'
     wdd = lines.index('**World Diabetes Day:** 13/11/2026 10:00 TCT to 15/11/2026 16:00 TCT.')
-    assert lines[wdd + 1:wdd + 3] == ['- Torn: Candy effects are tripled.', '- Pick your start time in the Torn calendar.']
-    war = [l for l in lines if l.startswith('- ')][-6:]
-    assert war[0].startswith('- Enlistment starts Tuesday, we war on the weekend') and 'War guide' in war[-1]
+    assert lines[wdd + 1] == '- Torn: Candy effects are tripled. Pick your start time in the Torn calendar.'
+    war = [l for l in lines if l.startswith('- ')][-2:]
+    assert war[0].startswith('- Revives OFF') and 'War guide' in war[1] and 'availability' not in rich
     assert lines[-1] == 'Stay sharp, punks.'
-    assert '- Lasts 24 hours.' not in enrich_draft('Happy jump lasts 24 hours', ['Happy jump'], path=path)
-    assert '- Lasts 24 hours.' not in enrich_draft('Happy jump (24‑hour)', ['Happy jump'], path=path)
+    assert enrich_draft('Happy jump: Happy Jumping Guide <#1>', ['Happy jump'], path=path).count('Guide') == 1
     from features.ask_ai import dates_not_given
     said = 'saturday 7/11/2026 1pm happy jump, 13/11/2026 10:00 TCT to 15/11/2026 16:00 TCT diabetes day'
     assert dates_not_given('07/11/2026 13:00 – 14/11/2026 13:00 (24 h); 13/11 to 15/11', said) == ['14/11']
