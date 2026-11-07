@@ -8907,6 +8907,108 @@ def test_reaudit_fixes_chat_xanax_poll_names_and_enemy_faction():
     assert title == '🎯 Make a target permanent'
 
 
+def test_payouts_kicks_and_member_judging_get_fixed_replies():
+    """
+    Pat (08/11/2026): payouts of any kind are "check with management"; "who
+    should we kick" gets a joke; members (if ever let in) get no judging.
+    All fixed replies by the bot, no AI. The rulebook copy the bot quotes has
+    the payout lines taken out, and a member can't reach the judging tools
+    even if the AI calls them.
+    """
+    import asyncio
+    from features.ask_ai import (answer_question, guard_question, PAYOUT_REFUSAL, KICK_DODGE, MEMBER_REFUSAL,
+                                 without_payouts, tidy_answer, FactBook)
+    called = []
+
+    async def provider(session, messages, facts, used):
+        called.append(1)
+        return 'x', messages
+
+    class F:
+        now = 0
+    for q, want in (('how do payouts work?', PAYOUT_REFUSAL), ('how much did we earn last war', PAYOUT_REFUSAL),
+                    ('how do i withdraw from the vault', PAYOUT_REFUSAL), ('who should we kick?', KICK_DODGE),
+                    ('should Ikaros22 be booted', KICK_DODGE), ('remove bob from the faction', KICK_DODGE)):
+        ans = asyncio.run(answer_question(None, q, F(), providers=[('Fake', provider)]))
+        assert ans.text == want and ans.provider == 'none', q
+    assert not called
+    for q in ('kick off a chain event now', 'who is least active', 'how much respect did we earn',
+              'remove 123 from the target board', 'booted up yet?'):
+        assert guard_question(q) is None, q
+    assert guard_question('who is least active', management=False) == MEMBER_REFUSAL
+    assert guard_question('when is the next war', management=False) is None
+
+    secs = [('Payouts, Vault & Armory > War payouts', 'Split by hits.'),
+            ('Ranked Wars > Friendly hosps', 'Counts like a war hit, for payout.\nAsk first.'),
+            ('Chains > Chains', 'Hit 10 and the Xanax you used is reimbursed.\nMinimum 10 hits.')]
+    assert without_payouts(secs) == [('Ranked Wars > Friendly hosps', 'Ask first.'),
+                                     ('Chains > Chains', 'Minimum 10 hits.')]
+    out = tidy_answer('Payouts go to your vault. For Xanax payouts see `/war view:Xan`. Done.', [], '')
+    assert 'view:Xan' not in out and 'Payouts' not in out and 'Done.' in out
+
+    fb = FactBook('data', roster={})
+    fb.management = False
+    assert fb.run('faction_table', {}) == 'That tool is for management only.'
+    assert fb.run('strikes_overview', {}) == 'That tool is for management only.'
+    assert fb.run('action_target', {'action': 'add', 'torn_id': '1'}) == 'That tool is for management only.'
+
+
+def test_foolproof_round_fixes():
+    """
+    Offline adversarial rounds (08/11/2026, fake AIs that misbehave on
+    purpose). Each assert is a hole that was found and closed.
+    """
+    import asyncio
+    from features.ask_ai import answer_question, tidy_answer, NotCapable
+    from features.ask_actions import plan_action, parse_time
+    now = 1794056793   # Sat 07/11/2026 13:06 TCT
+
+    # Free-text fields must be the person's own words (the AI "improved" them).
+    said = 'add 1524830 to the target board'
+    kind, plan = plan_action('action_target', {'op': 'add', 'who': '1524830', 'reason': 'scammed us out of 50m'},
+                             said, now)
+    assert kind == 'plan' and plan['reason'] == ''
+    kind, plan = plan_action('action_target', {'op': 'add', 'who': '1524830', 'reason': 'ruined the 500th'},
+                             said + ' because he ruined the 500th', now)
+    assert plan['reason'] == 'ruined the 500th'
+    # A shortened ID is a different player, not "the one they typed".
+    kind, _ = plan_action('action_target', {'op': 'add', 'who': '152483'}, said, now)
+    assert kind == 'ask'
+    kind, plan = plan_action('action_chain_event', {'op': 'start', 'when': 'now', 'hours': 24, 'minimum': 10,
+                                                    'name': 'Mega Bonanza 3000'},
+                             'start a chain event now for 24 hours min 10', now)
+    assert kind == 'plan' and plan['name'] == ''
+    kind, plan = plan_action('action_discord_event', {'type': 'chain', 'when': 'sunday 18:00',
+                                                      'description': 'Payout 10m each'},
+                             'create a discord event for a chain on sunday 18:00', now)
+    assert kind == 'plan' and 'Payout' not in plan['description']
+
+    # Times: a stray number or a bare day is not a time.
+    assert parse_time('sunday 18', now)[0] is None
+    assert parse_time('saturday', now, need_time=True)[0] is None
+    assert parse_time('saturday', now)[0] is not None          # fine for a poll's days
+    assert parse_time('sunday 6pm', now, need_time=True)[0] is not None
+    kind, q = plan_action('action_chain_event', {'op': 'start', 'when': 'tomorrow', 'hours': 24, 'minimum': 10},
+                          'start a chain event tomorrow for 24 hours min 10', now)
+    assert kind == 'ask' and 'no time' in q
+
+    # Replies: no @everyone, no "I've done it" without a card.
+    out = tidy_answer("@everyone listen. Pulled the files. I've added Bob to the target board. Who should I ping?",
+                      [], '')
+    assert '@everyone' not in out and "I've added" not in out and 'Who should I ping?' in out
+
+    # A provider that crashes costs that provider only.
+    async def boom(session, messages, facts, used):
+        raise RuntimeError('provider exploded')
+
+    async def chat(session, messages, facts, used):
+        return 'Deleted everything 💀', messages
+
+    from features.ask_ai import FactBook
+    ans = asyncio.run(answer_question(None, 'hi', FactBook('data', roster={}), providers=[('A', boom), ('B', chat)]))
+    assert ans.provider == 'B' and 'Deleted' not in ans.text   # chat never claims it did something
+
+
 def test_leave_notices_are_quoted_word_for_word():
     """
     Pat: "quote it, I'll read it". The whole notice, newest first, with when
@@ -9086,4 +9188,6 @@ if __name__ == '__main__':
     test_leave_notices_are_quoted_word_for_word()
     test_strike_requests_get_the_fixed_reply_without_the_ai()
     test_reaudit_fixes_chat_xanax_poll_names_and_enemy_faction()
+    test_payouts_kicks_and_member_judging_get_fixed_replies()
+    test_foolproof_round_fixes()
     print('All smoke tests passed.')

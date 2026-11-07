@@ -79,6 +79,23 @@ def said_words(value, said):
     return all(w in have or w in _FILLER for w in words)
 
 
+_OWN_STOP = {'the', 'and', 'for', 'with', 'from', 'our', 'his', 'her', 'their', 'this', 'that', 'event', 'events',
+             'chain', 'war', 'faction', 'target', 'targets', 'board', 'reason', 'because', 'they', 'are', 'was',
+             'all', 'get', 'lets', 'let', 'its', 'you', 'your', 'him', 'them', 'who', 'has', 'have', 'into'}
+
+
+def own_words(text, said):
+    """True when a free-text field (a name, reason or description) is made of
+    the person's own words and numbers. The AI kept "improving" these (Pat:
+    "dont create stuffs"), and whatever lands here goes on a real card, board
+    or Discord event."""
+    have = set(re.findall(r'[a-z0-9]+', said.lower()))
+    for w in re.findall(r'[a-z0-9]+', str(text or '').lower()):
+        if w not in have and w not in _OWN_STOP and w not in _FILLER and (w.isdigit() or len(w) >= 3):
+            return False
+    return True
+
+
 def _with_year(text, now):
     """'14/11 13:00' -> '14/11/2026 13:00': parse_when wants a year, people don't type one."""
     year = datetime.fromtimestamp(now, timezone.utc).year
@@ -86,12 +103,26 @@ def _with_year(text, now):
                   text)
 
 
-def parse_time(text, now, allow_now=False):
-    """(epoch, None) or (None, why). 'now' is allowed where it makes sense."""
+_CLOCK = re.compile(r'\b\d{1,2}:\d{2}\b|\b\d{1,2}\s*(?:am|pm)\b|\bnoon\b|\bmidday\b|\bmidnight\b|'
+                    r'\bin\s+\d+\s*(?:h|hrs?|hours?|m|mins?|minutes?)\b', re.I)
+
+
+def parse_time(text, now, allow_now=False, need_time=False):
+    """(epoch, None) or (None, why). 'now' is allowed where it makes sense.
+    need_time: a bare day ("saturday", "tomorrow") is not enough, because the
+    parser quietly reads it as 00:00, a time nobody said (chain/event starts)."""
     from utils.when import parse_when, WhenError
     t = (text or '').strip().lower()
     if allow_now and t in ('now', 'right now', 'straight away', 'asap', 'immediately'):
         return int(now), None
+    if not _CLOCK.search(t):
+        # "sunday 18" was read as Sunday 00:00, the 18 silently dropped. A
+        # number that is neither a date nor a clock time gets a question.
+        if re.search(r'\d', re.sub(r'\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b', '', t)):
+            return None, f'I couldn\'t tell the time in "{text}". Try "saturday 18:00" or "saturday 6pm"'
+        if need_time:
+            return None, f'"{text}" has no time. Add one, like "{text} 20:00"'
+
     try:
         dt = parse_when(_with_year(text, now), now=datetime.fromtimestamp(now, timezone.utc))
     except WhenError as e:
@@ -152,14 +183,14 @@ def plan_action(tool, args, said, now=None):
             return None
         return v
 
-    def when(field, label, allow_now=False, required=True):
+    def when(field, label, allow_now=False, required=True, need_time=False):
         raw = str(args.get(field) or '').strip()
         # ' 0': the ":00" in "13:00" is never an invented number (same as drafts).
         if not raw or not said_words(raw, said) or not said_number(raw, said + ' 0'):
             if required:
                 need.append(label)
             return None, None
-        ts, why = parse_time(raw, now, allow_now=allow_now)
+        ts, why = parse_time(raw, now, allow_now=allow_now, need_time=need_time)
         if ts is None:
             need.append(f'{label} ({why.rstrip(".")})')
         return ts, raw
@@ -173,10 +204,13 @@ def plan_action(tool, args, said, now=None):
         if op not in ('add', 'remove'):
             return 'ask', 'Do you want to add someone to the target board, or take someone off it?'
         who = _torn_id(args.get('who'))
-        if not who or who not in said:
+        # Whole number only: "152483" must not pass because "1524830" was typed.
+        if not who or not re.search(rf'(?<!\d){who}(?!\d)', said):
             return 'ask', ('Who? Give me their Torn ID or paste their profile link (I can\'t look enemies up by '
                            'name).')
         reason = str(args.get('reason') or '').strip()[:100]
+        if not own_words(reason, said):
+            reason = ''          # an invented reason would sit on the board for a week
         permanent = bool(args.get('permanent')) and bool(re.search(r'perm|forever|until (removed|i|we)|stay', said,
                                                                    re.I))
         return 'plan', {'kind': 'target_' + op, 'torn_id': who, 'reason': reason if op == 'add' else '',
@@ -188,13 +222,16 @@ def plan_action(tool, args, said, now=None):
             return 'plan', {'kind': 'chain_' + op}
         if op != 'start':
             return 'ask', 'Do you want to start, end or cancel a chain event?'
-        start, _ = when('when', 'when it starts ("now", or a TCT time like "saturday 13:00")', allow_now=True)
+        start, _ = when('when', 'when it starts ("now", or a TCT time like "saturday 13:00")', allow_now=True,
+                        need_time=True)
         hours = num('hours', 'how long it runs, in hours (usually 24)', hi=24 * 7)
         minimum = num('minimum', 'the minimum hits each member must make (the rule is usually 10)', hi=1000)
         target = num('target', '', required=False, lo=0)
         if need:
             return ask()
         name = str(args.get('name') or '').strip()[:60]
+        if not own_words(name, said):
+            name = ''            # the card then uses the date name ("08 Nov chain event")
         return 'plan', {'kind': 'chain_start', 'start': start, 'hours': hours, 'minimum': minimum,
                         'target': target or 0, 'name': name}
 
@@ -226,14 +263,18 @@ def plan_action(tool, args, said, now=None):
         etype = str(args.get('type') or '').lower().replace(' ', '_')
         if etype not in ('war', 'chain', 'happy_jump', 'custom'):
             return 'ask', 'What kind of event: war, chain, happy jump, or something else (then what\'s it called)?'
-        start, _ = when('when', 'when it starts (a TCT day and time, like "saturday 8pm")')
+        start, _ = when('when', 'when it starts (a TCT day and time, like "saturday 8pm")', need_time=True)
         name = str(args.get('name') or '').strip()[:100]
+        if not own_words(name, said):
+            name = ''
         hours = None
         if etype == 'custom':
             if not name:
                 need.append('what the event is called')
             hours = num('hours', 'how long it lasts, in hours', hi=24 * 14)
         desc = str(args.get('description') or '').strip()[:400]
+        if not own_words(desc, said):
+            desc = ''            # the type's standard description instead
         if need:
             return ask()
         if etype != 'custom':

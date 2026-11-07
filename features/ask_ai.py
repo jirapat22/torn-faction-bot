@@ -223,8 +223,28 @@ def load_rule_sections(path=None):
         else:
             body.append(line)
     flush()
+    sections = without_payouts(sections)
     _rule_cache[path] = (mtime, sections)
     return sections
+
+
+# Rulebook lines about payouts, reimbursement, the vault or Xanax. Pat
+# (08/11/2026): payouts are "check with management", so the rulebook copy the
+# bot quotes from has them taken out, whole "Payouts, Vault & Armory" post
+# included. A rule that only mentions them in passing goes with them.
+PAYOUT_LINE = re.compile(r'\bpay ?-?outs?\b|\bpaid\b|reimburs\w*|\bvault\b|withdraw\w*|\bxan(?:ax)?s?\b|'
+                         r'\bcash\b|\bsplit by hits\b|\barmou?ry\b', re.I)
+
+
+def without_payouts(sections):
+    out = []
+    for title, body in sections:
+        if PAYOUT_LINE.search(title.split(' > ')[0]) or PAYOUT_LINE.search(title):
+            continue
+        kept = '\n'.join(l for l in body.split('\n') if not PAYOUT_LINE.search(l)).strip()
+        if kept:
+            out.append((title, kept))
+    return out
 
 
 class FactBook:
@@ -587,7 +607,9 @@ class FactBook:
         else:
             lines.append('OC: never seen in an OC by the bot.')
 
-        # Strikes
+        # Strikes (management only: a member never sees anyone's strikes)
+        if not getattr(self, 'management', True):
+            return '\n'.join(lines)
         active = self._strikes_active(tid)
         history = [s for s in self._strikes_all() if str(s.get('torn_id')) == str(tid)]
         lines.append(f'Strikes active now: {len(active)}. Strikes ever recorded: {len(history)}.')
@@ -800,6 +822,10 @@ class FactBook:
         """Dispatch one tool call. Never raises: a broken tool returns a message.
         The live lookups return a coroutine, which the AI loop awaits."""
         args = args or {}
+        if not getattr(self, 'management', True):
+            from features.ask_actions import ACTION_TOOL_NAMES
+            if name in MEMBER_BLOCKED_TOOLS or name in ACTION_TOOL_NAMES:
+                return 'That tool is for management only.'
         try:
             if name == 'member_report':
                 return self.member_report(args.get('name', ''))
@@ -890,7 +916,7 @@ TOOL_SPECS = [
     {'type': 'function', 'function': {
         'name': 'faction_rules',
         'description': 'The faction rulebook, word for word: what gets a strike, OCs, chains, wars, turtling, '
-                       'payouts, joining, leaving. Use for ANY rules question.',
+                       'joining, leaving. Use for ANY rules question.',
         'parameters': {'type': 'object', 'properties': {
             'topic': {'type': 'string', 'description': 'What the rule is about, e.g. "OC", "chain minimum", '
                                                        '"strikes", "leave notice"'}}, 'required': ['topic']}}},
@@ -951,7 +977,7 @@ CAPABILITIES = (
     '- war win/loss trends, the target board, the enemy watchlist, another faction\'s overview\n'
     'I can also, after you press ✅ on a card: add/remove targets, start/end/cancel a chain event, '
     'post an availability poll, create a Discord event, and draft announcements.\n'
-    'I don\'t do money, items, Xanax (use or payouts) or battle stats, or chat messages. Strikes stay on /strikes.'
+    'I don\'t do money, items, payouts, Xanax or battle stats, or chat messages. Strikes stay on /strikes.'
 )
 
 # Short tool results that mean "nothing here" rather than data.
@@ -1033,10 +1059,10 @@ def system_prompt(announce=False, acting=False):
         '- For what is happening NOW (war score, chain, chain event, flights) call live_status. For leave notices, '
         'timezones, trials and the availability poll call members_extra; never judge whether a notice covers a '
         'date. War trends, targets, the enemy watchlist and other factions: faction_extra.\n'
-        '- Never talk about money, items, Xanax (use or payouts) or battle stats, even if asked: call '
-        'cannot_answer (for Xanax payouts, point them to /war view:Xan).\n'        '- For questions about Torn events ("what is X?", "what\'s coming up?"), call torn_events and answer '
+        '- Never talk about money, items, payouts (any kind), Xanax or battle stats, even if asked: call '
+        'cannot_answer.\n'        '- For questions about Torn events ("what is X?", "what\'s coming up?"), call torn_events and answer '
         'with each event\'s DISPLAY line copied exactly, one per line, nothing else added.\n'
-        '- For any question about the faction rules (what gets a strike, OC rule, chain minimum, payouts, '
+        '- For any question about the faction rules (what gets a strike, OC rule, chain minimum, '
         'leave notices...), call faction_rules and quote the rule\'s wording exactly. Never state a rule from '
         'memory. You do not decide strikes: management does.\n'
         f'What the bot keeps:\n{CAPABILITIES}\n'
@@ -1300,7 +1326,7 @@ NOT_RECORDED = [
     (re.compile(r'\bitems?\b|inventory|\barmou?ry\b', re.I), 'items or the armoury'),
     # Pat's rule (07/11/2026): Xanax stays out completely, use AND payouts.
     (re.compile(r'\bxan(ax)?s?\b|refills?|energy cans?', re.I),
-     'Xanax use or payouts (payouts: `/war view:Xan`)'),
+     'Xanax use'),
     (re.compile(r'\bmessages?\b|\bchat\b|said', re.I), 'chat messages'),
 ]
 
@@ -1342,11 +1368,19 @@ def tidy_answer(text, notices, question):
         kept = []
         for line in text.split('\n'):
             parts = [p for p in re.split(r'(?<=[.!?])\s+', line)
-                     if not (re.search(r'\bxan(ax)?s?\b', p, re.I) and not _NEGATION.search(p)
-                             and '/war view:Xan' not in p)]
+                     if not (re.search(r'\bxan(ax)?s?\b|/war view:Xan|\bpay ?-?outs?\b|reimburs', p, re.I)
+                             and not _NEGATION.search(p))]
             if parts or not line.strip():
                 kept.append(' '.join(parts))
         text = re.sub(r'\n{3,}', '\n\n', '\n'.join(kept)).strip()
+    # "I've added him to the board" with no card behind it is a lie the
+    # member would act on: only a pressed ✅ card ever does anything.
+    kept = []
+    for line in text.split('\n'):
+        parts = [p for p in re.split(r'(?<=[.!?])\s+', line) if p.rstrip().endswith('?') or not I_DID.search(p)]
+        if parts or not line.strip():
+            kept.append(' '.join(parts))
+    text = re.sub(r'\n{3,}', '\n\n', '\n'.join(kept)).strip()
     if notices:
         text = (text + '\n\n' if text else '') + '\n'.join(f'⚠️ {n}' for n in notices)
     for rx, label in NOT_RECORDED:
@@ -1356,6 +1390,9 @@ def tidy_answer(text, notices, question):
         if not said:
             text = text.rstrip() + f"\n\n⚠️ I don't keep {label}, so that part is not in this answer."
     text = re.sub(r'\s*[\u2014]\s*', ', ', text)
+    # Replies go out with pings switched off, but "@everyone" still reads like
+    # one; an AI talked into writing it shouldn't look like the bot shouting.
+    text = re.sub(r'@(everyone|here)\b', r'\1', text)
     return text
 
 
@@ -1413,7 +1450,7 @@ def is_small_talk(question, answer, facts):
 # Short on purpose: it once answered a casual "I upgraded the bot, just tag
 # it" with this plus the whole capability list, which read as a malfunction.
 RULES_CUE = re.compile(r'\b(rules?|allowed|happens if|what if|can i|can we|strike for|penalt\w*|punish\w*|'
-                       r'mug\w*|payouts?|reimburs\w*|leave notice|turtl\w*|bount\w*|trial|minimum|banned)\b', re.I)
+                       r'mug\w*|leave notice|turtl\w*|bount\w*|trial|minimum|banned)\b', re.I)
 _QUESTION_STOP = {'what', 'when', 'where', 'which', 'who', 'whos', 'how', 'does', 'doing', 'with', 'that',
                   'this', 'they', 'them', 'have', 'about', 'there', 'their', 'from', 'were', 'been', 'will',
                   'should', 'could', 'would', 'tell', 'show', 'give', 'list', 'members', 'member', 'faction'}
@@ -1647,11 +1684,78 @@ STRIKE_REFUSAL = ("I don't hand out or take away strikes by chat, boss 🚫 Mana
                   "**`/strikes`**. I can still tell you someone's strikes or who's waiting for a decision, "
                   "just ask.")
 
+# Payouts of any kind (Pat, 08/11/2026): amounts AND how they work, war, OC
+# and Xanax payouts, reimbursements, the vault. The bot says it doesn't know,
+# every time, without the AI: a payout figure in chat would get quoted back
+# at management as a promise.
+PAYOUT_RX = re.compile(
+    r'\bpay ?-?outs?\b|\bpaid\b(?!\s+attention)|'
+    r'\bhow (?:is|are|do|does|will|did|was) [\w\s]{0,20}?(?:split|divided|shared out)\b|\bpay(?:s|ing|ment|ments|day)?\b|\breimburs\w*|\brefund\w*|\bvault\b|'
+    r'\bwithdr[ae]w\w*|\bsalar(?:y|ies)\b|\bwages?\b|\bearnings?\b|\b(?:my|our|their|his|her|the) cut\b|'
+    r'\bhow much (?:money |cash |\$ ?)?(?:do|did|will|does|would|should|can|could|are|is|am) '
+    r'(?:i|we|you|they|he|she|\w+) (?:get|gets|getting|earn|earned|make|made|receive|be paid|owed)\b'
+    r'(?!\s+(?:in\s+)?(?:respect|hits?|chain|points|score))', re.I)
+PAYOUT_REFUSAL = "No idea on payouts, boss 🤷 Check with management."
+
+# "Who should we kick?" (Pat, 08/11/2026): provoking, so a joke and no names
+# or numbers, never the AI. Neutral lists ("who is least active") still work,
+# management uses those. "kick off a chain" is an action, not a kick.
+KICK_RX = re.compile(
+    r'\b(?:kick(?:ed|ing|s)?|boot(?:ed|ing|s)?|sack(?:ed|ing)?|axe(?:d)?|purge|cull|ditch|yeet(?:ed)?)\b'
+    r'(?!\s*-?\s*off\b)(?!\s+up\b)(?!\s+(?:a |the |an )?(?:chain|event|target|poll)s?\b)'
+    r'|(?<!on )\bfire(?:d)?\b(?!\s+(?:a |the )?(?:chain|event|target|poll))'
+    r'|\bget(?:ting)? rid of\b|\b(?:throw|chuck|kick|boot|toss)(?:ed|ing|s)? (?:\w+ ){0,2}out\b'
+    r'|\b(?:remove|drop|cut|ban|expel)\w* (?:[\w\']+ ){0,3}(?:from|out of) (?:the |our )?(?:faction|crew|punks|team|fac)\b'
+    r'|\bwho (?:should|must|needs to|has to) (?:go|leave|be gone)\b|\bdead ?weight\b', re.I)
+KICK_DODGE = ("Kick someone? I'm a bot, not a bouncer 🥊 Who stays in the crew is management's call, not mine. "
+              "I can pull anyone's records if that helps.")
+
+# Not used today (chat is management only, Pat 07/11/2026). If members are
+# ever let in, they get no judging or ranking of other members: no "least
+# active", no rankings, no other people's strikes (Pat, 08/11/2026).
+JUDGE_RX = re.compile(
+    r'\b(?:least|most|worst|best|lowest|highest|top|bottom|fewest|slack\w*|lazy|laziest|useless|weakest|'
+    r'inactiv\w*|activ\w*|offline|rank\w*|strikes?|candidates?|compare\w*|comparison|vs|versus|missed|'
+    r'missing|behind|leaderboard|naughty|in trouble|warn\w*)\b'
+    r"|\bwho (?:has ?n[o']?t|hasn'?t|didn'?t|did not|isn'?t|is not|never)\b", re.I)
+MEMBER_REFUSAL = ("That one's for management only, sorry 🔒 I can tell you about wars, chains, events and the "
+                  "rules though.")
+MEMBER_BLOCKED_TOOLS = {'faction_table', 'strikes_overview'}
+
+
+def guard_question(question, management=True):
+    """The bot's own fixed reply for questions the AI must never word, or
+    None to go on to the AI. Checked in Python before any AI is asked."""
+    q = question or ''
+    if STRIKE_ACTION_RX.search(q):
+        return STRIKE_REFUSAL
+    if KICK_RX.search(q):
+        return KICK_DODGE
+    if PAYOUT_RX.search(q):
+        return PAYOUT_REFUSAL
+    if not management and JUDGE_RX.search(q):
+        return MEMBER_REFUSAL
+    return None
+
+
+I_DID = re.compile(
+    r"\b(?:i'?ve|i have|i|we'?ve|we have)\s+(?:just\s+|now\s+|already\s+|gone and\s+)?"
+    r"(?:deleted|removed|added|started|ended|cancell?ed|created|posted|scheduled|kicked|banned|booted|issued|"
+    r"gave|given|sent|dm'?e?d|messaged|pinged|wiped|reset|approved|promoted|demoted|paid|transferred)\b", re.I)
+
+
+# Chat claiming the bot did something. Only a pressed ✅ card ever acts.
+CLAIMS_DONE = re.compile(
+    r"\b(deleted|removed|added|started|ended|cancell?ed|created|posted|scheduled|kicked|banned|booted|issued|"
+    r"gave|given|sent|dm'?e?d|messaged|pinged|wiped|reset|approved|promoted|demoted|paid|transferred|"
+    r"done|sorted|handled|on it)\b", re.I)
+
 
 HELP_WORDS = re.compile(r'^\s*(help|commands?|what can you do\??|how do i use you\??|\?)\s*$', re.I)
 
 
-async def answer_question(session, question, facts, history=None, earlier_facts='', providers=None):
+async def answer_question(session, question, facts, history=None, earlier_facts='', providers=None,
+                          management=True):
     """
     Ask the AI, then enforce the rules in Python. The returned text is always
     one of:
@@ -1662,9 +1766,12 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
       - the raw records, when the AI kept using numbers that aren't in them.
     """
     providers = providers or PROVIDERS
-    if STRIKE_ACTION_RX.search(question):
-        # Fixed reply, no AI: see STRIKE_ACTION_RX. 'none' = not remembered.
-        return Answer(STRIKE_REFUSAL, 'none', '', True, 0, kind='ask')
+    fixed = guard_question(question, management)
+    if fixed:
+        # Fixed reply, no AI (strikes, kicks, payouts; judging for members).
+        # 'none' = not remembered as a conversation.
+        return Answer(fixed, 'none', '', True, 0, kind='ask')
+    facts.management = management
     convo = ' '.join([question] + [t.get('content', '') for t in history or [] if t.get('role') == 'user'])
     announcing = bool(ANNOUNCE_RX.search(convo))
     # The action tools (features/ask_actions.py) are only shown when the
@@ -1673,8 +1780,9 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
     # announcement, not a request to start one.
     from features.ask_live import LIVE_SPECS
     from features.ask_actions import ACTION_SPECS, ACTION_RX
-    acting = bool(ACTION_RX.search(convo)) and not announcing
-    facts.tool_specs = TOOL_SPECS + LIVE_SPECS + (ACTION_SPECS if acting else [])
+    acting = bool(ACTION_RX.search(convo)) and not announcing and management
+    facts.tool_specs = [t for t in TOOL_SPECS + LIVE_SPECS + (ACTION_SPECS if acting else [])
+                        if management or t['function']['name'] not in MEMBER_BLOCKED_TOOLS]
     user_said = '\n'.join([question] + [t.get('content', '') for t in history or [] if t.get('role') == 'user'])
     facts.said = user_said + ' ' + clock_variants(user_said)
     sys_txt = system_prompt(announce=announcing, acting=acting)
@@ -1714,6 +1822,12 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
             text, msgs = await ask(session, base, facts, used)
         except NotCapable as e:
             problems.append(f'{pname}: {e}')
+            continue
+        except Exception as e:
+            # A provider bug (odd reply shape, a tool blowing up mid-loop) must
+            # cost that provider only, not the whole answer: the next one tries.
+            logger.exception(f'ask_ai: {pname} crashed')
+            problems.append(f'{pname}: crashed ({type(e).__name__})')
             continue
         took = lambda: time.monotonic() - t0
         # The prompt's "It is now <date time>" must not count: whatever minute
@@ -1812,7 +1926,12 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
                 return Answer('\n\n'.join(facts.notices), pname, '', True, took(), kind='ask')
             # ...unless it was just chit-chat, which needs no records at all.
             if is_small_talk(question, text, facts):
-                chat = tidy_answer(text, [], '') or "Just keeping the armoury books straight, boss 😎 What's up?"
+                chat = tidy_answer(text, [], '')
+                if not chat or CLAIMS_DONE.search(chat):
+                    # Chat never does anything (only ✅ cards do). A chat line
+                    # saying it did ("Deleted everything 💀", "strike issued")
+                    # would be believed, so it is swapped for a harmless one.
+                    chat = "Just keeping the armoury books straight, boss 😎 What's up?"
                 return Answer(chat, pname, '', True, took(), kind='chat')
             # Asked to do something and the AI asked a question of its own
             # instead of calling the tool ("which chain event?"): fine to pass
@@ -2132,7 +2251,10 @@ class AskAI:
                 if not question or HELP_WORDS.match(question):
                     await message.reply(HELP_TEXT, mention_author=False)
                     return
-                ans = await answer_question(await self.session(), question, facts, history, earlier)
+                # Always True today (only management reaches here, see on_message);
+                # passed so letting members in later can't leak judging answers.
+                ans = await answer_question(await self.session(), question, facts, history, earlier,
+                                            management=member_is_management(message.author))
 
         logger.info(f'ask_ai: {message.author} asked {question[:80]!r} -> {ans.provider}, '
                     f'{ans.seconds:.0f}s, kind={ans.kind}, fallback={ans.fallback}')

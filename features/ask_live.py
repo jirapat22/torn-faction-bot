@@ -37,7 +37,9 @@ logger = logging.getLogger(__name__)
 # Lines that must never reach the AI (Pat's rule, 07/11/2026). "bs" is how
 # Torn players write battle stats; FFScouter is where the estimates come from.
 FORBIDDEN_LINE = re.compile(r'\bxan(ax)?s?\b|battle ?stats?|\bbs\b|ffscouter|\best\.?\s*stats?\b|'
-                            r'\bnet ?worth\b|\bmoney\b|\bcash\b', re.I)
+                            r'\bnet ?worth\b|\bmoney\b|\bcash\b|'
+                            # payouts are "check with management" (Pat, 08/11/2026)
+                            r'\bpay ?-?outs?\b|reimburs\w*|\bvault\b|withdraw\w*', re.I)
 
 NOTICE_DAYS = 60        # same window the strike alerts use (features/notices.py)
 NOTICES_READ = 200      # messages read from #leave-notices per question
