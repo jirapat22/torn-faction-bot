@@ -8378,6 +8378,10 @@ def test_announcement_drafts_ask_check_numbers_and_resolve_targets():
         ('fake', provider([('announce_draft', {'channel': '', 'ping': 'none',
                                                'text': 'Happy jump **Saturday 13:00 TCT**'})]))]))
     assert pm.kind == 'draft' and pm.unsure == []
+    from features.ask_ai import fix_weekdays
+    assert fix_weekdays('**Sunday 13/11/2026** to Thursday 15/11/2026, Sat 07/11/2026') == \
+        '**Friday 13/11/2026** to Sunday 15/11/2026, Sat 07/11/2026'
+    assert fix_weekdays('on 13/11/2026 (Sunday)') == 'on 13/11/2026 (Friday)'
 
     class Ch:
         def __init__(self, i, name):

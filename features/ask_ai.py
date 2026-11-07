@@ -959,8 +959,8 @@ def system_prompt():
         'memory. You do not decide strikes: management does.\n'
         f'What the bot keeps:\n{CAPABILITIES}\n'
         'ANNOUNCEMENTS: when asked to write/make/post an announcement, you need: what it is about, the exact '
-        'details (date, time in TCT, place, requirements), which channel (default: the announcements '
-        'channel, use "" for it) and who to ping (nobody, everyone, here, or a role). Ask for anything '
+        'details (date, time in TCT) and who to ping (nobody, everyone, here, or a role). Do NOT ask which '
+        'channel: use "" (the announcements channel) unless they name one. Ask for anything '
         'missing with announce_ask, ONE short question at a time, and ALWAYS ask who to ping unless they '
         'already said. Never invent a detail (no made-up dates, times, numbers or names), and never add '
         'instructions or requirements they did not give (e.g. do not tell people to turtle or not to turtle). '
@@ -1317,6 +1317,34 @@ UNSURE_TEXT = ("Not sure what you're after, boss 🤔 Ask me about a member, a w
 ANNOUNCE_RX = re.compile(r'announc\w*', re.I)
 
 
+_DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+_DAY_RX = r'(Mon|Tue|Tues|Wed|Thu|Thur|Thurs|Fri|Sat|Sun)(?:day|nesday|sday|urday|rsday)?'
+
+
+def fix_weekdays(text):
+    """
+    Correct a weekday written next to a DD/MM/YYYY date ("Sunday 13/11/2026"
+    -> "Friday 13/11/2026"). The AI got both weekdays wrong in Pat's first real
+    announcement, and the number check can't see day names.
+    """
+    def correct(day_word, dd, mm, yyyy):
+        try:
+            real = datetime(int(yyyy), int(mm), int(dd)).weekday()
+        except ValueError:
+            return day_word
+        full = _DAYS[real]
+        return full if len(day_word) > 3 else full[:3]
+
+    text = re.sub(rf'\b{_DAY_RX}\b(,?\s+)(\d{{1,2}})/(\d{{1,2}})/(\d{{4}})',
+                  lambda m: correct(m.group(0).split()[0].rstrip(','), m.group(3), m.group(4), m.group(5))
+                  + m.group(2) + f'{m.group(3)}/{m.group(4)}/{m.group(5)}', text, flags=re.I)
+    text = re.sub(rf'(\d{{1,2}})/(\d{{1,2}})/(\d{{4}})(\s*\(?)\b{_DAY_RX}\b',
+                  lambda m: f'{m.group(1)}/{m.group(2)}/{m.group(3)}{m.group(4)}'
+                  + correct(m.group(0)[len(m.group(1)) + len(m.group(2)) + len(m.group(3)) + 2 + len(m.group(4)):],
+                            m.group(1), m.group(2), m.group(3)), text, flags=re.I)
+    return text
+
+
 def clock_variants(text):
     """'1pm' also counts as 13 and '1:30pm' as 13 and 30: people write 12-hour
     times and the draft says 13:00 TCT."""
@@ -1380,7 +1408,8 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
                     pass
                 bad = unsupported_numbers(facts.final, said, earlier_facts)
             if facts.final_kind == 'draft':
-                ans = Answer(facts.final, pname, '', True, took(), kind='draft')
+                facts.draft['text'] = fix_weekdays(facts.draft['text'])
+                ans = Answer(facts.draft['text'], pname, '', True, took(), kind='draft')
                 ans.draft = facts.draft
                 ans.unsure = bad
                 return ans
