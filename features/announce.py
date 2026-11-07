@@ -163,24 +163,36 @@ class EditDraftModal(discord.ui.Modal):
 
     async def on_submit(self, interaction: discord.Interaction):
         text, unknown = names_to_links(self.body.value.strip(), guild_channel_names(interaction.guild))
+        pinged = resolve_ping(interaction.guild, self.draft['ping'])
+        prefix = pinged[0] if pinged else ''
+        if len(build_post(text, prefix)) > POST_LIMIT:
+            await interaction.response.send_message('That is too long for one Discord message. Nothing changed.',
+                                                    ephemeral=True)
+            return
         self.draft['text'] = text
-        await interaction.response.edit_message(embed=draft_embed(text), content=draft_header(
-            interaction.guild.get_channel(self.draft['channel_id']), self.draft['ping_label']))
+        await interaction.response.edit_message(
+            content=build_post(text, prefix),
+            embed=draft_info(interaction.guild.get_channel(self.draft['channel_id']), self.draft['ping_label']),
+            allowed_mentions=discord.AllowedMentions.none())
         if unknown:
             await interaction.followup.send('⚠️ Not turned into links (no channel by that name): '
                                             + ', '.join('#' + u for u in unknown), ephemeral=True)
 
 
-def draft_header(channel, ping_label, unsure=()):
+def draft_info(channel, ping_label, unsure=()):
+    """
+    The small box UNDER the preview: where it goes, who gets pinged, what to
+    check. The message itself is the exact post (Pat wanted to see exactly
+    what will be posted, 07/11/2026), so the info can't live inside it.
+    """
     where = channel.mention if channel is not None else '(unknown channel)'
-    warn = (f'⚠️ I worked these numbers out myself, check them: **{", ".join(unsure)}**\n' if unsure else '')
-    return (f'📝 **Draft announcement** → {where} · ping: **{ping_label}**\n' + warn +
-            '-# Check every detail: I only know what you told me. Only you can press these. '
-            'Reply with changes, or use ✏️ Change to edit it yourself.')
-
-
-def draft_embed(text):
-    return discord.Embed(description=text, color=0xf1c40f)
+    lines = [f'📝 **Draft, not posted yet.** Above is exactly what will be posted in {where}.',
+             f'Ping: **{ping_label}**' + (' (shown above, not sent in this preview)' if ping_label != 'nobody' else '')]
+    if unsure:
+        lines.append(f'⚠️ I worked these numbers out myself, check them: **{", ".join(unsure)}**')
+    lines.append('-# Check every detail: I only know what you told me. Only you can press these. '
+                 'Reply with changes, or use ✏️ Change to edit it yourself.')
+    return discord.Embed(description='\n'.join(lines), color=0xf1c40f)
 
 
 async def send_draft(message, store, draft, unsure=()):
@@ -202,8 +214,11 @@ async def send_draft(message, store, draft, unsure=()):
     text, _ = names_to_links((draft.get('text') or '').strip(), guild_channel_names(guild))
     if len(build_post(text, prefix)) > POST_LIMIT:
         return None, 'That came out too long for one Discord message. Want it shorter, or split into two?'
-    sent = await message.reply(draft_header(channel, label, unsure), embed=draft_embed(text), view=DraftView(store),
-                               mention_author=False, allowed_mentions=discord.AllowedMentions.none())
+    # The preview IS the post: same text, same ping line, but AllowedMentions
+    # .none() so nobody is actually pinged until Post is pressed.
+    sent = await message.reply(build_post(text, prefix), embed=draft_info(channel, label, unsure),
+                               view=DraftView(store), mention_author=False,
+                               allowed_mentions=discord.AllowedMentions.none())
     store[sent.id] = {'author_id': message.author.id, 'channel_id': channel.id, 'ping': draft.get('ping') or '',
                       'ping_label': label, 'text': text, 'at': time.time()}
     while len(store) > DRAFTS_KEPT:

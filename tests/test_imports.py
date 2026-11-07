@@ -8462,6 +8462,72 @@ def test_ask_ai_second_audit_fixes():
     assert raw.index('not linked') < raw.index('Fewest days')
 
 
+def test_announcement_preview_is_exactly_the_post():
+    """
+    Pat wanted to see the exact post before it goes out: the draft message's
+    text must be byte-for-byte what Post sends, ping line included, but the
+    preview must not ping anyone; the real post pings only the chosen role.
+    """
+    import asyncio
+    import discord
+    import features.announce as an
+
+    class Role:
+        def __init__(self, i, name):
+            self.id, self.name, self.mention = i, name, f'<@&{i}>'
+    class Ch:
+        def __init__(self, i, name):
+            self.id, self.name, self.mention, self.sent = i, name, f'<#{i}>', []
+        async def send(self, content, allowed_mentions=None):
+            self.sent.append((content, allowed_mentions))
+            return type('S', (), {'jump_url': 'https://discord.com/x'})()
+    class Guild:
+        def __init__(self):
+            self.channels, self.threads, self.roles = [Ch(1, '📢-ascended-broadcasts')], [], [Role(8, 'Ascended Punks')]
+        def get_channel(self, i):
+            return next((c for c in self.channels if c.id == i), None)
+        def get_role(self, i):
+            return next((r for r in self.roles if r.id == i), None)
+    g = Guild()
+    an.ANNOUNCEMENTS_CHANNEL_ID = 1
+    replies = []
+    class Msg:
+        guild = g
+        author = type('A', (), {'id': 42})()
+        async def reply(self, content, **kw):
+            replies.append((content, kw))
+            m = type('M', (), {})()
+            m.id = 999
+            return m
+    store = {}
+    sent, q = asyncio.run(an.send_draft(Msg(), store, {'channel': '', 'ping': 'ascended punks role',
+                                                       'text': '**War Saturday 20:00 TCT**'}))
+    assert q is None
+    preview, kw = replies[0]
+    assert preview == '<@&8>\n**War Saturday 20:00 TCT**'
+    am = kw['allowed_mentions']
+    assert am.everyone is False and am.roles is False and am.users is False, 'the preview must ping nobody'
+    assert 'exactly what will be posted' in kw['embed'].description
+
+    class Resp:
+        async def defer(self):
+            pass
+    class Inter:
+        guild = g
+        user = type('U', (), {'id': 42, 'mention': '<@42>'})()
+        response = Resp()
+        message = type('DM', (), {'id': 999})()
+    async def edit(**kw):
+        Inter.edited = kw
+    Inter.message.edit = edit
+    view = an.DraftView(store)
+    asyncio.run(view.post.callback(Inter()))
+    content, allowed = g.channels[0].sent[0]
+    assert content == preview, 'the post must be exactly the preview'
+    assert allowed.roles == [g.roles[0]] and allowed.everyone is False
+    assert 999 not in store and 'Posted in' in Inter.edited['content']
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -8614,4 +8680,5 @@ if __name__ == '__main__':
     test_ask_ai_backup_ai_never_words_records()
     test_announcement_drafts_ask_check_numbers_and_resolve_targets()
     test_ask_ai_second_audit_fixes()
+    test_announcement_preview_is_exactly_the_post()
     print('All smoke tests passed.')
