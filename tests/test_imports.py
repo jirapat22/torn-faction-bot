@@ -9065,6 +9065,58 @@ def test_follow_up_pronoun_points_at_the_one_member_named_earlier():
     assert pronoun_target('is he lazy?', [], F()) is None
 
 
+def test_general_notice_question_only_lists_recent_posts():
+    """
+    Pat, 08/11/2026: "did someone post a leave notice?" quoted a notice from
+    7 weeks ago for a trip long over. The general list now only shows notices
+    posted in the last RECENT_NOTICE_DAYS and counts the older ones.
+    """
+    import asyncio
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+    import config
+    from features.ask_live import LiveTools, RECENT_NOTICE_DAYS
+
+    now = 1794100000
+
+    class Msg:
+        def __init__(self, uid, age_days, text):
+            self.author = SimpleNamespace(id=uid, bot=False)
+            self.created_at = datetime.fromtimestamp(now - age_days * 86400, timezone.utc)
+            self.content = text
+
+    class Channel:
+        def history(self, limit):
+            async def gen():
+                for m in (Msg(1, 2, 'away this weekend'), Msg(2, 48, 'away 29th Sept to 3rd Oct')):
+                    yield m
+            return gen()
+
+    class Facts:
+        discord_links = {}
+        found_any = False
+        def __init__(self):
+            self.now = now
+        def _known_names(self):
+            return {}
+        def _notice(self, text):
+            return text
+
+    real = config.LEAVE_NOTICES_CHANNEL_ID
+    config.LEAVE_NOTICES_CHANNEL_ID = 99
+    try:
+        lt = LiveTools(Facts(), SimpleNamespace(bot=SimpleNamespace(get_channel=lambda cid: Channel())), None)
+        out = asyncio.run(lt._notices(''))
+    finally:
+        config.LEAVE_NOTICES_CHANNEL_ID = real
+    assert 'away this weekend' in out and '29th Sept' not in out, out
+    assert f'1 older notice (posted more than {RECENT_NOTICE_DAYS} days ago) not shown' in out, out
+    # A pasted profile link inside "add ... to targets" still counts as an action
+    # request (the link's . ? = once made it plain chat, 08/11/2026).
+    from features.ask_actions import ACTION_RX
+    assert ACTION_RX.search('add https://www.torn.com/profiles.php?XID=4451076 to test target')
+
+
 def test_leave_notices_are_quoted_word_for_word():
     """
     Pat: "quote it, I'll read it". The whole notice, newest first, with when
@@ -9242,6 +9294,7 @@ if __name__ == '__main__':
     test_chat_action_reaches_a_card_only_through_python()
     test_live_lookups_reuse_the_commands_and_drop_forbidden_lines()
     test_leave_notices_are_quoted_word_for_word()
+    test_general_notice_question_only_lists_recent_posts()
     test_follow_up_pronoun_points_at_the_one_member_named_earlier()
     test_strike_requests_get_the_fixed_reply_without_the_ai()
     test_reaudit_fixes_chat_xanax_poll_names_and_enemy_faction()

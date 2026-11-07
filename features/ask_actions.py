@@ -40,7 +40,7 @@ ACTIONS_KEPT = 50
 # prompt tokens on Groq's 200,000/day plan) and to keep a conversation going.
 ACTION_RX = re.compile(
     r'\b(add|put|remove|take|delete|start|begin|kick ?off|end|finish|stop|cancel|close|make|create|set ?up|'
-    r'schedule|post|open|run|launch)\b[\w\s\'#@,/:-]{0,60}?'
+    r'schedule|post|open|run|launch)\b[^\n]{0,90}?'
     r'\b(targets?|board|chain ?events?|chains?|polls?|availability|events?)\b', re.I)
 
 EVENT_TYPES = {

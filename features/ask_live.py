@@ -44,6 +44,12 @@ FORBIDDEN_LINE = re.compile(r'\bxan(ax)?s?\b|battle ?stats?|\bbs\b|ffscouter|\be
 NOTICE_DAYS = 60        # same window the strike alerts use (features/notices.py)
 NOTICES_READ = 200      # messages read from #leave-notices per question
 NOTICES_PER_PERSON = 3  # their latest few, word for word
+# "Did anyone post a notice?" only lists notices POSTED in this many days.
+# The dates inside notices are never parsed (see features/notices.py: no
+# format survives real notices), so posting time is the only safe filter.
+# Pat, 08/11/2026: the general list showed a 7-week-old notice for a trip
+# long over. Asking about one person still shows their last NOTICE_DAYS.
+RECENT_NOTICE_DAYS = 14
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -338,11 +344,20 @@ class LiveTools:
             if not only:
                 return self._found(f'{real} is not linked to a Discord account in the bot, so I can\'t tell '
                                    'which notices are theirs.')
+        days, older = NOTICE_DAYS, 0
+        if only is None:
+            days = RECENT_NOTICE_DAYS
+            cutoff = self.now - days * 86400
+            older = sum(1 for rows_ in grouped.values() for r in rows_ if r['ts'] < cutoff)
+            grouped = {d: [r for r in rows_ if r['ts'] >= cutoff] for d, rows_ in grouped.items()}
         lines = notice_lines(grouped, self._label, only)
+        more = (f'{older} older notice{"s" if older != 1 else ""} (posted more than {days} days ago) not shown. '
+                'Ask about a member by name to see theirs.') if older else ''
         if not lines:
-            return self._found(f'No leave notice from {who} in #leave-notices in the last {NOTICE_DAYS} days.')
-        return self._found(f'LEAVE NOTICES from {who}, last {NOTICE_DAYS} days, newest first, word for word:\n'
-                           + '\n'.join(lines))
+            return self._found(f'No leave notice from {who} posted in the last {days} days.'
+                               + (f'\n{more}' if more else ''))
+        return self._found(f'LEAVE NOTICES from {who}, last {days} days, newest first, word for word:\n'
+                           + '\n'.join(lines) + (f'\n{more}' if more else ''))
 
     def _timezones(self, name):
         from features.timezones import local_now, friendly_time
