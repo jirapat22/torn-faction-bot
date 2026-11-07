@@ -9033,6 +9033,15 @@ def test_foolproof_round_fixes():
                                       providers=[('F', fumble)]))
     assert ans.text == need and ans.kind == 'action_ask'
 
+    # Round 3: over three messages the AI dropped the earlier "24 hours";
+    # Python reads it from the person's own words (never the bot's "usually").
+    kind, plan = plan_action('action_chain_event', {'op': 'start', 'when': 'now'},
+                             'start a chain event now\n24 hours\nmin 10', now)
+    assert kind == 'plan' and plan['hours'] == 24 and plan['minimum'] == 10
+    kind, _ = plan_action('action_chain_event', {'op': 'start', 'when': 'now'},
+                          'start a chain event now\n24 hours or 48 hours\nmin 10', now)
+    assert kind == 'ask'
+
 
 def test_leave_notices_are_quoted_word_for_word():
     """

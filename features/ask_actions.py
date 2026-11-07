@@ -229,6 +229,18 @@ def plan_action(tool, args, said, now=None):
             return 'ask', 'Do you want to start, end or cancel a chain event?'
         start, _ = when('when', 'when it starts ("now", or a TCT time like "saturday 13:00")', allow_now=True,
                         need_time=True)
+        # Over several messages the AI tends to drop what was said earlier
+        # ("24 hours", then "min 10", then asked for the hours again). The
+        # person's own words still hold it, so Python reads it from them when
+        # it is unambiguous: their number, never a guess.
+        args = dict(args)
+        for field, rx in (('hours', r'\b(\d+)\s*(?:h|hrs?|hours?)\b'),
+                          ('minimum', r'\bmin(?:imum)?\.?\s*(?:of\s*)?(\d+)\b|\b(\d+)\s*(?:hits?\s*)?min(?:imum)?\b')):
+            if not (_int(args.get(field)) and said_number(_int(args.get(field)), said)):
+                found = {next(g for g in ((m,) if isinstance(m, str) else m) if g)
+                         for m in re.findall(rx, said, re.I)}
+                if len(found) == 1:
+                    args[field] = int(found.pop())
         hours = num('hours', 'how long it runs, in hours (usually 24)', hi=24 * 7)
         minimum = num('minimum', 'the minimum hits each member must make (the rule is usually 10)', hi=1000)
         target = num('target', '', required=False, lo=0)
