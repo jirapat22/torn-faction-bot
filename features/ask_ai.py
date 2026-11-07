@@ -1332,7 +1332,9 @@ def raw_records_text(facts, question='', limit=1500):
 
 UNSURE_TEXT = ("Not sure what you're after, boss 🤔 Ask me about a member, a war, chains, OCs, strikes "
                'or the rules. Say `@ApexPunk help` for the full list.')
-ANNOUNCE_RX = re.compile(r'announc\w*', re.I)
+# Typo-tolerant: Pat's real request said "annoucement", which missed the
+# old r'announc' and skipped the event lookup entirely.
+ANNOUNCE_RX = re.compile(r'\ban+o*u*n*c+e*m*e*n*t\w*|\bannounc\w*|\bannounce\b', re.I)
 # "ping everyone", "@Ascended Punks", "no ping", "ping nobody": who to ping was said.
 PING_RX = re.compile(r'\bping\w*\b|@everyone|@here|@[A-Z]\w+|\bno\s*ping\b|\bnobody\b', re.I)
 
@@ -1392,15 +1394,30 @@ def ground_draft(text, said):
     known = {w[:5] for w in _content_words(said)}
     lines = text.split('\n')
     last_real = max((i for i, l in enumerate(lines) if l.strip()), default=-1)
+
+    def made_up(piece):
+        words = _content_words(re.sub(r'<[@#&!]*\d+>', ' ', piece))
+        unseen = [w for w in words if w[:5] not in known]
+        return bool(words) and len(unseen) >= 2 and len(unseen) / len(words) > 0.5
+
     kept, cut = [], []
     for i, line in enumerate(lines):
-        words = _content_words(re.sub(r'<[@#&!]*\d+>', ' ', line))
-        unseen = [w for w in words if w[:5] not in known]
-        flavour = i == last_real and not re.search(r'\d', line)
-        if words and len(unseen) >= 2 and len(unseen) / len(words) > 0.5 and not flavour:
-            cut.append(re.sub(r'^[\s*•\-]+|\*+', '', line).strip())
+        if i == last_real and not re.search(r'\d', line):
+            kept.append(line)                     # the one flavour line at the end
             continue
-        kept.append(line)
+        # Judge each part of the line on its own: the AI tacks filler onto real
+        # lines ("13/11 10:00 to 15/11 16:00 TCT – special bonuses active"), and
+        # cutting the whole line once threw away Pat's dates with it.
+        parts = re.split(r'(\s+[–—-]\s+|;\s+|(?<=[.!])\s+)', line)
+        pieces, seps = parts[0::2], parts[1::2]
+        out = ''
+        for j, piece in enumerate(pieces):
+            if made_up(piece):
+                cut.append(re.sub(r'^[\s*•\-]+|\*+', '', piece).strip())
+                continue
+            out += (seps[j - 1] if j > 0 and out else '') + piece
+        if out.strip() and re.sub(r'[\s*•\-:]+', '', out):
+            kept.append(out.rstrip(' –—-;'))
     out = re.sub(r'\n{3,}', '\n\n', '\n'.join(kept)).strip()
     return out, cut
 

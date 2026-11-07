@@ -8564,6 +8564,12 @@ def test_announcement_drafts_keep_only_what_was_said():
     assert 'War Enlistment' in text and 'fight hard' in text, 'the closing flavour line stays'
     assert 'armory' not in text and 'Join the cause' not in text and 'bonuses' not in text
     assert len(cut) == 3
+    # Filler tacked onto a real line: only the filler goes, the dates stay.
+    text, cut = ground_draft('**World Diabetes Day:** 13/11/2026 10:00 – 15/11/2026 16:00 TCT – special bonuses active.\n'
+                             'Stay sharp.', said)
+    assert '13/11/2026 10:00 – 15/11/2026 16:00 TCT' in text and 'bonuses' not in text, text
+    from features.ask_ai import ANNOUNCE_RX
+    assert all(ANNOUNCE_RX.search(w) for w in ('annoucement', 'anouncement', 'announcement', 'announce it'))
 
 
 def test_torn_events_from_the_official_calendar():
