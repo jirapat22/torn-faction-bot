@@ -985,7 +985,12 @@ def system_prompt():
         'event they name and you may add its effect in Torn\'s own words (e.g. "candy effects are tripled"). '
         'If their dates differ from Torn\'s, use THEIR dates (it is their plan). Each item is its name, its '
         'date/time, and only the details they gave or torn_events gave. Lines with things they did not say are cut automatically. Voice: clear and easy to '
-        'scan, key details in bold. Never calculate an end date or time yourself; write only the dates and '
+        'scan. FORMAT: for each event a bold heading line "**<emoji> Event name**" followed by bullet lines '
+        '"- ..." with its date and time (write dates as DD/MM/YYYY and times as HH:MM TCT, e.g. "Saturday '
+        '07/11/2026 13:00 TCT") and the details they gave; leave a blank line between events. Emojis: ranked '
+        'war ⚔️, chain ⛓️, happy jump 🦘, World Diabetes Day 🍭, Christmas Town 🎄, Trick or Treat 🎃, '
+        'Easter Egg Hunt 🥚, other Torn events 🎉. The bot adds each event\'s standard details, local times and '
+        'a countdown itself, so do not add them. Never calculate an end date or time yourself; write only the dates and '
         'times they gave. At most one short cheeky punk line at the end (no Torn slang or advice in '
         'it), no more than 2 emojis, under 1500 characters. Write times exactly as given (TCT). If they reply to '
         'a draft with changes or extra details, call announce_draft again with the new version.\n'
@@ -1443,6 +1448,34 @@ def fix_durations(text):
     return rx.sub(fix, text)
 
 
+def add_local_times(text):
+    """
+    After each "DD/MM/YYYY HH:MM (TCT)" add Discord timestamps: the reader's
+    own local time, and for the first time on a line a live countdown ("in 3
+    days"). Pat's pick, 07/11/2026: the faction is worldwide and TCT alone
+    made people do timezone maths. TCT is UTC, so the maths is exact.
+    """
+    # (?!\s*TCT): never stop just before "TCT" (that let a second pass re-stamp).
+    rx = re.compile(r'(\d{1,2})/(\d{1,2})/(\d{4})(,?\s*(?:at|@)?\s*)(\d{1,2}):(\d{2})(\s*TCT)?(?!\s*TCT)')
+    out = []
+    for line in text.split('\n'):
+        seen = [0]
+
+        def stamp(m):
+            if re.match(r'\s*\(<t:', m.string[m.end():]):
+                return m.group(0)                  # already stamped
+            try:
+                ts = int(datetime(int(m.group(3)), int(m.group(2)), int(m.group(1)), int(m.group(5)),
+                                  int(m.group(6)), tzinfo=timezone.utc).timestamp())
+            except ValueError:
+                return m.group(0)
+            seen[0] += 1
+            extra = f'<t:{ts}:f>' + (f', <t:{ts}:R>' if seen[0] == 1 else '')
+            return f'{m.group(0)} ({extra})'
+        out.append(rx.sub(stamp, line))
+    return '\n'.join(out)
+
+
 def _dates(text):
     """{(day, month)} for every DD/MM or DD/MM/YYYY date in text."""
     return {(int(d), int(m)) for d, m in re.findall(r'\b(\d{1,2})/(\d{1,2})(?:/\d{2,4})?\b', text or '')}
@@ -1572,6 +1605,7 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
                 if event_names:
                     from features.torn_events import enrich_draft
                     grounded = enrich_draft(grounded, event_names, path=cal_path)
+                grounded = add_local_times(grounded)
                 facts.draft['text'] = grounded
                 facts.draft['cut'] = cut
                 ans = Answer(facts.draft['text'], pname, '', True, took(), kind='draft')

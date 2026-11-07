@@ -39,11 +39,25 @@ PICK_START_NOTE = ('Players pick their own start time in the Torn calendar (10:0
 
 # Pat's own descriptions. Only facts he gave: no durations or rules made up.
 FACTION_EVENTS = [
-    ('Ranked war', 'A weekly faction event. A war lasts a week at most. We enlist first; Torn matchmakes '
-                   'enlisted factions every Tuesday. We alternate war weeks and training weeks.'),
-    ('Chain', 'A weekly faction event.'),
+    ('Ranked war', 'A weekly faction event. Enlistment starts on Tuesday (Torn matchmakes enlisted factions '
+                   'every Tuesday) and we war on the weekend. A war lasts a week at most. We alternate war weeks '
+                   'and training weeks.'),
+    ('Chain', 'A weekly faction event. Normally runs 24 hours.'),
     ('Happy jump', 'A weekly faction event that lasts 24 hours.'),
 ]
+
+# Channels the detail lines link to (IDs from the rulebook posts).
+WAR_AVAILABILITY = '<#1559499530385235978>'
+HAPPY_JUMP_GUIDE = '<#1560218041751437405>'
+WAR_GUIDE = '<#1559868505044815892>'
+
+# Emoji per event for announcement headings (Pat's pick: event emojis).
+EVENT_EMOJI = {
+    'Ranked war': '⚔️', 'Chain': '⛓️', 'Happy jump': '🦘', 'World Diabetes Day': '🍭',
+    'Christmas town': '🎄', 'Trick or Treat': '🎃', 'Easter Egg Hunt': '🥚', "Valentine's Day": '💘',
+    'Black Friday': '🛍️', 'Slash Wednesday': '🏥', 'Torn Anniversary': '🎂', 'Elimination': '🏆',
+    "St Patrick's Day": '🍀', 'Weekend Road Trip': '🏎️', 'Tourism Day': '✈️', 'World Blood Donor Day': '🩸',
+}
 
 
 async def refresh(path=CALENDAR_FILE, force=False, now=None):
@@ -96,7 +110,7 @@ def events_text(query='', path=CALENDAR_FILE, now=None, limit=8):
     "next"/"upcoming"/empty lists what's coming up). Faction events are
     included when the query mentions them, or always for an empty query.
     """
-    now = now or time.time()
+    now = time.time() if now is None else now      # now=0 means "every event, past ones too"
     saved = load_json(path, default={}) or {}
     torn = [dict(e, kind='Torn event') for e in saved.get('events') or []] + \
            [dict(e, kind='Torn competition') for e in saved.get('competitions') or []]
@@ -178,12 +192,28 @@ def facts_for(names, path=CALENDAR_FILE, now=None):
     return 'EVENT FACTS for this announcement:\n' + '\n'.join(parts) if parts else ''
 
 
-# Short detail lines the bot adds under each event in an announcement, and the
-# words that show the AI already said it (so it isn't said twice).
+# Detail lines the bot adds under each event in an announcement (Pat's picks,
+# 07/11/2026). Each has a pattern that shows the draft already says it, so a
+# point is never made twice.
 FACTION_DETAILS = {
-    'Ranked war': ('A war lasts a week at most. Torn matchmakes enlisted factions every Tuesday.',
-                   re.compile(r'tuesday', re.I)),
-    'Happy jump': ('Lasts 24 hours.', re.compile(r'24\W*h', re.I)),
+    'Ranked war': [
+        ('Enlistment starts Tuesday, we war on the weekend. A war lasts a week at most.', r'tuesday'),
+        (f'Answer the availability poll in {WAR_AVAILABILITY} at least 24 hours before.', r'availability'),
+        ('Revives OFF for the whole war. Going offline? Turtle first.', r'revive'),
+        ('Save your energy and stack for the start.', r'\bstack'),
+        ('Scout the enemy with FFScouter.', r'scout|ffscouter'),
+        (f'War guide: {WAR_GUIDE}', r'war guide'),
+    ],
+    'Chain': [
+        ('Normally runs 24 hours.', r'24\W*h'),
+        ('Minimum 10 hits (5 if you are under level 15).', r'minimum|10 hits'),
+        ('Stack your energy before it starts.', r'\bstack'),
+        (f"Can't make it? Post in {WAR_AVAILABILITY} at least 24 hours before.", r"can.?t make it"),
+    ],
+    'Happy jump': [
+        ('Lasts 24 hours.', r'24\W*h'),
+        (f'Happy Jumping Guide: {HAPPY_JUMP_GUIDE}', r'jumping guide'),
+    ],
 }
 _LINE_CUES = {
     'Ranked war': re.compile(r'\b(wars?|enlist\w*)\b', re.I),
@@ -193,17 +223,21 @@ _LINE_CUES = {
 
 
 def _torn_detail(title, path):
+    """[(line, already-said pattern)] for a Torn event: its effect in Torn's
+    words, and the start-time pick for calendar events."""
     saved = load_json(path, default={}) or {}
     for e in (saved.get('events') or []) + (saved.get('competitions') or []):
         if e.get('title') == title:
             desc = (e.get('description') or '').strip().rstrip('.')
-            if not desc:
-                return None
-            note = ' Pick your start time in the Torn calendar.' if e in (saved.get('events') or []) else ''
-            # Long descriptions (Christmas Town, Easter) are cut to their first sentence.
-            first = re.split(r'(?<=[.!])\s', desc)[0].rstrip('.')
-            return (f'Torn: {first}.{note}', first.split()[0].lower() if first else '')
-    return None
+            out = []
+            if desc:
+                # Long descriptions (Christmas Town, Easter) are cut to their first sentence.
+                first = re.split(r'(?<=[.!])\s', desc)[0].rstrip('.')
+                out.append((f'Torn: {first}.', re.escape(first.split()[0]) if first else r'$^'))
+            if e in (saved.get('events') or []):
+                out.append(('Pick your start time in the Torn calendar.', r'start time'))
+            return out
+    return []
 
 
 def enrich_draft(text, names, path=CALENDAR_FILE):
@@ -214,18 +248,18 @@ def enrich_draft(text, names, path=CALENDAR_FILE):
     """
     lines = text.split('\n')
     for name in names:
-        detail = FACTION_DETAILS.get(name) or _torn_detail(name, path)
-        if not detail:
-            continue
-        line_text, already = detail
-        # Skip when the draft already says it ("24-hour", "24 h", "24 hours").
-        if already and (already.search(text) if hasattr(already, 'search') else already in text.lower()):
-            continue
+        details = FACTION_DETAILS.get(name) or _torn_detail(name, path)
         cue = _LINE_CUES.get(name) or re.compile(
             '|'.join(re.escape(w) for w in re.findall(r'[A-Za-z]{4,}', name)
                      if w.lower() not in _GENERIC_TITLE_WORDS) or re.escape(name), re.I)
-        for i, l in enumerate(lines):
-            if cue.search(l):
-                lines.insert(i + 1, f'- {line_text}')
-                break
+        at = next((i for i, l in enumerate(lines) if cue.search(l)), None)
+        if at is None:
+            continue
+        # Insert after the event's heading and any bullets already under it.
+        end = at + 1
+        while end < len(lines) and lines[end].lstrip().startswith(('-', '•')):
+            end += 1
+        block = '\n'.join(lines[at:end])
+        new = [f'- {line}' for line, already in details if not re.search(already, block, re.I)]
+        lines[end:end] = new
     return '\n'.join(lines)

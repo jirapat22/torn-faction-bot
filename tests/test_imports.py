@@ -8618,11 +8618,15 @@ def test_torn_events_from_the_official_calendar():
              '**War Enlistment:** The two weeks following World Diabetes Day.\n\nStay sharp, punks.')
     rich = enrich_draft(draft, found, path=path)
     lines = rich.split('\n')
-    assert lines[1] == '- Lasts 24 hours.'
-    assert lines[3] == '- Torn: Candy effects are tripled. Pick your start time in the Torn calendar.'
-    assert lines[5].startswith('- A war lasts a week at most') and lines[-1] == 'Stay sharp, punks.'
-    assert enrich_draft('Happy jump lasts 24 hours', ['Happy jump'], path=path) == 'Happy jump lasts 24 hours'
-    assert enrich_draft('Happy jump (24‑hour)', ['Happy jump'], path=path) == 'Happy jump (24‑hour)'
+    hj = lines.index('**Happy Jump Day:** Saturday 07/11/2026 at 13:00 TCT.')
+    assert lines[hj + 1:hj + 3] == ['- Lasts 24 hours.', '- Happy Jumping Guide: <#1560218041751437405>']
+    wdd = lines.index('**World Diabetes Day:** 13/11/2026 10:00 TCT to 15/11/2026 16:00 TCT.')
+    assert lines[wdd + 1:wdd + 3] == ['- Torn: Candy effects are tripled.', '- Pick your start time in the Torn calendar.']
+    war = [l for l in lines if l.startswith('- ')][-6:]
+    assert war[0].startswith('- Enlistment starts Tuesday, we war on the weekend') and 'War guide' in war[-1]
+    assert lines[-1] == 'Stay sharp, punks.'
+    assert '- Lasts 24 hours.' not in enrich_draft('Happy jump lasts 24 hours', ['Happy jump'], path=path)
+    assert '- Lasts 24 hours.' not in enrich_draft('Happy jump (24‑hour)', ['Happy jump'], path=path)
     from features.ask_ai import dates_not_given
     said = 'saturday 7/11/2026 1pm happy jump, 13/11/2026 10:00 TCT to 15/11/2026 16:00 TCT diabetes day'
     assert dates_not_given('07/11/2026 13:00 – 14/11/2026 13:00 (24 h); 13/11 to 15/11', said) == ['14/11']
@@ -8630,6 +8634,11 @@ def test_torn_events_from_the_official_calendar():
     assert fix_durations('Saturday 07/11/2026 13:00 – 14/11/2026 13:00 TCT (24 h)') == \
         'Saturday 07/11/2026 13:00 – 08/11/2026 13:00 TCT (24 h)'
     assert fix_durations('13/11/2026 10:00 – 15/11/2026 16:00 TCT') == '13/11/2026 10:00 – 15/11/2026 16:00 TCT'
+    from features.ask_ai import add_local_times
+    out = add_local_times('- 13/11/2026 10:00 TCT to 15/11/2026 16:00 TCT\n- Saturday 07/11/2026 13:00 TCT')
+    assert out == ('- 13/11/2026 10:00 TCT (<t:1794564000:f>, <t:1794564000:R>) to 15/11/2026 16:00 TCT '
+                   '(<t:1794758400:f>)\n- Saturday 07/11/2026 13:00 TCT (<t:1794056400:f>, <t:1794056400:R>)'), out
+    assert add_local_times(out) == out, 'never stamped twice'
 
 
 if __name__ == '__main__':
