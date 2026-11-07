@@ -179,7 +179,7 @@ class EditDraftModal(discord.ui.Modal):
                                             + ', '.join('#' + u for u in unknown), ephemeral=True)
 
 
-def draft_info(channel, ping_label, unsure=()):
+def draft_info(channel, ping_label, unsure=(), cut=()):
     """
     The small box UNDER the preview: where it goes, who gets pinged, what to
     check. The message itself is the exact post (Pat wanted to see exactly
@@ -190,6 +190,8 @@ def draft_info(channel, ping_label, unsure=()):
              f'Ping: **{ping_label}**' + (' (shown above, not sent in this preview)' if ping_label != 'nobody' else '')]
     if unsure:
         lines.append(f'⚠️ I worked these numbers out myself, check them: **{", ".join(unsure)}**')
+    if cut:
+        lines.append('✂️ Left out because you didn\'t say it: ' + '; '.join(f'"{c[:80]}"' for c in cut[:5]))
     lines.append('-# Check every detail: I only know what you told me. Only you can press these. '
                  'Reply with changes, or use ✏️ Change to edit it yourself.')
     return discord.Embed(description='\n'.join(lines), color=0xf1c40f)
@@ -216,7 +218,7 @@ async def send_draft(message, store, draft, unsure=()):
         return None, 'That came out too long for one Discord message. Want it shorter, or split into two?'
     # The preview IS the post: same text, same ping line, but AllowedMentions
     # .none() so nobody is actually pinged until Post is pressed.
-    sent = await message.reply(build_post(text, prefix), embed=draft_info(channel, label, unsure),
+    sent = await message.reply(build_post(text, prefix), embed=draft_info(channel, label, unsure, draft.get('cut') or ()),
                                view=DraftView(store), mention_author=False,
                                allowed_mentions=discord.AllowedMentions.none())
     store[sent.id] = {'author_id': message.author.id, 'channel_id': channel.id, 'ping': draft.get('ping') or '',

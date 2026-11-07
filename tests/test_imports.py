@@ -8528,6 +8528,31 @@ def test_announcement_preview_is_exactly_the_post():
     assert 999 not in store and 'Posted in' in Inter.edited['content']
 
 
+def test_announcement_drafts_keep_only_what_was_said():
+    """
+    Pat's real draft added "Join the cause and show support" (treating a Torn
+    event as a charity day) and "Sign-up in the armory" (there is no sign-up).
+    Lines made mostly of words the person never used are cut and listed; the
+    lines built from what they said, and one flavour line at the end, stay.
+    """
+    from features.ask_ai import ground_draft
+    said = ('Create an annoucement, this week saturday 7/11/2026 1pm TCT, there will be a day for happy jump and '
+            'also with next week 13/11/2026 10:00 TCT to 15/11/2026 16:00 TCT for worlds diabetes day and then the '
+            'next two weeks after that we will enlist for wars. ping Ascended punks role. happy jump last for 24 hours')
+    draft = ('**Happy Jump Day** – Saturday **07/11/2026** at **13:00 TCT**, lasts 24 hours\n'
+             '- Bring your best jumps, stack those bonuses!\n\n'
+             '**World’s Diabetes Day** – 13/11/2026 10:00 to 15/11/2026 16:00 TCT\n'
+             '- Join the cause and show support.\n\n'
+             '**War Enlistment** – Enlist during the two weeks following World’s Diabetes Day.\n'
+             '- Sign-up in the armory.\n\n'
+             'Time to jump high and fight hard, punks!')
+    text, cut = ground_draft(draft, said)
+    assert 'Happy Jump Day' in text and 'lasts 24 hours' in text and 'Diabetes Day' in text
+    assert 'War Enlistment' in text and 'fight hard' in text, 'the closing flavour line stays'
+    assert 'armory' not in text and 'Join the cause' not in text and 'bonuses' not in text
+    assert len(cut) == 3
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -8681,4 +8706,5 @@ if __name__ == '__main__':
     test_announcement_drafts_ask_check_numbers_and_resolve_targets()
     test_ask_ai_second_audit_fixes()
     test_announcement_preview_is_exactly_the_post()
+    test_announcement_drafts_keep_only_what_was_said()
     print('All smoke tests passed.')

@@ -968,7 +968,9 @@ def system_prompt():
         'gave them. A short draft with only their details is the right draft. When you have '
         'enough, call announce_draft. Voice: clear and easy to scan, key details in bold, at most one short '
         'cheeky punk line (no Torn slang or advice in it), no more than 2 emojis, under 1500 characters. '
-        'Write times exactly as given (TCT). If they reply to a draft with '
+        'Write times exactly as given (TCT). Never describe what an event or activity is, or what people should '
+        'do at it, unless they told you: write each item as its name, its date/time, and only the details they '
+        'gave. Lines with things they did not say are cut automatically. If they reply to a draft with '
         'changes, call announce_draft again with the new version.\n'
         '- Be short, plain English, Discord markdown, bullet points. Under 150 words unless asked for detail. '
         'Dates as DD/MM/YYYY. NZ spelling. Never use em dashes.\n'
@@ -1345,6 +1347,46 @@ def fix_weekdays(text):
     return text
 
 
+_GROUND_STOP = {
+    'the', 'and', 'for', 'with', 'from', 'that', 'this', 'your', 'you', 'our', 'will', 'are', 'all', 'get',
+    'into', 'during', 'until', 'then', 'there', 'their', 'have', 'has', 'been', 'also', 'next', 'week', 'weeks',
+    'day', 'days', 'date', 'time', 'tct', 'starts', 'start', 'ends', 'end', 'begins', 'runs', 'lasts', 'each',
+    'event', 'events', 'announcement', 'reminder', 'heads', 'punks', 'faction', 'everyone', 'crew', 'team',
+    'ascended', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday', 'when', 'what',
+    'following', 'after', 'before', 'more', 'details', 'info', 'note', 'please', 'make', 'sure', 'here',
+}
+
+
+def _content_words(text):
+    words = re.findall(r"[a-z][a-z'’]{3,}", (text or '').lower())
+    return [w.replace('’', "'").strip("'") for w in words if w not in _GROUND_STOP]
+
+
+def ground_draft(text, said):
+    """
+    Cut lines the person never gave. A line whose content words are mostly
+    not in what they said is the AI padding ("Join the cause and show
+    support", "Sign-up in the armory": both in Pat's real draft, both made
+    up). Words are compared by their first 5 letters, so "enlistment" matches
+    "enlist". The last line may stay as the one flavour line if it has no
+    numbers. Returns (text, cut lines).
+    """
+    known = {w[:5] for w in _content_words(said)}
+    lines = text.split('\n')
+    last_real = max((i for i, l in enumerate(lines) if l.strip()), default=-1)
+    kept, cut = [], []
+    for i, line in enumerate(lines):
+        words = _content_words(re.sub(r'<[@#&!]*\d+>', ' ', line))
+        unseen = [w for w in words if w[:5] not in known]
+        flavour = i == last_real and not re.search(r'\d', line)
+        if words and len(unseen) >= 2 and len(unseen) / len(words) > 0.5 and not flavour:
+            cut.append(re.sub(r'^[\s*•\-]+|\*+', '', line).strip())
+            continue
+        kept.append(line)
+    out = re.sub(r'\n{3,}', '\n\n', '\n'.join(kept)).strip()
+    return out, cut
+
+
 def clock_variants(text):
     """'1pm' also counts as 13 and '1:30pm' as 13 and 30: people write 12-hour
     times and the draft says 13:00 TCT."""
@@ -1408,7 +1450,9 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
                     pass
                 bad = unsupported_numbers(facts.final, said, earlier_facts)
             if facts.final_kind == 'draft':
-                facts.draft['text'] = fix_weekdays(facts.draft['text'])
+                grounded, cut = ground_draft(fix_weekdays(facts.draft['text']), said)
+                facts.draft['text'] = grounded
+                facts.draft['cut'] = cut
                 ans = Answer(facts.draft['text'], pname, '', True, took(), kind='draft')
                 ans.draft = facts.draft
                 ans.unsure = bad
