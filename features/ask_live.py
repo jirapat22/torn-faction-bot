@@ -231,11 +231,21 @@ class LiveTools:
         ct = self._m('chain_tracker')
         if ct is None:
             return self.facts._notice('Chain tracking is not running on the bot right now.')
-        data = await ct.get_current_chain()
-        if data is None:
+        # Not ct.get_current_chain(): it returns None for BOTH "Torn didn't
+        # answer" and "no chain running" (the None-vs-empty trap), and those
+        # need different answers. Same call it makes, read here.
+        from utils.torn_api import fetch_faction_data
+        raw = await fetch_faction_data('chain')
+        if not raw:
             return self.facts._notice("Torn isn't answering, so I can't see the chain right now.")
+        chain = raw.get('chain') or {}
+        if not chain.get('current'):
+            cooldown = chain.get('cooldown') or 0
+            return self._found('No chain is running right now.'
+                               + (f' Chain cooldown ends {_relative(self.now + cooldown, self.now)}.'
+                                  if cooldown else ''))
         return self._found('CHAIN RIGHT NOW (same as /chain):\n'
-                           + embed_text(await ct.format_chain_embed(data), self.now, self._names()))
+                           + embed_text(await ct.format_chain_embed(chain), self.now, self._names()))
 
     async def _chain_event(self):
         m = self._m('chain_event_manager')
