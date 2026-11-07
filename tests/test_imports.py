@@ -8812,6 +8812,9 @@ def test_live_lookups_reuse_the_commands_and_drop_forbidden_lines():
     assert 'Bob [5]: Pacific/Auckland' in tz
     none = LiveTools(FactBook(d, roster={}, now=now), None, None, d)
     assert 'not running' in asyncio.run(none.live_status('chain'))
+    from features.ask_ai import tidy_answer
+    assert tidy_answer('No chain is running right now. Keep your Xanax ready.', [], 'how is the chain?') == \
+        'No chain is running right now.', 'no Xanax, even in the flavour line'
 
 
 def test_leave_notices_are_quoted_word_for_word():

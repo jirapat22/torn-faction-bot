@@ -1327,6 +1327,18 @@ def tidy_answer(text, notices, question):
             if parts or not line.strip():
                 kept.append(' '.join(parts))
         text = re.sub(r'\n{3,}', '\n\n', '\n'.join(kept)).strip()
+    if question:
+        # Pat's rule (07/11/2026): no Xanax in records answers, not even in the
+        # flavour line ("keep your Xanax ready" was seen live). Sentences that
+        # say the bot DOESN'T do Xanax are kept.
+        kept = []
+        for line in text.split('\n'):
+            parts = [p for p in re.split(r'(?<=[.!?])\s+', line)
+                     if not (re.search(r'\bxan(ax)?s?\b', p, re.I) and not _NEGATION.search(p)
+                             and '/war view:Xan' not in p)]
+            if parts or not line.strip():
+                kept.append(' '.join(parts))
+        text = re.sub(r'\n{3,}', '\n\n', '\n'.join(kept)).strip()
     if notices:
         text = (text + '\n\n' if text else '') + '\n'.join(f'⚠️ {n}' for n in notices)
     for rx, label in NOT_RECORDED:
