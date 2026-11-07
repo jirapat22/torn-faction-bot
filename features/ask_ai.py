@@ -1430,6 +1430,30 @@ def names_in(text, facts):
             if len(n) >= 3 and re.search(rf'(?<![\w]){re.escape(n.lower())}(?![\w])', low)]
 
 
+PRONOUN_RX = re.compile(r"\b(he|she|him|her|his|hers|they|them|their|theirs|he's|she's|they're)\b", re.I)
+
+
+def pronoun_target(question, history, facts):
+    """
+    "Is he lazy?" after "how active is Ikaros22?": the member a pronoun points
+    at, worked out in Python. The AI often lost the name across turns and
+    asked "who do you mean?". Only answers when it is clear: the question
+    names nobody itself, and the latest earlier turn naming members names
+    exactly ONE. Two or more stays ambiguous, and the AI asks, as it should.
+    """
+    if not PRONOUN_RX.search(question or '') or names_in(question, facts):
+        return None
+    for turn in reversed(list(history or [])):
+        found = names_in(turn.get('content', ''), facts)
+        if not found:
+            continue
+        if len(found) != 1:
+            return None
+        ids = [tid for tid, n in facts._known_names().items() if n == found[0]]
+        return f'{found[0]} [{ids[0]}]' if len(ids) == 1 else found[0]
+    return None
+
+
 def is_small_talk(question, answer, facts):
     """
     True when a message and its AI reply are plain chat ("hi", "tell me a
@@ -1805,6 +1829,10 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
                          'key facts from this list as a short line or two (how long it lasts, what Torn says it '
                          'does, and for war: lasts a week at most, matchmaking on Tuesdays). Keep the person\'s '
                          'own dates and times where they gave them.'})
+    who = pronoun_target(question, history, facts)
+    if who:
+        base.append({'role': 'system', 'content': f'In the next question, he/she/they/him/her/them/his/their '
+                     f'means {who}, the member from earlier in this conversation. Look them up by that name.'})
     base += list(history or []) + [{'role': 'user', 'content': question}]
 
     t0, problems = time.monotonic(), []

@@ -9043,6 +9043,28 @@ def test_foolproof_round_fixes():
     assert kind == 'ask'
 
 
+def test_follow_up_pronoun_points_at_the_one_member_named_earlier():
+    """
+    "Is he lazy?" after "how active is Ikaros22?" got "who do you mean?".
+    Python now says who the pronoun means, only when exactly one member was
+    named in the latest turn that named anyone.
+    """
+    from features.ask_ai import pronoun_target
+
+    class F:
+        def _known_names(self):
+            return {'3571142': 'Ikaros22', '1': 'BunnyBull'}
+    one = [{'role': 'user', 'content': 'how active is Ikaros22?'},
+           {'role': 'assistant', 'content': 'Ikaros22 was online 0 h ago.'}]
+    assert pronoun_target('is he lazy?', one, F()) == 'Ikaros22 [3571142]'
+    assert pronoun_target('how many hits did they make?', one, F()) == 'Ikaros22 [3571142]'
+    assert pronoun_target('is BunnyBull lazy?', one, F()) is None        # named in the question itself
+    assert pronoun_target('what about the war?', one, F()) is None        # no pronoun
+    two = [{'role': 'user', 'content': 'compare Ikaros22 and BunnyBull'}]
+    assert pronoun_target('is he lazy?', two, F()) is None                # ambiguous: let the AI ask
+    assert pronoun_target('is he lazy?', [], F()) is None
+
+
 def test_leave_notices_are_quoted_word_for_word():
     """
     Pat: "quote it, I'll read it". The whole notice, newest first, with when
@@ -9220,6 +9242,7 @@ if __name__ == '__main__':
     test_chat_action_reaches_a_card_only_through_python()
     test_live_lookups_reuse_the_commands_and_drop_forbidden_lines()
     test_leave_notices_are_quoted_word_for_word()
+    test_follow_up_pronoun_points_at_the_one_member_named_earlier()
     test_strike_requests_get_the_fixed_reply_without_the_ai()
     test_reaudit_fixes_chat_xanax_poll_names_and_enemy_faction()
     test_payouts_kicks_and_member_judging_get_fixed_replies()
