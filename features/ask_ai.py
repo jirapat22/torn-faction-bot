@@ -1924,6 +1924,12 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
         if not facts.found_any and not earlier_facts:
             if facts.notices:
                 return Answer('\n\n'.join(facts.notices), pname, '', True, took(), kind='ask')
+            # Mid-action, the person answered the bot's own question ("24
+            # hours") and the AI fumbled it. "Not sure what you're after" would
+            # lose the thread, so the bot repeats what it still needs.
+            last_bot = next((t.get('content', '') for t in reversed(history or []) if t.get('role') == 'assistant'), '')
+            if acting and last_bot.startswith('Before I do that I need'):
+                return Answer(last_bot, pname, '', True, took(), kind='action_ask')
             # ...unless it was just chit-chat, which needs no records at all.
             if is_small_talk(question, text, facts):
                 chat = tidy_answer(text, [], '')

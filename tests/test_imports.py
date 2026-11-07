@@ -9014,6 +9014,25 @@ def test_foolproof_round_fixes():
                                       providers=[('L', lucky)]))
     assert '42' not in ans.text and '73' not in ans.text   # chat never makes numbers up either
 
+    # Round 2 (real AI, follow-ups): "add him" after a question about
+    # Ikaros22 became player 22, the digits pulled out of the name.
+    kind, _ = plan_action('action_target', {'op': 'add', 'who': '22'},
+                          'how active is Ikaros22\nadd him to the target board', now)
+    assert kind == 'ask'
+    kind, plan = plan_action('action_target', {'op': 'add', 'who': 'https://www.torn.com/profiles.php?XID=1524830'},
+                             'add https://www.torn.com/profiles.php?XID=1524830', now)
+    assert kind == 'plan' and plan['torn_id'] == '1524830'
+
+    # ...and a fumbled answer to the bot's own question repeats the question.
+    async def fumble(session, messages, facts, used):
+        return 'Sounds good, boss.', messages
+    need = 'Before I do that I need the minimum hits each member must make (the rule is usually 10).'
+    ans = asyncio.run(answer_question(None, '24 hours', FactBook('data', roster={}),
+                                      history=[{'role': 'user', 'content': 'start a chain event now'},
+                                               {'role': 'assistant', 'content': need}],
+                                      providers=[('F', fumble)]))
+    assert ans.text == need and ans.kind == 'action_ask'
+
 
 def test_leave_notices_are_quoted_word_for_word():
     """

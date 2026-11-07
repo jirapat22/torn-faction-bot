@@ -142,7 +142,10 @@ def _stamp(ts):
 
 
 def _torn_id(text):
-    m = re.search(r'(?:XID=|ID=|\[)?(\d{1,8})\]?', str(text or ''))
+    """A Torn ID from a bare number, "[123]" or a profile link, else None.
+    Never digits out of a name: "Ikaros22" once became player 22."""
+    t = str(text or '').strip()
+    m = re.search(r'(?:XID=|ID=)(\d{1,10})\b', t, re.I) or re.fullmatch(r'\[?(\d{1,10})\]?', t)
     return m.group(1) if m else None
 
 
@@ -205,7 +208,9 @@ def plan_action(tool, args, said, now=None):
             return 'ask', 'Do you want to add someone to the target board, or take someone off it?'
         who = _torn_id(args.get('who'))
         # Whole number only: "152483" must not pass because "1524830" was typed.
-        if not who or not re.search(rf'(?<!\d){who}(?!\d)', said):
+        # And typed as a number of its own (or in a link), not the tail of a
+        # name in the conversation like "Ikaros22".
+        if not who or not re.search(rf'(?:(?<![\w])|(?<=XID=)|(?<=ID=)){who}(?!\d)', said, re.I):
             return 'ask', ('Who? Give me their Torn ID or paste their profile link (I can\'t look enemies up by '
                            'name).')
         reason = str(args.get('reason') or '').strip()[:100]
