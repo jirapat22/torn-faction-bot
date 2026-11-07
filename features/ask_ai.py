@@ -842,6 +842,7 @@ class FactBook:
                 return 'Question sent to the user.'
             if name == 'cannot_answer':
                 reason = str(args.get('reason') or '').strip()
+                reason = reason[:1].upper() + reason[1:]
                 self.final = ((reason.rstrip('.') + '. ') if reason else "I don't keep records of that. ") \
                     + 'Say `@ApexPunk help` for what I can answer.'
                 return 'Told the user.'
@@ -957,7 +958,7 @@ _CONTROL_RESULTS = {'Question sent to the user.', 'Told the user.', 'Draft shown
 # answers but the facts stay neutral and exact; knows its own lore.
 PERSONALITY = (
     'WHO YOU ARE: You are ApexPunk, the Ascended Punks faction bot. Lore: you were hot-wired together in a '
-    'Torn City back alley out of a busted vending machine, a stolen police scanner and way too much Xanax, '
+    'Torn City back alley out of a busted vending machine, a stolen police scanner and a lot of duct tape, '
     'and the Punks took you in. Now you live in the faction armoury, keep the books, and you are fiercely '
     'loyal to the crew. You are cheeky, a bit rebellious and sarcastic, but always on the faction\'s side '
     'and genuinely helpful. Mild swearing is fine (damn, hell, crap, bloody); never the f-word, slurs, '
@@ -965,8 +966,8 @@ PERSONALITY = (
     'but you never mock or judge a real member by name. If asked to judge or insult a member ("is X '
     'lazy?"), do not; call member_report and give their records neutrally instead.\n'
     'CHAT (casual messages, greetings, jokes, random topics, nothing about members/wars/chains/OCs/strikes): '
-    'reply in character in one to three sentences, Torn slang welcome (Xanax, FHC, hosp, mug, bonus hit, '
-    'stacking, happy jump), a couple of emojis is fine, no tools needed. Never mention or '
+    'reply in character in one to three sentences, Torn slang welcome (FHC, hosp, mug, bonus hit, '
+    'stacking), a couple of emojis is fine, no tools needed. Never mention Xanax, drugs, money or items. Never mention or '
     'describe any member in chat. For general Torn game questions, answer only if you are sure, and say so '
     'if you are not.\n'
     'RECORDS ANSWERS (anything from the tools): the facts stay neutral, exact and complete. You may add ONE '
@@ -1327,10 +1328,11 @@ def tidy_answer(text, notices, question):
             if parts or not line.strip():
                 kept.append(' '.join(parts))
         text = re.sub(r'\n{3,}', '\n\n', '\n'.join(kept)).strip()
-    if question:
-        # Pat's rule (07/11/2026): no Xanax in records answers, not even in the
-        # flavour line ("keep your Xanax ready" was seen live). Sentences that
-        # say the bot DOESN'T do Xanax are kept.
+    if True:
+        # Pat's rule (07/11/2026): no Xanax in ANY reply, not even a flavour
+        # line or chat ("keep your Xanax ready", "sniffing the fresh Xanax
+        # fumes" were both seen live). Sentences that say the bot DOESN'T do
+        # Xanax are kept.
         kept = []
         for line in text.split('\n'):
             parts = [p for p in re.split(r'(?<=[.!?])\s+', line)
@@ -1804,7 +1806,8 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
                 return Answer('\n\n'.join(facts.notices), pname, '', True, took(), kind='ask')
             # ...unless it was just chit-chat, which needs no records at all.
             if is_small_talk(question, text, facts):
-                return Answer(tidy_answer(text, [], ''), pname, '', True, took(), kind='chat')
+                chat = tidy_answer(text, [], '') or "Just keeping the armoury books straight, boss 😎 What's up?"
+                return Answer(chat, pname, '', True, took(), kind='chat')
             # Asked to do something and the AI asked a question of its own
             # instead of calling the tool ("which chain event?"): fine to pass
             # on, as long as it slipped in no numbers.

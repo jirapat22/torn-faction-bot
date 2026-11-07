@@ -8843,6 +8843,52 @@ def test_strike_requests_get_the_fixed_reply_without_the_ai():
         assert not STRIKE_ACTION_RX.search(q), q
 
 
+def test_reaudit_fixes_chat_xanax_poll_names_and_enemy_faction():
+    """
+    Second live audit (07/11/2026): chat joked about Xanax (the bot's own lore
+    had it), poll voters showed as "a member", "the enemy faction" with no war
+    on asked "which faction?" although the last war's enemy is archived.
+    """
+    import asyncio
+    from types import SimpleNamespace
+    from features.ask_ai import tidy_answer, PERSONALITY
+    from features.ask_live import LiveTools
+    assert 'xanax' not in PERSONALITY.lower().replace('never mention xanax', '')
+    out = tidy_answer("Just chilling, sniffing Xanax fumes. What's up?", [], '')
+    assert 'xanax' not in out.lower() and "What's up?" in out
+    assert "don't do Xanax" in tidy_answer("I don't do Xanax.", [], '')
+
+    class Facts:
+        discord_links = {'111': '3571142'}
+        found_any = False
+        now = 0
+        def _known_names(self):
+            return {'3571142': 'Ikaros22'}
+        def _notice(self, text):
+            return text
+    lt = LiveTools(Facts(), SimpleNamespace(), None, 'data')
+    assert lt._names() == {'111': 'Ikaros22'}
+
+    class WT:
+        war_history = {'1': {'start': 10, 'enemy_faction_id': 111}, '2': {'start': 20, 'enemy_faction_id': 53421}}
+        async def get_current_war(self): return None
+        async def get_upcoming_war(self): return None
+        async def get_latest_war(self): return None
+    asked = []
+    import utils.torn_api as api
+    real = api.fetch_any_faction_data
+    async def fake(fid, sel):
+        asked.append(fid)
+        return {'name': 'The Naughty Kids', 'members': {}} if sel == 'basic' else None
+    api.fetch_any_faction_data = fake
+    try:
+        lt = LiveTools(Facts(), SimpleNamespace(war_tracker=WT()), None, 'data')
+        txt = asyncio.run(lt._enemy_faction('the enemy faction'))
+    finally:
+        api.fetch_any_faction_data = real
+    assert asked[0] == '53421' and 'The Naughty Kids' in txt
+
+
 def test_leave_notices_are_quoted_word_for_word():
     """
     Pat: "quote it, I'll read it". The whole notice, newest first, with when
@@ -9021,4 +9067,5 @@ if __name__ == '__main__':
     test_live_lookups_reuse_the_commands_and_drop_forbidden_lines()
     test_leave_notices_are_quoted_word_for_word()
     test_strike_requests_get_the_fixed_reply_without_the_ai()
+    test_reaudit_fixes_chat_xanax_poll_names_and_enemy_faction()
     print('All smoke tests passed.')

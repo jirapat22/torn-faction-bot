@@ -188,9 +188,14 @@ class LiveTools:
         return getattr(self.live, name, None) if self.live is not None else None
 
     def _names(self):
-        if self.guild is None:
-            return {}
-        return {str(m.id): m.display_name for m in getattr(self.guild, 'members', [])}
+        """Discord user ID -> name. Linked members get their Torn name (what
+        people ask about); others their Discord display name."""
+        names = {str(m.id): m.display_name for m in getattr(self.guild, 'members', None) or []}
+        torn = self.facts._known_names()
+        for did, tid in (getattr(self.facts, 'discord_links', None) or {}).items():
+            if str(tid) in torn:
+                names[str(did)] = torn[str(tid)]
+        return names
 
     def _found(self, text):
         self.facts.found_any = True
@@ -469,10 +474,20 @@ class LiveTools:
             war = None
             if wt is not None:
                 war = await wt.get_current_war() or await wt.get_upcoming_war() or await wt.get_latest_war()
+            generic = {'the', 'enemy', 'enemies', 'enemys', 'faction', 'them', 'their', 'they', 'opponent',
+                       'opponents', 'current', 'war', 'wars', 'our', 'last', 'latest', 'next', 'upcoming',
+                       'this', 'that', 'other', 'we', 'fought', 'fighting', 'vs', 'against', 'side', 'team'}
+            name_part = ' '.join(w for w in re.findall(r"[\w'-]+", q.lower()) if w not in generic)
             for f_id, f in ((war or {}).get('data', {}).get('factions') or {}).items():
-                if str(f_id) != str(TORN_FACTION_ID) and (not q or q.lower() in str(f.get('name', '')).lower()
-                                                          or q.lower() in ('enemy', 'them', 'opponent', 'current')):
+                if str(f_id) != str(TORN_FACTION_ID) and (not name_part
+                                                          or name_part in str(f.get('name', '')).lower()):
                     fid = str(f_id)
+            if fid is None and wt is not None and not name_part:
+                # Torn's live list drops wars a month after they end, so with
+                # no war on, fall back to the newest war the bot archived.
+                past = [w for w in (getattr(wt, 'war_history', None) or {}).values() if w.get('enemy_faction_id')]
+                if past:
+                    fid = str(max(past, key=lambda w: w.get('start') or 0)['enemy_faction_id'])
             if fid is None:
                 return self.facts._notice('Which faction? Give me its Torn faction ID (it\'s in the faction\'s '
                                           'profile link). I can only find the current war\'s enemy by name.')
