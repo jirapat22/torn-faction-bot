@@ -8590,7 +8590,9 @@ def test_torn_events_from_the_official_calendar():
         {'title': 'World Diabetes Day', 'start': ts('14/11/2026 00:00'), 'end': ts('14/11/2026 23:59'),
          'description': 'Candy effects are tripled'},
         {'title': 'Awareness Awareness Week', 'start': ts('19/01/2026 00:00'), 'end': ts('25/01/2026 23:59'),
-         'description': 'Increased awareness for one week'}]}, open(path, 'w'))
+         'description': 'Increased awareness for one week'},
+        {'title': 'World Blood Donor Day', 'start': ts('14/06/2026 00:00'), 'end': ts('14/06/2026 23:59'),
+         'description': 'Life and cooldown penalties for drawing blood are halved'}]}, open(path, 'w'))
     now = ts('07/11/2026 12:00')
     wdd = events_text('worlds diabetes day', path=path, now=now)
     assert 'World Diabetes Day (Torn event, upcoming): Saturday 14/11/2026 00:00' in wdd
@@ -8607,6 +8609,7 @@ def test_torn_events_from_the_official_calendar():
     assert found == ['World Diabetes Day', 'Ranked war', 'Happy jump'], found
     facts = facts_for(found, path=path, now=now)
     assert 'Candy effects are tripled' in facts and 'lasts 24 hours' in facts and 'Tuesday' in facts
+    assert 'drawing blood' not in facts, 'Diabetes Day must not pick up Blood Donor Day (both "World ...")'
     assert 'Awareness' not in facts
     assert '10:00 to 16:00 TCT' in facts and 'same time of day' in facts
     from features.torn_events import enrich_draft

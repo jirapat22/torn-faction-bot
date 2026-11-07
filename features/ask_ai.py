@@ -1499,6 +1499,12 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
     base += list(history or []) + [{'role': 'user', 'content': question}]
 
     t0, problems = time.monotonic(), []
+    if providers is PROVIDERS and ANNOUNCE_RX.search(convo):
+        # Drafts aren't urgent and the small model was measured sloppier on them
+        # ("1:00" for 1pm, "enlistments happen on Tuesdays"): wait for the big one.
+        async def big_patient(session, messages, f, used):
+            return await _ask_groq(session, messages, f, used, max_wait=60)
+        providers = [('Groq', big_patient)] + [p for p in PROVIDERS if p[0] != 'Groq']
     for pname, ask in providers:
         used = []
         facts.notices, facts.found_any, facts.final = [], False, None   # fresh state per provider

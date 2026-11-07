@@ -161,13 +161,20 @@ def detect_events(text, path=CALENDAR_FILE):
 
 
 def facts_for(names, path=CALENDAR_FILE, now=None):
-    """events_text for just these events, or '' when there are none."""
+    """
+    The fact lines for exactly these events, or '' when there are none.
+    Torn events are matched by their EXACT title: a word match on "World
+    Diabetes Day" once picked World Blood Donor Day (the first "World ..."
+    event of the year) and put its effect into Pat's announcement.
+    """
     if not names:
         return ''
     parts = []
+    full = events_text('', path=path, now=0, limit=100).split('\n')[1:]   # every event, past or not
     for n in names:
-        t = events_text(n, path=path, now=now, limit=1)
-        parts += [l for l in t.split('\n')[1:] if l.startswith('- ') and l not in parts]
+        line = next((l for l in full if l.startswith(f'- {n} (')), None)
+        if line and line not in parts:
+            parts.append(line)
     return 'EVENT FACTS for this announcement:\n' + '\n'.join(parts) if parts else ''
 
 
