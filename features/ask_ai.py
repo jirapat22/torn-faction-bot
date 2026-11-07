@@ -911,7 +911,7 @@ PERSONALITY = (
     'lazy?"), do not; call member_report and give their records neutrally instead.\n'
     'CHAT (casual messages, greetings, jokes, random topics, nothing about members/wars/chains/OCs/strikes): '
     'reply in character in one to three sentences, Torn slang welcome (Xanax, FHC, hosp, mug, bonus hit, '
-    'turtle up, stacking, happy jump), a couple of emojis is fine, no tools needed. Never mention or '
+    'stacking, happy jump), a couple of emojis is fine, no tools needed. Never mention or '
     'describe any member in chat. For general Torn game questions, answer only if you are sure, and say so '
     'if you are not.\n'
     'RECORDS ANSWERS (anything from the tools): the facts stay neutral, exact and complete. You may add ONE '
@@ -967,7 +967,8 @@ def system_prompt():
         'Use ONLY what they told you: no extra sections such as location, objective, rewards or rules unless they '
         'gave them. A short draft with only their details is the right draft. When you have '
         'enough, call announce_draft. Voice: clear and easy to scan, key details in bold, at most one short '
-        'cheeky punk line, no more than 2 emojis, under 1500 characters. If they reply to a draft with '
+        'cheeky punk line (no Torn slang or advice in it), no more than 2 emojis, under 1500 characters. '
+        'Write times exactly as given (TCT). If they reply to a draft with '
         'changes, call announce_draft again with the new version.\n'
         '- Be short, plain English, Discord markdown, bullet points. Under 150 words unless asked for detail. '
         'Dates as DD/MM/YYYY. NZ spelling. Never use em dashes.\n'
@@ -1136,6 +1137,7 @@ class Answer:
         self.seconds = seconds
         self.fallback = fallback        # True = AI answer rejected, raw facts shown
         self.draft = None               # kind 'draft': {'channel', 'ping', 'text'}
+        self.unsure = []                # numbers in a draft the person never gave (flagged on the card)
 
 
 def _facts_text(used):
@@ -1313,6 +1315,16 @@ def raw_records_text(facts, question='', limit=1500):
 UNSURE_TEXT = ("Not sure what you're after, boss 🤔 Ask me about a member, a war, chains, OCs, strikes "
                'or the rules. Say `@ApexPunk help` for the full list.')
 ANNOUNCE_RX = re.compile(r'announc\w*', re.I)
+
+
+def clock_variants(text):
+    """'1pm' also counts as 13 and '1:30pm' as 13 and 30: people write 12-hour
+    times and the draft says 13:00 TCT."""
+    extra = []
+    for h, _m, ap in re.findall(r'\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b', text or '', re.I):
+        h = int(h) % 12 + (12 if ap.lower() == 'pm' else 0)
+        extra.append(str(h))
+    return ' '.join(extra)
 HELP_WORDS = re.compile(r'^\s*(help|commands?|what can you do\??|how do i use you\??|\?)\s*$', re.I)
 
 
@@ -1350,15 +1362,31 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
         #    come from what the person actually said in this conversation;
         #    an invented "Friday 8pm" becomes a question, never a draft.
         if facts.final_kind in ('draft', 'announce_ask'):
-            said = '\n'.join([question] + [t.get('content', '') for t in history or []])
+            said = '\n'.join([question] + [t.get('content', '') for t in history or []
+                                            if t.get('role') == 'user'])
+            said += ' ' + clock_variants(said) + ' 0'   # ":00" minutes are never an invented number
             bad = unsupported_numbers(facts.final, said, earlier_facts)
-            if bad:
-                return Answer(f"Before I write that: where do {', '.join(bad)} come from? I only use details you "
-                              'give me, so tell me the exact ones.', pname, '', True, took(), kind='announce_ask')
+            if bad and facts.final_kind == 'draft':
+                # One quiet retry. If numbers it worked out itself remain (e.g.
+                # dates from "two weeks after that"), the draft is still shown,
+                # with them flagged: the person approves every draft anyway, and
+                # a "where do 3, 12, 20 come from?" question only confused them.
+                fix = msgs + [{'role': 'user', 'content':
+                               f'The draft has numbers I never gave you: {", ".join(bad)}. Remove them, or keep one '
+                               'only if it follows directly from what I said. Call announce_draft again.'}]
+                try:
+                    await ask(session, fix, facts, used)
+                except NotCapable:
+                    pass
+                bad = unsupported_numbers(facts.final, said, earlier_facts)
             if facts.final_kind == 'draft':
                 ans = Answer(facts.final, pname, '', True, took(), kind='draft')
                 ans.draft = facts.draft
+                ans.unsure = bad
                 return ans
+            if bad:
+                return Answer('Got it. Tell me the exact dates and times you want in it, and I\'ll draft it.',
+                              pname, '', True, took(), kind='announce_ask')
             return Answer(tidy_answer(facts.final, [], ''), pname, '', True, took(), kind='announce_ask')
 
         # 1. The AI chose to ask back or to say "not recorded". Its wording is
@@ -1459,12 +1487,16 @@ def bot_role_ids(role_mentions, bot_id):
     return out
 
 
-def describe_mentions(content, bot_id, mentions, facts, bot_roles=()):
+def describe_mentions(content, bot_id, mentions, facts, bot_roles=(), role_mentions=()):
     """Swap '<@123>' for 'BunnyBull [4474400]' so "@BunnyBull how active
     is he?" works, and drop the bot's own mention (user or role)."""
     content = re.sub(rf'<@!?{bot_id}>', '', content or '')
     for rid in bot_roles:
         content = content.replace(f'<@&{rid}>', '')
+    # Other roles become "@Ascended Punks": the raw '<@&1464388613348397243>'
+    # once reached the AI, which then tripped over the digits.
+    for r in role_mentions or ():
+        content = content.replace(f'<@&{r.id}>', f'@{r.name}')
     for u in mentions:
         if u.id == bot_id:
             continue
@@ -1659,7 +1691,8 @@ class AskAI:
                 roster = {str(k): v for k, v in roster.items()} if roster is not None else None
                 facts = FactBook(self.data_dir, roster=roster, strike_manager=self.strike_manager,
                                  discord_members=list(message.guild.members) if message.guild else None)
-                question = describe_mentions(message.content, self.bot.user.id, message.mentions, facts, roles)
+                question = describe_mentions(message.content, self.bot.user.id, message.mentions, facts, roles,
+                                             message.role_mentions)
                 if not question or HELP_WORDS.match(question):
                     await message.reply(HELP_TEXT, mention_author=False)
                     return
@@ -1673,7 +1706,7 @@ class AskAI:
                    'seconds': round(ans.seconds, 1), 'answer': ans.text, 'facts': ans.facts_text[:4000]})
         if ans.kind == 'draft':
             from features.announce import send_draft
-            sent, question_back = await send_draft(message, self.drafts, ans.draft)
+            sent, question_back = await send_draft(message, self.drafts, ans.draft, ans.unsure)
             if sent is None:   # unknown channel/role or too long: ask instead
                 ans.text, ans.kind = question_back, 'announce_ask'
             else:

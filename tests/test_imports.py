@@ -8368,10 +8368,16 @@ def test_announcement_drafts_ask_check_numbers_and_resolve_targets():
                                                'text': 'War starts **Friday 18:00 TCT**!'})]))]))
     assert draft.kind == 'draft' and draft.draft['ping'] == 'everyone'
 
+    # A number nobody gave survives a retry -> the draft still shows, flagged.
     made_up = asyncio.run(answer_question(None, 'make an announcement about the war, ping nobody', fb(), providers=[
         ('fake', provider([('announce_draft', {'channel': '', 'ping': 'none',
                                                'text': 'War starts Friday at 20:00!'})]))]))
-    assert made_up.kind == 'announce_ask' and '20' in made_up.text and 'where do' in made_up.text
+    assert made_up.kind == 'draft' and made_up.unsure == ['20']
+    # "1pm" written as 13:00 is not an invented number.
+    pm = asyncio.run(answer_question(None, 'happy jump saturday 1pm TCT, ping nobody', fb(), providers=[
+        ('fake', provider([('announce_draft', {'channel': '', 'ping': 'none',
+                                               'text': 'Happy jump **Saturday 13:00 TCT**'})]))]))
+    assert pm.kind == 'draft' and pm.unsure == []
 
     class Ch:
         def __init__(self, i, name):
@@ -8382,7 +8388,7 @@ def test_announcement_drafts_ask_check_numbers_and_resolve_targets():
     class Guild:
         channels = [Ch(1, '📢-ascended-broadcasts'), Ch(2, '⚔️-war-room')]
         threads = []
-        roles = [Role(7, 'Punks')]
+        roles = [Role(7, 'Punks'), Role(8, 'Ascended Punks')]
         def get_channel(self, i):
             return next((c for c in self.channels if c.id == i), None)
         def get_role(self, i):
@@ -8399,6 +8405,8 @@ def test_announcement_drafts_ask_check_numbers_and_resolve_targets():
     prefix, allowed, label = an.resolve_ping(g, 'punks')
     assert prefix == '<@&7>' and allowed.roles == [g.roles[0]] and allowed.everyone is False
     assert an.resolve_ping(g, 'Ghosts') is None
+    for said in ('ascended punks role', '@Ascended Punks', 'the Ascended Punks role', '<@&8>'):
+        assert an.resolve_ping(g, said)[2] == '@Ascended Punks', said
 
 
 def test_ask_ai_second_audit_fixes():

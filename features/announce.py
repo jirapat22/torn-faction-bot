@@ -63,7 +63,14 @@ def resolve_ping(guild, ping):
     when the role named doesn't exist. Only what the draft shows is allowed
     to ping: everything else in the text is silenced.
     """
-    p = (ping or '').strip().lstrip('@').strip()
+    p = (ping or '').strip()
+    m = re.search(r'<@&(\d+)>', p)
+    if m and guild.get_role(int(m.group(1))):
+        role = guild.get_role(int(m.group(1)))
+        return role.mention, discord.AllowedMentions(everyone=False, users=False, roles=[role]), f'@{role.name}'
+    # "ascended punks role", "@Ascended Punks", "the Punks role" -> the name alone.
+    p = re.sub(r'^(the\s+)?@?', '', p, flags=re.I)
+    p = re.sub(r'\s+roles?$', '', p, flags=re.I).strip()
     low = p.lower()
     if low in ('', 'none', 'no', 'nobody', 'no one', 'no ping', 'nothing'):
         return '', discord.AllowedMentions.none(), 'nobody'
@@ -71,10 +78,11 @@ def resolve_ping(guild, ping):
         return '@everyone', discord.AllowedMentions(everyone=True, users=False, roles=False), '@everyone'
     if low == 'here':
         return '@here', discord.AllowedMentions(everyone=True, users=False, roles=False), '@here'
-    m = re.fullmatch(r'<@&(\d+)>', p)
-    role = guild.get_role(int(m.group(1))) if m else None
-    if role is None:
-        role = discord.utils.find(lambda r: r.name.lower() == low, guild.roles)
+    norm = lambda x: re.sub(r'[^a-z0-9]', '', x.lower())
+    role = discord.utils.find(lambda r: norm(r.name) == norm(p), guild.roles)
+    if role is None:   # a unique partial match: "punks" -> "Ascended Punks"
+        hits = [r for r in guild.roles if norm(p) and norm(p) in norm(r.name) and r.name != '@everyone']
+        role = hits[0] if len(hits) == 1 else None
     if role is None:
         return None
     return role.mention, discord.AllowedMentions(everyone=False, users=False, roles=[role]), f'@{role.name}'
@@ -163,9 +171,10 @@ class EditDraftModal(discord.ui.Modal):
                                             + ', '.join('#' + u for u in unknown), ephemeral=True)
 
 
-def draft_header(channel, ping_label):
+def draft_header(channel, ping_label, unsure=()):
     where = channel.mention if channel is not None else '(unknown channel)'
-    return (f'📝 **Draft announcement** → {where} · ping: **{ping_label}**\n'
+    warn = (f'⚠️ I worked these numbers out myself, check them: **{", ".join(unsure)}**\n' if unsure else '')
+    return (f'📝 **Draft announcement** → {where} · ping: **{ping_label}**\n' + warn +
             '-# Check every detail: I only know what you told me. Only you can press these. '
             'Reply with changes, or use ✏️ Change to edit it yourself.')
 
@@ -174,7 +183,7 @@ def draft_embed(text):
     return discord.Embed(description=text, color=0xf1c40f)
 
 
-async def send_draft(message, store, draft):
+async def send_draft(message, store, draft, unsure=()):
     """
     Reply to `message` with a draft card. `draft` = {'channel', 'ping', 'text'}
     as the AI gave them. Returns (sent message, None), or (None, question)
@@ -193,7 +202,7 @@ async def send_draft(message, store, draft):
     text, _ = names_to_links((draft.get('text') or '').strip(), guild_channel_names(guild))
     if len(build_post(text, prefix)) > POST_LIMIT:
         return None, 'That came out too long for one Discord message. Want it shorter, or split into two?'
-    sent = await message.reply(draft_header(channel, label), embed=draft_embed(text), view=DraftView(store),
+    sent = await message.reply(draft_header(channel, label, unsure), embed=draft_embed(text), view=DraftView(store),
                                mention_author=False, allowed_mentions=discord.AllowedMentions.none())
     store[sent.id] = {'author_id': message.author.id, 'channel_id': channel.id, 'ping': draft.get('ping') or '',
                       'ping_label': label, 'text': text, 'at': time.time()}
