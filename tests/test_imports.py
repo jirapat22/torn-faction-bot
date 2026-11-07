@@ -8817,6 +8817,32 @@ def test_live_lookups_reuse_the_commands_and_drop_forbidden_lines():
         'No chain is running right now.', 'no Xanax, even in the flavour line'
 
 
+def test_strike_requests_get_the_fixed_reply_without_the_ai():
+    """
+    Strikes are not a chat action. Asking to give or remove one gets the
+    bot's own reply pointing at /strikes, and no AI provider is even called;
+    questions ABOUT strikes still go to the AI.
+    """
+    import asyncio
+    from features.ask_ai import answer_question, STRIKE_ACTION_RX, STRIKE_REFUSAL
+
+    called = []
+
+    async def provider(session, messages, facts, used):
+        called.append(1)
+        return 'x', messages
+
+    class F:
+        now = 0
+    for q in ('give Brizzy871 a strike', 'strike Brizzy871', 'remove the strike from Gary'):
+        ans = asyncio.run(answer_question(None, q, F(), providers=[('Fake', provider)]))
+        assert ans.text == STRIKE_REFUSAL and '/strikes' in ans.text and ans.provider == 'none', q
+    assert not called
+    for q in ('how many strikes does Gary have', 'show strike candidates', 'what gets a strike',
+              'why did bob get a strike', 'who is waiting for a strike decision'):
+        assert not STRIKE_ACTION_RX.search(q), q
+
+
 def test_leave_notices_are_quoted_word_for_word():
     """
     Pat: "quote it, I'll read it". The whole notice, newest first, with when
@@ -8994,4 +9020,5 @@ if __name__ == '__main__':
     test_chat_action_reaches_a_card_only_through_python()
     test_live_lookups_reuse_the_commands_and_drop_forbidden_lines()
     test_leave_notices_are_quoted_word_for_word()
+    test_strike_requests_get_the_fixed_reply_without_the_ai()
     print('All smoke tests passed.')

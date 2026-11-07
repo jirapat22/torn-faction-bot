@@ -1626,6 +1626,20 @@ def clock_variants(text):
         h = int(h) % 12 + (12 if ap.lower() == 'pm' else 0)
         extra.append(str(h))
     return ' '.join(extra)
+# Asking the bot to GIVE or TAKE AWAY a strike. Strikes are deliberately not
+# a chat action (Pat, 07/11/2026), and the AI's own refusal sometimes forgot
+# to say where to go instead, so the bot answers this one itself, every time,
+# without asking the AI at all. Questions ABOUT strikes ("how many strikes
+# does X have") don't match and still get answered from the records.
+STRIKE_ACTION_RX = re.compile(
+    r'\b(give|giv|issue|add|hand(?: out)?|put|remove|take (?:away|off)|clear|delete|pardon|forgive|drop|undo|'
+    r'approve|dismiss|reject|revoke|cancel)\b[\w\s\'@,-]{0,40}?\bstrikes?\b'
+    r'|^\W*(?:please\s+)?strike\s+(?!for\b|rules?\b|system\b|candidates?\b|history\b|list\b)\w', re.I)
+STRIKE_REFUSAL = ("I don't hand out or take away strikes by chat, boss 🚫 Management does that with "
+                  "**`/strikes`**. I can still tell you someone's strikes or who's waiting for a decision, "
+                  "just ask.")
+
+
 HELP_WORDS = re.compile(r'^\s*(help|commands?|what can you do\??|how do i use you\??|\?)\s*$', re.I)
 
 
@@ -1640,6 +1654,9 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
       - the raw records, when the AI kept using numbers that aren't in them.
     """
     providers = providers or PROVIDERS
+    if STRIKE_ACTION_RX.search(question):
+        # Fixed reply, no AI: see STRIKE_ACTION_RX. 'none' = not remembered.
+        return Answer(STRIKE_REFUSAL, 'none', '', True, 0, kind='ask')
     convo = ' '.join([question] + [t.get('content', '') for t in history or [] if t.get('role') == 'user'])
     announcing = bool(ANNOUNCE_RX.search(convo))
     # The action tools (features/ask_actions.py) are only shown when the
