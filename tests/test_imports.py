@@ -8143,7 +8143,7 @@ def test_ask_ai_audit_fixes_chat_numbers_war_order_and_groq_hiccups():
 
     # Cerebras and Gemini: same code path, skipped instantly with no key, in
     # the chain after Groq's big model and before its small one.
-    assert [n for n, _ in a.PROVIDERS] == ['Groq', 'Cerebras', 'Gemini', 'Groq small', 'local AI']
+    assert [n for n, _ in a.PROVIDERS] == ['Groq', 'Cerebras', 'Gemini', 'Gemini lite', 'Groq small', 'local AI']
     saved = os.environ.pop('CEREBRAS_API_KEY', None)
     try:
         asyncio.run(a._ask_cerebras(Session([]), [], fb, []))

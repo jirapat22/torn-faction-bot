@@ -1071,8 +1071,13 @@ CLOUD = {
     # Same gpt-oss-120b model as Groq, a separate (bigger) free allowance.
     'Cerebras': ('https://api.cerebras.ai/v1/chat/completions', 'CEREBRAS_API_KEY',
                  os.getenv('CEREBRAS_MODEL', 'gpt-oss-120b')),
+    # gemini-2.5-flash is closed to new accounts; the newest Flash models were
+    # answering "high demand" 503s when tested (07/11/2026). 3.5 Flash worked,
+    # with tool calls; Flash-Lite is a separate free allowance and very fast.
     'Gemini': ('https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', 'GEMINI_API_KEY',
-               os.getenv('GEMINI_MODEL', 'gemini-2.5-flash')),
+               os.getenv('GEMINI_MODEL', 'gemini-3.5-flash')),
+    'Gemini lite': ('https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', 'GEMINI_API_KEY',
+                    os.getenv('GEMINI_LITE_MODEL', 'gemini-flash-lite-latest')),
 }
 
 
@@ -1164,11 +1169,15 @@ async def _ask_gemini(session, messages, facts, used):
     return await _ask_groq(session, messages, facts, used, max_wait=15, provider='Gemini')
 
 
+async def _ask_gemini_lite(session, messages, facts, used):
+    return await _ask_groq(session, messages, facts, used, max_wait=15, provider='Gemini lite')
+
+
 # Big, capable models first (each with its own free allowance), then Groq's
 # small model, then the Mac (chat only; it never words records). A provider
 # with no key set is skipped instantly.
 PROVIDERS = [('Groq', _ask_groq_big), ('Cerebras', _ask_cerebras), ('Gemini', _ask_gemini),
-             ('Groq small', _ask_groq_small), ('local AI', _ask_local)]
+             ('Gemini lite', _ask_gemini_lite), ('Groq small', _ask_groq_small), ('local AI', _ask_local)]
 # Up to a minute: measured, the Mac's AI takes 40-90s AND is weaker (it once
 # quoted the wrong war's hits for "Ikaros vs Kaos Korner"), so waiting out
 # Groq's per-minute limit is both quicker and safer than falling back.
