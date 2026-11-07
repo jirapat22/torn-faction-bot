@@ -380,6 +380,15 @@ async def on_ready():
         bot.add_view(ShowDataView(ask_ai))   # keeps old 📎 buttons answering after a restart
         from features.announce import DraftView
         bot.add_view(DraftView(ask_ai.drafts))   # draft buttons say "expired" after a restart
+        # What @ApexPunk can look up live and act on (features/ask_live.py,
+        # features/ask_actions.py): the same managers the slash commands use.
+        from types import SimpleNamespace
+        ask_ai.live = SimpleNamespace(
+            bot=bot, war_tracker=war_tracker, chain_tracker=chain_tracker,
+            chain_event_manager=chain_event_manager, availability_manager=availability_manager,
+            fly_tracker=fly_tracker, target_manager=target_manager, enemy_watchlist=enemy_watchlist)
+        from features.ask_actions import ActionView
+        bot.add_view(ActionView(ask_ai.actions, ask_ai.live))   # ✅/❌ cards say "expired" after a restart
 
         # Initialize faction tools
         await setup_faction_commands(bot)

@@ -8680,6 +8680,158 @@ def test_torn_events_from_the_official_calendar():
     assert add_local_times(out) == out, 'never stamped twice'
 
 
+def test_chat_actions_ask_instead_of_inventing():
+    """
+    Pat's rule for chat actions: "if bot does not have sufficient information,
+    always ask first, dont make number up dont create stuffs half way". Python
+    (plan_action), not the AI, decides: a number or a "when" word the person
+    never typed is asked for, never used.
+    """
+    from features.ask_actions import plan_action
+    from features.ask_ai import clock_variants
+    now = 1794000000   # a fixed moment, so "saturday" always means the same day
+
+    def said(text):
+        return text + ' ' + clock_variants(text)
+
+    ok = plan_action('action_chain_event', {'op': 'start', 'when': 'now', 'hours': 24, 'minimum': 10},
+                     said('start a chain event now for 24 hours, min 10 hits'), now)
+    assert ok[0] == 'plan' and ok[1]['hours'] == 24 and ok[1]['minimum'] == 10 and ok[1]['start'] == now
+    made_up = plan_action('action_chain_event', {'op': 'start', 'when': 'now', 'hours': 24, 'minimum': 10},
+                          said('start a chain event now'), now)
+    assert made_up[0] == 'ask' and 'how long' in made_up[1] and 'minimum' in made_up[1], made_up
+    wrong_day = plan_action('action_chain_event', {'op': 'start', 'when': 'saturday 13:00', 'hours': 24,
+                                                   'minimum': 10},
+                            said('chain event this weekend, 24 hours, minimum 10'), now)
+    assert wrong_day[0] == 'ask' and 'when it starts' in wrong_day[1], 'saturday 13:00 was never said'
+    pm = plan_action('action_chain_event', {'op': 'start', 'when': 'saturday 13:00', 'hours': 24, 'minimum': 10},
+                     said('start a chain event saturday 1pm, 24 hours, minimum 10'), now)
+    assert pm[0] == 'plan', '1pm said = 13:00 is theirs'
+    assert plan_action('action_chain_event', {'op': 'end'}, 'end the chain event', now) == \
+        ('plan', {'kind': 'chain_end'})
+
+    no_id = plan_action('action_target', {'op': 'add', 'who': '1524830'}, said('add Hat to the target board'), now)
+    assert no_id[0] == 'ask' and 'Torn ID' in no_id[1], 'an ID the AI found itself is not good enough'
+    add = plan_action('action_target', {'op': 'add', 'who': '[1524830]', 'reason': 'ruined the 500th',
+                                        'permanent': True},
+                      said('add 1524830 to targets, ruined the 500th'), now)
+    assert add[0] == 'plan' and add[1]['torn_id'] == '1524830' and add[1]['permanent'] is False, \
+        'permanent only when they said so'
+
+    poll = plan_action('action_poll', {'kind': 'custom', 'start': 'saturday 10:00', 'end': 'sunday 22:00',
+                                       'block_hours': 3},
+                       said('make a poll from saturday 10:00 to sunday 22:00'), now)
+    assert poll[0] == 'plan' and poll[1]['block_hours'] == 2 and poll[1]['block_default'], \
+        'an invented block size is dropped, and the card shows the usual one, labelled'
+    backwards = plan_action('action_poll', {'kind': 'custom', 'start': 'sunday 22:00', 'end': 'saturday 10:00'},
+                            said('poll sunday 22:00 to saturday 10:00'), now)
+    assert backwards[0] == 'plan' or 'after the start' in backwards[1]
+
+    custom = plan_action('action_discord_event', {'type': 'custom', 'when': 'friday 8pm'},
+                         said('make a discord event friday 8pm'), now)
+    assert custom[0] == 'ask' and 'called' in custom[1] and 'how long' in custom[1]
+    chain = plan_action('action_discord_event', {'type': 'chain', 'when': 'friday 8pm'},
+                        said('make a chain event in discord friday 8pm'), now)
+    assert chain[0] == 'plan' and chain[1]['hours'] == 24 and chain[1]['name'] == 'Chain Event'
+
+
+def test_chat_action_reaches_a_card_only_through_python():
+    """
+    The full loop with a fake AI: an action tool call with everything said
+    becomes a confirm card plan; with an invented number it becomes the bot's
+    own question. The action tools are only offered when asked to DO something.
+    """
+    import asyncio, tempfile
+    from features.ask_ai import FactBook, answer_question
+
+    def provider(args):
+        async def ask(session, messages, fb, used):
+            names = {s['function']['name'] for s in fb.tool_specs}
+            assert 'action_chain_event' in names and 'live_status' in names
+            used.append(('action_chain_event', args, fb.run('action_chain_event', args)))
+            return fb.final, list(messages)
+        return ask
+
+    d = tempfile.mkdtemp()
+    full = {'op': 'start', 'when': 'now', 'hours': 24, 'minimum': 10}
+    card = asyncio.run(answer_question(None, 'start a chain event now, 24 hours, minimum 10',
+                                       FactBook(d, roster={}), providers=[('fake', provider(full))]))
+    assert card.kind == 'action' and card.action['kind'] == 'chain_start' and card.action['hours'] == 24
+    asked = asyncio.run(answer_question(None, 'start a chain event now', FactBook(d, roster={}),
+                                        providers=[('fake', provider(full))]))
+    assert asked.kind == 'action_ask' and '24' not in asked.text.split('usually')[0], asked.text
+
+    async def plain(session, messages, fb, used):
+        assert not any(s['function']['name'].startswith('action_') for s in fb.tool_specs), \
+            'a records question must not get the action tools'
+        return 'hi', list(messages)
+    asyncio.run(answer_question(None, 'how active is Bob?', FactBook(d, roster={}), providers=[('fake', plain)]))
+
+
+def test_live_lookups_reuse_the_commands_and_drop_forbidden_lines():
+    """
+    Live answers come from the slash commands' own embeds turned into text:
+    countdowns are worked out in Python (the AI copies "in 2h 0m"), and any
+    line about Xanax, money or battle stats never reaches the AI (Pat's rule).
+    """
+    import asyncio, json, os, tempfile, discord
+    from types import SimpleNamespace
+    from features.ask_ai import FactBook
+    from features.ask_live import LiveTools, plain, embed_text
+
+    now = 1794000000
+    assert plain(f'Ends <t:{now + 7200}:R>', now) == 'Ends in 2h 0m'
+    assert plain('Hits: 5\nXanax owed: 3\nEst. BS 1.2b\nNet worth 9', now) == 'Hits: 5'
+    e = discord.Embed(title='War', description=f'Score 10-4, ends <t:{now + 90}:R>')
+    e.add_field(name='Xan', value='20 xanax')
+    e.add_field(name='Top', value='Bob 4')
+    assert embed_text(e, now) == 'War\nScore 10-4, ends in 1m\nTop:\nBob 4'
+
+    class FakeWar:
+        async def get_current_war(self):
+            return {'war_id': '9'}
+        async def format_war_embed(self, info):
+            return discord.Embed(title='War vs Kids', description='Score **1200** - 900')
+        async def get_upcoming_war(self):
+            return None
+    d = tempfile.mkdtemp()
+    with open(os.path.join(d, 'timezones.json'), 'w') as f:
+        json.dump({'11': {'zone': 'Pacific/Auckland', 'name': 'Bob [5]'}}, f)
+    fb = FactBook(d, roster={'5': {'name': 'Bob', 'level': 9, 'days_in_faction': 3},
+                             '6': {'name': 'Old', 'level': 50, 'days_in_faction': 400}}, now=now)
+    fb.discord_links = {'11': '5'}
+    targets = SimpleNamespace(data={'targets': {'77': {'name': 'Hat', 'level': 100, 'permanent': True,
+                                                       'added_by_name': 'Ikaros', 'reason': 'rude'}}})
+    lt = LiveTools(fb, SimpleNamespace(war_tracker=FakeWar(), target_manager=targets), None, d)
+    war = asyncio.run(lt.live_status('war'))
+    assert 'Score **1200** - 900' in war and fb.found_any
+    trials = lt._trials()
+    assert 'Bob [5]: level 9, 3 days' in trials and 'NOT yet level 15' in trials and 'Old' not in trials
+    assert 'Hat [77]' in lt._targets() and 'permanent' in lt._targets()
+    tz = lt._timezones('Bob')
+    assert 'Bob [5]: Pacific/Auckland' in tz
+    none = LiveTools(FactBook(d, roster={}, now=now), None, None, d)
+    assert 'not running' in asyncio.run(none.live_status('chain'))
+
+
+def test_leave_notices_are_quoted_word_for_word():
+    """
+    Pat: "quote it, I'll read it". The whole notice, newest first, with when
+    it was posted; nothing older than the window; the bot writes the reply.
+    """
+    from features.ask_live import group_notices, notice_lines, notices_answer
+    now = 1794000000
+    msgs = [{'author_id': '1', 'timestamp': now - 3600, 'content': 'Away 29th Sept to 3rd Oct\nwork trip, sorry'},
+            {'author_id': '1', 'timestamp': now - 90 * 86400, 'content': 'ancient notice'},
+            {'author_id': '2', 'timestamp': now - 7200, 'content': ''}]
+    g = group_notices(msgs, now=now)
+    assert list(g) == ['1'] and len(g['1']) == 1
+    lines = notice_lines(g, lambda did: 'Bob [5]')
+    assert lines[0].endswith('"Away 29th Sept to 3rd Oct / work trip, sorry"')
+    ans = notices_answer('LEAVE NOTICES from Bob, last 60 days\n' + '\n'.join(lines))
+    assert ans.startswith('📝 **Bob [5]**, posted ') and '> Away 29th Sept to 3rd Oct / work trip, sorry' in ans
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -8835,4 +8987,8 @@ if __name__ == '__main__':
     test_announcement_preview_is_exactly_the_post()
     test_announcement_drafts_keep_only_what_was_said()
     test_torn_events_from_the_official_calendar()
+    test_chat_actions_ask_instead_of_inventing()
+    test_chat_action_reaches_a_card_only_through_python()
+    test_live_lookups_reuse_the_commands_and_drop_forbidden_lines()
+    test_leave_notices_are_quoted_word_for_word()
     print('All smoke tests passed.')
