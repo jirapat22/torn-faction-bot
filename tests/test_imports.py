@@ -9008,6 +9008,12 @@ def test_foolproof_round_fixes():
     ans = asyncio.run(answer_question(None, 'hi', FactBook('data', roster={}), providers=[('A', boom), ('B', chat)]))
     assert ans.provider == 'B' and 'Deleted' not in ans.text   # chat never claims it did something
 
+    async def lucky(session, messages, facts, used):
+        return '42! Or wait, how about 73? 🎲', messages
+    ans = asyncio.run(answer_question(None, 'give me a random number', FactBook('data', roster={}),
+                                      providers=[('L', lucky)]))
+    assert '42' not in ans.text and '73' not in ans.text   # chat never makes numbers up either
+
 
 def test_leave_notices_are_quoted_word_for_word():
     """

@@ -1927,10 +1927,14 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
             # ...unless it was just chit-chat, which needs no records at all.
             if is_small_talk(question, text, facts):
                 chat = tidy_answer(text, [], '')
-                if not chat or CLAIMS_DONE.search(chat):
+                # Chat numbers must be the person's own too: "give me a random
+                # number" got "42! Or 73?", and a made-up number in the bot's
+                # voice is exactly what Pat ruled out.
+                if not chat or CLAIMS_DONE.search(chat) or unsupported_numbers(chat, question):
                     # Chat never does anything (only ✅ cards do). A chat line
                     # saying it did ("Deleted everything 💀", "strike issued")
                     # would be believed, so it is swapped for a harmless one.
+                    # Same for invented numbers (see above).
                     chat = "Just keeping the armoury books straight, boss 😎 What's up?"
                 return Answer(chat, pname, '', True, took(), kind='chat')
             # Asked to do something and the AI asked a question of its own
