@@ -53,6 +53,7 @@ logger = logging.getLogger(__name__)
 OLLAMA_URL = os.getenv('OLLAMA_URL', 'http://host.docker.internal:11434')
 LOCAL_MODEL = os.getenv('OLLAMA_MODEL', 'qwen3.5:9b')
 GROQ_MODEL = os.getenv('GROQ_MODEL', 'openai/gpt-oss-120b')
+GROQ_SMALL_MODEL = os.getenv('GROQ_SMALL_MODEL', 'openai/gpt-oss-20b')
 MAX_ROUNDS = 5          # tool calls per question, so a confused model can't loop forever
 LOCAL_BUDGET_S = 120    # the local AI (the backup) gets this long before giving up
 GROQ_TIMEOUT_S = 60
@@ -444,7 +445,7 @@ class FactBook:
             return ['In the Discord server: unknown (the server member list was not available).']
         missing = [r['name'] for r in rows if r['tid'] not in self.in_discord]
         unlinked = [r['name'] for r in rows if r['tid'] in self.in_discord and r['tid'] not in self.linked]
-        return [f'In the faction but NOT in the Discord server ({len(missing)}): '
+        return [f'In the faction but NOT in the Discord server, so not linked to the bot either ({len(missing)}): '
                 + (', '.join(sorted(missing, key=str.lower)) or 'nobody') + '.',
                 f'In the Discord server but not linked to the bot, so it cannot DM them; they should use '
                 f'/register ({len(unlinked)}): ' + (', '.join(sorted(unlinked, key=str.lower)) or 'nobody') + '.']
@@ -588,7 +589,7 @@ class FactBook:
                          f'{(s.get("reason") or "").strip()[:160]}')
         return '\n'.join(lines)
 
-    def faction_table(self, sort_by='name'):
+    def faction_table(self, sort_by='name', rows_wanted=False):
         """One line per current member, for 'who...' questions across the faction."""
         if self.roster is None:
             return self._notice('Torn isn\'t answering right now, so I can\'t see the current member list. '
@@ -657,9 +658,16 @@ class FactBook:
                       skip=lambda r: not r['strikes']),
                *self._discord_lines(rows),
                *self._faction_chain_lines(),
-               f'Every member, sorted by {sort_by} (columns: last action | online share | days online of last 14 '
-               '| last war hits made/taken | chain hits last 14 days | days since OC | active strikes; '
-               '"-" = not in that record):']
+               ]
+        if not rows_wanted:
+            # The full member list is ~2/3 of this tool's size, and Groq's free
+            # plan allows 8,000 tokens a minute. The ready-made lines above
+            # answer most questions; the list comes only when asked for.
+            out.append('(Per-member rows left out; call faction_table with rows=true for every member.)')
+            return '\n'.join(out)
+        out.append(f'Every member, sorted by {sort_by} (columns: last action | online share | days online of last 14 '
+                   '| last war hits made/taken | chain hits last 14 days | days since OC | active strikes; '
+                   '"-" = not in that record):')
         for r in rows:
             war = '-' if r['made'] is None else f'{r["made"]}/{_num(r["taken"])}'
             out.append(f'- {r["name"]} [{r["tid"]}] L{r["level"]} | {r["off"] or "unknown"} | '
@@ -769,7 +777,7 @@ class FactBook:
             if name == 'member_report':
                 return self.member_report(args.get('name', ''))
             if name == 'faction_table':
-                return self.faction_table(args.get('sort_by', 'name'))
+                return self.faction_table(args.get('sort_by', 'name'), bool(args.get('rows')))
             if name == 'war_report':
                 return self.war_report(args.get('war', 'latest'))
             if name == 'strikes_overview':
@@ -818,7 +826,9 @@ TOOL_SPECS = [
         'parameters': {'type': 'object', 'properties': {
             'sort_by': {'type': 'string', 'enum': ['name', 'days_offline', 'online_share', 'last_war_hits_made',
                                                    'last_war_hits_taken', 'days_since_oc', 'strikes',
-                                                   'chain_hits_14d']}},
+                                                   'chain_hits_14d']},
+            'rows': {'type': 'boolean', 'description': 'true to include one line per member (only when the '
+                                                       'ready-made lines do not answer the question)'}},
             'required': []}}},
     {'type': 'function', 'function': {
         'name': 'war_report',
@@ -952,7 +962,8 @@ def system_prompt():
         'details (date, time in TCT, place, requirements), which channel (default: the announcements '
         'channel, use "" for it) and who to ping (nobody, everyone, here, or a role). Ask for anything '
         'missing with announce_ask, ONE short question at a time, and ALWAYS ask who to ping unless they '
-        'already said. Never invent a detail (no made-up dates, times, numbers or names). When you have '
+        'already said. Never invent a detail (no made-up dates, times, numbers or names), and never add '
+        'instructions or requirements they did not give (e.g. do not tell people to turtle or not to turtle). When you have '
         'enough, call announce_draft. Voice: clear and easy to scan, key details in bold, at most one short '
         'cheeky punk line, no more than 2 emojis, under 1500 characters. If they reply to a draft with '
         'changes, call announce_draft again with the new version.\n'
@@ -1013,7 +1024,7 @@ async def _ask_local(session, messages, facts, used):
     raise NotCapable('local AI kept calling tools without answering')
 
 
-async def _ask_groq(session, messages, facts, used):
+async def _ask_groq(session, messages, facts, used, model=None, max_wait=None):
     key = os.getenv('GROQ_API_KEY')
     if not key:
         raise NotCapable('no Groq key set')
@@ -1024,14 +1035,14 @@ async def _ask_groq(session, messages, facts, used):
             async with session.post('https://api.groq.com/openai/v1/chat/completions',
                                     timeout=aiohttp.ClientTimeout(total=GROQ_TIMEOUT_S),
                                     headers={'Authorization': f'Bearer {key}'},
-                                    json={'model': GROQ_MODEL, 'messages': msgs, 'tools': TOOL_SPECS,
+                                    json={'model': model or GROQ_MODEL, 'messages': msgs, 'tools': TOOL_SPECS,
                                           'tool_choice': 'auto', 'temperature': 0.2}) as r:
                 if r.status == 429 and waits < 2:
                     # Free plan: 8,000 tokens/min. A big question can hit it;
                     # waiting beats the local fallback. Two waits, because one
                     # was measured not to be enough (refused again after 12s).
                     wait = _retry_after(r.headers)
-                    if wait is not None and waited_s + wait <= GROQ_MAX_WAIT_S:
+                    if wait is not None and waited_s + wait <= (GROQ_MAX_WAIT_S if max_wait is None else max_wait):
                         waits += 1
                         waited_s += wait
                         logger.info(f'ask_ai: Groq rate limit, waiting {wait:.0f}s')
@@ -1079,7 +1090,20 @@ async def _ask_groq(session, messages, facts, used):
 # (07/11/2026), and Pat is fine with Torn stats leaving the Mac. Free plan,
 # no card: 1,000 requests/day, 8,000 tokens/min. Over the limit Groq refuses
 # (HTTP 429), which is a NotCapable like any outage, so the Mac answers instead.
-PROVIDERS = [('Groq', _ask_groq), ('local AI', _ask_local)]
+async def _ask_groq_small(session, messages, facts, used):
+    """Groq's smaller model. Groq's free limits are PER MODEL, so this is a
+    second 8,000 tokens/min allowance before the slow Mac AI."""
+    return await _ask_groq(session, messages, facts, used, model=GROQ_SMALL_MODEL, max_wait=20)
+
+
+async def _ask_groq_big(session, messages, facts, used):
+    # Wait only briefly for the big model: the small one is a better next
+    # step than a long wait (measured: a faction-wide question uses ~7,000 of
+    # the 8,000 tokens/min, so two in a minute hit the limit).
+    return await _ask_groq(session, messages, facts, used, max_wait=15)
+
+
+PROVIDERS = [('Groq', _ask_groq_big), ('Groq small', _ask_groq_small), ('local AI', _ask_local)]
 # Up to a minute: measured, the Mac's AI takes 40-90s AND is weaker (it once
 # quoted the wrong war's hits for "Ikaros vs Kaos Korner"), so waiting out
 # Groq's per-minute limit is both quicker and safer than falling back.
@@ -1286,6 +1310,7 @@ def raw_records_text(facts, question='', limit=1500):
 
 UNSURE_TEXT = ("Not sure what you're after, boss 🤔 Ask me about a member, a war, chains, OCs, strikes "
                'or the rules. Say `@ApexPunk help` for the full list.')
+ANNOUNCE_RX = re.compile(r'announc\w*', re.I)
 HELP_WORDS = re.compile(r'^\s*(help|commands?|what can you do\??|how do i use you\??|\?)\s*$', re.I)
 
 
@@ -1666,8 +1691,11 @@ class AskAI:
             while len(self.facts_by_msg) > FACTS_KEPT:
                 self.facts_by_msg.pop(next(iter(self.facts_by_msg)))
         if ans.provider != 'none':
+            # A plain "ask" counts as drafting too when the conversation is
+            # about an announcement (the AI sometimes uses ask_back there).
+            about_announcement = ANNOUNCE_RX.search(' '.join([question] + [t['content'] for t in history]))
             self._remember(sent, history, question, ans.text, earlier, ans.facts_text, message,
-                           drafting=ans.kind == 'announce_ask')
+                           drafting=ans.kind == 'announce_ask' or (ans.kind == 'ask' and bool(about_announcement)))
 
     def _remember(self, sent, history, question, answer_text, earlier, facts_text, message, drafting=True):
         """Remember the conversation so a reply to this message can follow on

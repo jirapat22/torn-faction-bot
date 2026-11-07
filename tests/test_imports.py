@@ -8301,7 +8301,7 @@ def test_ask_ai_knows_who_is_not_in_discord():
         json.dump({'2': '555'}, f)
     roster = {'3571142': {'name': 'Ikaros22'}, '555': {'name': 'Bob'}, '777': {'name': 'Ghost'}}
     table = FactBook(d, roster=roster, discord_members=members).faction_table()
-    assert 'NOT in the Discord server (1): Ghost.' in table
+    assert 'NOT in the Discord server, so not linked to the bot either (1): Ghost.' in table
     assert 'not linked to the bot' in table and '(1): Ikaros22.' in table
     assert 'In our Discord server: no' in FactBook(d, roster=roster, discord_members=members).member_report('Ghost')
     assert 'unknown' in FactBook(d, roster=roster).faction_table().split('In the Discord server: ')[1][:10]
@@ -8439,8 +8439,9 @@ def test_ask_ai_second_audit_fixes():
                                           providers=[('fake', no_tools)]))
     assert rules.kind == 'answer' and "rulebook says" in rules.text and 'mug' in rules.text.lower()
 
-    table = fb().faction_table()
+    table = fb().faction_table(rows_wanted=True)
     assert '- 3340684 [2]' in table and 'name not on record' not in table
+    assert '- 3340684 [2]' not in fb().faction_table(), 'rows only when asked for'
     assert 'Faction chains finished in the last 7 days: 1 chains, 20 hits, 40.5 respect, longest chain 25.' in table
     assert 'last 30 days: 2 chains, 30 hits' in table
 
