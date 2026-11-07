@@ -249,7 +249,9 @@ def enrich_draft(text, names, path=CALENDAR_FILE):
         cue = _LINE_CUES.get(name) or re.compile(
             '|'.join(re.escape(w) for w in re.findall(r'[A-Za-z]{4,}', name)
                      if w.lower() not in _GENERIC_TITLE_WORDS) or re.escape(name), re.I)
-        at = next((i for i, l in enumerate(lines) if cue.search(l)), None)
+        # Only under an event's own HEADING (Pat, 07/11/2026): a passing "the
+        # chain is after the war" in a happy-jump post gets no chain/war bullets.
+        at = next((i for i, l in enumerate(lines) if l.lstrip().startswith(('**', '#')) and cue.search(l)), None)
         if at is None:
             continue
         # Insert after the event's heading and any bullets already under it.

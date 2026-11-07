@@ -8626,6 +8626,9 @@ def test_torn_events_from_the_official_calendar():
     assert war[0].startswith('- Revives OFF') and 'War guide' in war[1] and 'availability' not in rich
     assert lines[-1] == 'Stay sharp, punks.'
     assert enrich_draft('Happy jump: Happy Jumping Guide <#1>', ['Happy jump'], path=path).count('Guide') == 1
+    side = enrich_draft('**🦘 Happy Jump**\n- Saturday 13:00 TCT\nThe chain is after the war.',
+                        ['Happy jump', 'Chain', 'Ranked war'], path=path)
+    assert 'Happy Jumping Guide' in side and 'Minimum 10 hits' not in side and 'Revives OFF' not in side
     from features.ask_ai import dates_not_given
     said = 'saturday 7/11/2026 1pm happy jump, 13/11/2026 10:00 TCT to 15/11/2026 16:00 TCT diabetes day'
     assert dates_not_given('07/11/2026 13:00 – 14/11/2026 13:00 (24 h); 13/11 to 15/11', said) == ['14/11']
