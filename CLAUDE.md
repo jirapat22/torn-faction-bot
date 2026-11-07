@@ -7,7 +7,7 @@ A Discord bot for a Torn.com faction (Ascended Punks), running on Pat's home Mac
 ## Commands
 
 ```bash
-<py> -m pytest -q tests/          # full suite (167 tests), the one to trust
+<py> -m pytest -q tests/          # full suite (168 tests), the one to trust
 <py> -m pytest -q tests/test_imports.py::test_flytrack_logic   # single test
 <py> tests/test_imports.py        # runs test_imports.py ONLY, see note below
 <py> bot.py                       # run locally (needs .env)
@@ -104,6 +104,7 @@ Two things it must not do, both of which it used to:
 - A refusal (HTTP 403/429, or Torn errors 5/8/9) **pauses every Torn call**, 60s doubling to 10 min, and calls fail fast as `None` meanwhile. On 27/10/2026 an hour of 403s met ~13 retries a minute, the behaviour most likely to extend a block. Error lines name the endpoint and selections (never the key).
 - Given only `from`, the attacks log returns the **oldest** 100 after it, not the newest (busiest hour measured: 135 attacks). Anything that must see recent hits either pages (`_fetch_all_attacks_since`) or asks `sort='desc'` (retals).
 - A rolling-window rate limiter caps requests/min.
+- Torn HTML-escapes text (`The Devil&#039;s Rejects`); `_unescape` decodes every Torn response once, at the API layer.
 - `selections=travel` returns error 7 for any ID but the key owner's, so exact flight times for enemies are **impossible**, this is why flight ETAs are estimated and must stay estimates.
 
 ### Flight ETA model (`features/flytrack.py`)

@@ -9117,6 +9117,16 @@ def test_general_notice_question_only_lists_recent_posts():
     assert ACTION_RX.search('add https://www.torn.com/profiles.php?XID=4451076 to test target')
 
 
+def test_torn_text_is_html_decoded_once_at_the_api():
+    """Torn sends "The Devil&#039;s Rejects"; a chat card showed it raw (08/11/2026)."""
+    from utils.torn_api import _unescape
+    data = {'name': 'JohnDoe010', 'faction': {'faction_name': 'The Devil&#039;s Rejects', 'id': 5},
+            'list': ['Tom &amp; Jerry', 3], 'plain': 'no entities'}
+    out = _unescape(data)
+    assert out['faction']['faction_name'] == "The Devil's Rejects"
+    assert out['list'] == ['Tom & Jerry', 3] and out['plain'] == 'no entities' and out['faction']['id'] == 5
+
+
 def test_leave_notices_are_quoted_word_for_word():
     """
     Pat: "quote it, I'll read it". The whole notice, newest first, with when
@@ -9294,6 +9304,7 @@ if __name__ == '__main__':
     test_chat_action_reaches_a_card_only_through_python()
     test_live_lookups_reuse_the_commands_and_drop_forbidden_lines()
     test_leave_notices_are_quoted_word_for_word()
+    test_torn_text_is_html_decoded_once_at_the_api()
     test_general_notice_question_only_lists_recent_posts()
     test_follow_up_pronoun_points_at_the_one_member_named_earlier()
     test_strike_requests_get_the_fixed_reply_without_the_ai()

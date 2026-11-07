@@ -5,6 +5,7 @@ Handles all API calls to Torn.com
 
 import aiohttp
 import asyncio
+import html
 import time
 from collections import deque
 from config import (
@@ -80,6 +81,22 @@ def _describe(endpoint, params):
     """Which request this was, for the log. Never includes the API key."""
     shown = {k: v for k, v in (params or {}).items() if k != 'key'}
     return f'{endpoint} {shown}' if shown else endpoint
+
+
+def _unescape(value):
+    """
+    Torn HTML-escapes text in its JSON: a faction called "The Devil's Rejects"
+    arrives as "The Devil&#039;s Rejects", and that showed up raw on a chat
+    card (08/11/2026). Decoded once here, for every Torn answer, so no
+    feature has to remember to. Strings without entities come back unchanged.
+    """
+    if isinstance(value, str):
+        return html.unescape(value) if '&' in value else value
+    if isinstance(value, dict):
+        return {k: _unescape(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_unescape(v) for v in value]
+    return value
 
 
 async def _get_session():
@@ -195,7 +212,7 @@ async def _make_api_request(endpoint, params=None, use_personal_key=False, cache
                     _note_blocked(f'HTTP {response.status}')
                 return None
 
-            data = await response.json()
+            data = _unescape(await response.json())
 
             # Check for API errors
             if 'error' in data:
