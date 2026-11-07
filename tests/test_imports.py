@@ -8581,6 +8581,15 @@ def test_torn_events_from_the_official_calendar():
     assert 'Happy jump (faction event): A weekly faction event that lasts 24 hours.' in events_text('happy jump', path=path, now=now)
     assert 'not saved yet' in events_text('', path=os.path.join(d, 'missing.json'), now=now)
 
+    from features.torn_events import detect_events, facts_for
+    said = ('this week saturday happy jump, next week 13/11 to 15/11 for worlds diabetes day and then the next '
+            'two weeks after that we will enlist for wars')
+    found = detect_events(said, path=path)
+    assert found == ['World Diabetes Day', 'Ranked war', 'Happy jump'], found
+    facts = facts_for(found, path=path, now=now)
+    assert 'Candy effects are tripled' in facts and 'lasts 24 hours' in facts and 'Tuesday' in facts
+    assert 'Awareness' not in facts
+
 
 if __name__ == '__main__':
     test_all_modules_import()

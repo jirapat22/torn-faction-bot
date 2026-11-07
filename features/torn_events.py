@@ -116,3 +116,47 @@ def events_text(query='', path=CALENDAR_FILE, now=None, limit=8):
     for name, desc in faction:
         out.append(f'- {name} (faction event): {desc}')
     return 'EVENTS (official Torn calendar, plus our faction\'s own weekly events):\n' + '\n'.join(out)
+
+
+# Words that say a faction weekly event is in the text.
+_FACTION_CUES = {
+    'Ranked war': re.compile(r'\b(wars?|enlist\w*|ranked)\b', re.I),
+    'Chain': re.compile(r'\bchain(s|ing)?\b', re.I),
+    'Happy jump': re.compile(r'\bhappy\s*jump\w*\b', re.I),
+}
+_GENERIC_TITLE_WORDS = {'day', 'days', 'week', 'the', 'of', 'torn', 'town', 'awareness'}
+
+
+def detect_events(text, path=CALENDAR_FILE):
+    """
+    Names of the events a piece of text talks about: a Torn event counts when
+    every distinctive word of its title is there ("worlds diabetes day" ->
+    World Diabetes Day; "next two weeks" does NOT pull in Awareness Week).
+    """
+    tokens = re.findall(r'[a-z0-9]+', (text or '').lower())
+    def has(word):
+        return any(t == word or (len(word) >= 4 and len(t) >= 4 and (t.startswith(word) or word.startswith(t)))
+                   for t in tokens)
+    saved = load_json(path, default={}) or {}
+    found = []
+    for e in (saved.get('events') or []) + (saved.get('competitions') or []):
+        title = e.get('title') or ''
+        words = [w for w in re.findall(r'[a-z0-9]+', title.lower())
+                 if w not in _GENERIC_TITLE_WORDS and not w.isdigit()]
+        if words and all(has(w) for w in words) and title not in found:
+            found.append(title)
+    for name, cue in _FACTION_CUES.items():
+        if cue.search(text or ''):
+            found.append(name)
+    return found
+
+
+def facts_for(names, path=CALENDAR_FILE, now=None):
+    """events_text for just these events, or '' when there are none."""
+    if not names:
+        return ''
+    parts = []
+    for n in names:
+        t = events_text(n, path=path, now=now, limit=1)
+        parts += [l for l in t.split('\n')[1:] if l.startswith('- ') and l not in parts]
+    return 'EVENT FACTS for this announcement:\n' + '\n'.join(parts) if parts else ''

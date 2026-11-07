@@ -981,7 +981,7 @@ def system_prompt():
         'it is about or who to ping. Do NOT ask which channel: use "" (the announcements channel) unless they '
         'name one. Never invent a detail (no made-up dates, times, numbers or names), and never add '
         'instructions or requirements they did not give. Never describe what an event or activity is, or what '
-        'people should do at it, unless they told you or torn_events says it: call torn_events for any Torn '
+        'people should do at it, unless they told you or the event facts say it: call torn_events for any Torn '
         'event they name and you may add its effect in Torn\'s own words (e.g. "candy effects are tripled"). '
         'If their dates differ from Torn\'s, use THEIR dates (it is their plan). Each item is its name, its '
         'date/time, and only the details they gave or torn_events gave. Lines with things they did not say are cut automatically. Voice: clear and easy to '
@@ -1430,6 +1430,21 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
     base = [{'role': 'system', 'content': sys_txt}]
     if earlier_facts:
         base.append({'role': 'system', 'content': 'Data from earlier in this conversation:\n' + earlier_facts})
+    # Announcements: the bot itself looks up every event the conversation
+    # mentions and hands the facts over, so the draft can carry the useful
+    # details (how long, what it does) without the AI guessing them. Pat
+    # wanted "the details and stuffs" in, and guessed details out.
+    event_facts = ''
+    convo = ' '.join([question] + [t.get('content', '') for t in history or [] if t.get('role') == 'user'])
+    if ANNOUNCE_RX.search(convo):
+        from features.torn_events import detect_events, facts_for
+        cal = os.path.join(getattr(facts, 'data_dir', 'data'), 'torn_calendar.json')
+        event_facts = facts_for(detect_events(convo, path=cal), path=cal, now=facts.now)
+        if event_facts:
+            base.append({'role': 'system', 'content': event_facts + '\nUnder each event in the draft, add its '
+                         'key facts from this list as a short line or two (how long it lasts, what Torn says it '
+                         'does, and for war: lasts a week at most, matchmaking on Tuesdays). Keep the person\'s '
+                         'own dates and times where they gave them.'})
     base += list(history or []) + [{'role': 'user', 'content': question}]
 
     t0, problems = time.monotonic(), []
@@ -1453,7 +1468,7 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
         #    an invented "Friday 8pm" becomes a question, never a draft.
         if facts.final_kind in ('draft', 'announce_ask'):
             said = '\n'.join([question] + [t.get('content', '') for t in history or []
-                                            if t.get('role') == 'user'] + [_facts_text(used)])
+                                            if t.get('role') == 'user'] + [_facts_text(used), event_facts])
             said += ' ' + clock_variants(said) + ' 0'   # ":00" minutes are never an invented number
             bad = unsupported_numbers(facts.final, said, earlier_facts)
             if bad and facts.final_kind == 'draft':
