@@ -1063,18 +1063,32 @@ async def _ask_local(session, messages, facts, used):
     raise NotCapable('local AI kept calling tools without answering')
 
 
-async def _ask_groq(session, messages, facts, used, model=None, max_wait=None):
-    key = os.getenv('GROQ_API_KEY')
+# Free cloud AIs that speak the same "OpenAI-style" API, so one function
+# serves them all: (url, key setting, default model). Pat added Cerebras and
+# Gemini on 07/11/2026 after Groq's 200,000 tokens/day per model ran out.
+CLOUD = {
+    'Groq': ('https://api.groq.com/openai/v1/chat/completions', 'GROQ_API_KEY', GROQ_MODEL),
+    # Same gpt-oss-120b model as Groq, a separate (bigger) free allowance.
+    'Cerebras': ('https://api.cerebras.ai/v1/chat/completions', 'CEREBRAS_API_KEY',
+                 os.getenv('CEREBRAS_MODEL', 'gpt-oss-120b')),
+    'Gemini': ('https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', 'GEMINI_API_KEY',
+               os.getenv('GEMINI_MODEL', 'gemini-2.5-flash')),
+}
+
+
+async def _ask_groq(session, messages, facts, used, model=None, max_wait=None, provider='Groq'):
+    url, key_env, default_model = CLOUD[provider]
+    key = os.getenv(key_env)
     if not key:
-        raise NotCapable('no Groq key set')
+        raise NotCapable(f'no {provider} key set')
     msgs = list(messages)
     waits, waited_s, retried = 0, 0.0, False
     for _ in range(MAX_ROUNDS + 3):   # +3: two waits for the rate limit, one retry after a 400
         try:
-            async with session.post('https://api.groq.com/openai/v1/chat/completions',
+            async with session.post(url,
                                     timeout=aiohttp.ClientTimeout(total=GROQ_TIMEOUT_S),
                                     headers={'Authorization': f'Bearer {key}'},
-                                    json={'model': model or GROQ_MODEL, 'messages': msgs, 'tools': TOOL_SPECS,
+                                    json={'model': model or default_model, 'messages': msgs, 'tools': TOOL_SPECS,
                                           'tool_choice': 'auto', 'temperature': 0.2}) as r:
                 if r.status == 429 and waits < 2:
                     # Free plan: 8,000 tokens/min. A big question can hit it;
@@ -1084,7 +1098,7 @@ async def _ask_groq(session, messages, facts, used, model=None, max_wait=None):
                     if wait is not None and waited_s + wait <= (GROQ_MAX_WAIT_S if max_wait is None else max_wait):
                         waits += 1
                         waited_s += wait
-                        logger.info(f'ask_ai: Groq rate limit, waiting {wait:.0f}s')
+                        logger.info(f'ask_ai: {provider} rate limit, waiting {wait:.0f}s')
                         await asyncio.sleep(wait + 0.5)
                         continue
                 if r.status == 400 and not retried:
@@ -1092,20 +1106,20 @@ async def _ask_groq(session, messages, facts, used, model=None, max_wait=None):
                     # answers 400 "tool_use_failed". A second try usually works,
                     # and is far quicker than the local fallback.
                     retried = True
-                    logger.info('ask_ai: Groq 400, retrying once')
+                    logger.info(f'ask_ai: {provider} 400, retrying once')
                     continue
                 r.raise_for_status()
                 data = await r.json()
             msg = data['choices'][0]['message']
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-            raise NotCapable(f'Groq error: {type(e).__name__} {getattr(e, "status", "")}'.strip())
+            raise NotCapable(f'{provider} error: {type(e).__name__} {getattr(e, "status", "")}'.strip())
         except (KeyError, IndexError, TypeError, ValueError) as e:
-            raise NotCapable(f'Groq sent an odd reply ({type(e).__name__})')
+            raise NotCapable(f'{provider} sent an odd reply ({type(e).__name__})')
         calls = msg.get('tool_calls') or []
         if not calls:
             text = (msg.get('content') or '').strip()
             if not text:
-                raise NotCapable('Groq gave an empty answer')
+                raise NotCapable(f'{provider} gave an empty answer')
             return text, msgs
         msgs.append({'role': 'assistant', 'content': msg.get('content') or '', 'tool_calls': calls})
         for c in calls:
@@ -1122,7 +1136,7 @@ async def _ask_groq(session, messages, facts, used, model=None, max_wait=None):
             msgs.append({'role': 'tool', 'tool_call_id': c.get('id', ''), 'content': result})
         if facts.final:
             return facts.final, msgs
-    raise NotCapable('Groq kept calling tools without answering')
+    raise NotCapable(f'{provider} kept calling tools without answering')
 
 
 # Groq first: measured 1.2s vs 40s for the Mac's AI on the same question
@@ -1142,7 +1156,19 @@ async def _ask_groq_big(session, messages, facts, used):
     return await _ask_groq(session, messages, facts, used, max_wait=15)
 
 
-PROVIDERS = [('Groq', _ask_groq_big), ('Groq small', _ask_groq_small), ('local AI', _ask_local)]
+async def _ask_cerebras(session, messages, facts, used):
+    return await _ask_groq(session, messages, facts, used, max_wait=15, provider='Cerebras')
+
+
+async def _ask_gemini(session, messages, facts, used):
+    return await _ask_groq(session, messages, facts, used, max_wait=15, provider='Gemini')
+
+
+# Big, capable models first (each with its own free allowance), then Groq's
+# small model, then the Mac (chat only; it never words records). A provider
+# with no key set is skipped instantly.
+PROVIDERS = [('Groq', _ask_groq_big), ('Cerebras', _ask_cerebras), ('Gemini', _ask_gemini),
+             ('Groq small', _ask_groq_small), ('local AI', _ask_local)]
 # Up to a minute: measured, the Mac's AI takes 40-90s AND is weaker (it once
 # quoted the wrong war's hits for "Ikaros vs Kaos Korner"), so waiting out
 # Groq's per-minute limit is both quicker and safer than falling back.

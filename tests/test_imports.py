@@ -8141,6 +8141,22 @@ def test_ask_ai_audit_fixes_chat_numbers_war_order_and_groq_hiccups():
     except a.NotCapable:
         pass
 
+    # Cerebras and Gemini: same code path, skipped instantly with no key, in
+    # the chain after Groq's big model and before its small one.
+    assert [n for n, _ in a.PROVIDERS] == ['Groq', 'Cerebras', 'Gemini', 'Groq small', 'local AI']
+    saved = os.environ.pop('CEREBRAS_API_KEY', None)
+    try:
+        asyncio.run(a._ask_cerebras(Session([]), [], fb, []))
+        assert False, 'no key must raise NotCapable'
+    except a.NotCapable as e:
+        assert 'no Cerebras key' in str(e)
+    finally:
+        if saved:
+            os.environ['CEREBRAS_API_KEY'] = saved
+    os.environ['GEMINI_API_KEY'] = os.environ.get('GEMINI_API_KEY') or 'test-not-a-real-key'
+    text, _ = asyncio.run(a._ask_gemini(Session([Resp(200, ok)]), [], fb, []))
+    assert text == 'Yo!'
+
 
 def test_rules_sync_renders_posts_and_live_copy_wins():
     """
