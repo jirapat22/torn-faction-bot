@@ -166,7 +166,8 @@ class EditDraftModal(discord.ui.Modal):
 def draft_header(channel, ping_label):
     where = channel.mention if channel is not None else '(unknown channel)'
     return (f'📝 **Draft announcement** → {where} · ping: **{ping_label}**\n'
-            '-# Only you can press these. Reply with changes, or use ✏️ Change to edit it yourself.')
+            '-# Check every detail: I only know what you told me. Only you can press these. '
+            'Reply with changes, or use ✏️ Change to edit it yourself.')
 
 
 def draft_embed(text):
