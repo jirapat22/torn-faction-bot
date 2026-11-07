@@ -985,7 +985,8 @@ def system_prompt():
         'event they name and you may add its effect in Torn\'s own words (e.g. "candy effects are tripled"). '
         'If their dates differ from Torn\'s, use THEIR dates (it is their plan). Each item is its name, its '
         'date/time, and only the details they gave or torn_events gave. Lines with things they did not say are cut automatically. Voice: clear and easy to '
-        'scan, key details in bold, at most one short cheeky punk line at the end (no Torn slang or advice in '
+        'scan, key details in bold. Never calculate an end date or time yourself; write only the dates and '
+        'times they gave. At most one short cheeky punk line at the end (no Torn slang or advice in '
         'it), no more than 2 emojis, under 1500 characters. Write times exactly as given (TCT). If they reply to '
         'a draft with changes or extra details, call announce_draft again with the new version.\n'
         '- Be short, plain English, Discord markdown, bullet points. Under 150 words unless asked for detail. '
@@ -1422,6 +1423,16 @@ def ground_draft(text, said):
     return out, cut
 
 
+def _dates(text):
+    """{(day, month)} for every DD/MM or DD/MM/YYYY date in text."""
+    return {(int(d), int(m)) for d, m in re.findall(r'\b(\d{1,2})/(\d{1,2})(?:/\d{2,4})?\b', text or '')}
+
+
+def dates_not_given(draft, person):
+    """Dates in a draft the person never wrote, as 'DD/MM' strings."""
+    return [f'{d:02d}/{m:02d}' for d, m in sorted(_dates(draft) - _dates(person))]
+
+
 def clock_variants(text):
     """'1pm' also counts as 13 and '1:30pm' as 13 and 30: people write 12-hour
     times and the draft says 13:00 TCT."""
@@ -1519,6 +1530,12 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
                     pass
                 bad = unsupported_numbers(facts.final, said, earlier_facts)
             if facts.final_kind == 'draft':
+                # Full dates must be ones the PERSON wrote. Event facts carry real
+                # dates too (14/11 for Diabetes Day), so the number check let a
+                # miscalculated "07/11 13:00 to 14/11 13:00 (24 h)" through.
+                person = '\n'.join([question] + [t.get('content', '') for t in history or []
+                                                 if t.get('role') == 'user'])
+                bad = sorted(set(bad) | set(dates_not_given(facts.draft['text'], person)))
                 grounded, cut = ground_draft(fix_weekdays(facts.draft['text']), said)
                 if event_names:
                     from features.torn_events import enrich_draft

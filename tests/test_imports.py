@@ -8619,6 +8619,10 @@ def test_torn_events_from_the_official_calendar():
     assert lines[3] == '- Torn: Candy effects are tripled. Pick your start time in the Torn calendar.'
     assert lines[5].startswith('- A war lasts a week at most') and lines[-1] == 'Stay sharp, punks.'
     assert enrich_draft('Happy jump lasts 24 hours', ['Happy jump'], path=path) == 'Happy jump lasts 24 hours'
+    assert enrich_draft('Happy jump (24‑hour)', ['Happy jump'], path=path) == 'Happy jump (24‑hour)'
+    from features.ask_ai import dates_not_given
+    said = 'saturday 7/11/2026 1pm happy jump, 13/11/2026 10:00 TCT to 15/11/2026 16:00 TCT diabetes day'
+    assert dates_not_given('07/11/2026 13:00 – 14/11/2026 13:00 (24 h); 13/11 to 15/11', said) == ['14/11']
 
 
 if __name__ == '__main__':

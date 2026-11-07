@@ -174,8 +174,9 @@ def facts_for(names, path=CALENDAR_FILE, now=None):
 # Short detail lines the bot adds under each event in an announcement, and the
 # words that show the AI already said it (so it isn't said twice).
 FACTION_DETAILS = {
-    'Ranked war': ('A war lasts a week at most. Torn matchmakes enlisted factions every Tuesday.', 'tuesday'),
-    'Happy jump': ('Lasts 24 hours.', '24 hours'),
+    'Ranked war': ('A war lasts a week at most. Torn matchmakes enlisted factions every Tuesday.',
+                   re.compile(r'tuesday', re.I)),
+    'Happy jump': ('Lasts 24 hours.', re.compile(r'24\W*h', re.I)),
 }
 _LINE_CUES = {
     'Ranked war': re.compile(r'\b(wars?|enlist\w*)\b', re.I),
@@ -210,7 +211,8 @@ def enrich_draft(text, names, path=CALENDAR_FILE):
         if not detail:
             continue
         line_text, already = detail
-        if already and already in text.lower():
+        # Skip when the draft already says it ("24-hour", "24 h", "24 hours").
+        if already and (already.search(text) if hasattr(already, 'search') else already in text.lower()):
             continue
         cue = _LINE_CUES.get(name) or re.compile(
             '|'.join(re.escape(w) for w in re.findall(r'[A-Za-z]{4,}', name)
