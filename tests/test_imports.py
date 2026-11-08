@@ -9065,6 +9065,62 @@ def test_follow_up_pronoun_points_at_the_one_member_named_earlier():
     assert pronoun_target('is he lazy?', [], F()) is None
 
 
+def test_oc_now_and_judging_one_member_skip_the_ai():
+    """
+    Re-audit 08/11/2026: "how many people are in an OC?" got the OC RULES (the
+    AI chose the rulebook), and "is he lazy?" after "how active is dakkkz?"
+    got "They pull their weight just fine!". Both are now decided in Python.
+    """
+    import asyncio
+    from features.ask_ai import (OC_NOW_RX, OC_HISTORY_RX, oc_now_answer, judged_member,
+                                 answer_question)
+
+    live_now = lambda q: bool(OC_NOW_RX.search(q)) and not OC_HISTORY_RX.search(q)
+    for q in ['how many people are in an OC?', 'who is not in an OC right now?', "who's in an oc",
+              'is everyone in an OC?', 'anyone not in an organised crime?']:
+        assert live_now(q), q
+    for q in ["who hasn't done an OC in a week?", 'what happens if I am not in an OC?',
+              'who was in an OC last week?', 'are there any open OC slots?', 'what is the OC rule?']:
+        assert not live_now(q), q
+
+    raw = ('OC RIGHT NOW (live from Torn):\n- In an OC: 2 of 3 members: A, B\n'
+           '- Not in an OC: 1: C (being out is fine...)\n- Dish It Out (level 6) · Recruiting: A')
+    assert '2 of 3' in oc_now_answer('how many are in an OC?', raw)
+    nope = oc_now_answer('who is not in an OC?', raw)
+    assert 'Not in an OC: 1: C' in nope and 'In an OC: 2' not in nope
+    torn_down = "Torn isn't answering about OCs right now, so I can't say who is in one."
+    assert oc_now_answer('how many are in an OC?', torn_down) == torn_down   # never "nobody"
+
+    class F:
+        def _known_names(self):
+            return {'4086730': 'dakkkz', '1': 'BunnyBull'}
+    hist = [{'role': 'user', 'content': 'how active is dakkkz?'}]
+    assert judged_member('is he lazy?', hist, F()) == 'dakkkz'
+    assert judged_member('is BunnyBull a slacker?', [], F()) == 'BunnyBull'
+    assert judged_member('how active is dakkkz?', [], F()) is None          # not judging
+    assert judged_member("who's been slacking?", [], F()) is None          # nobody named: ranked lists
+    assert judged_member('is dakkkz or BunnyBull lazier?', [], F()) is None
+
+    # The AI only ever sees the neutral question, and the bot adds its own line.
+    seen = []
+
+    async def fake(session, messages, f, used):
+        seen.append(messages[-1]['content'])
+        used.append(('member_report', {'name': 'dakkkz'}, 'MEMBER: dakkkz, 14 days online'))
+        f.found_any = True
+        return 'Pulled the files.\n\n- dakkkz: 14 days online. They pull their weight!'
+
+    class Facts(F):
+        now = 0
+        live_tools = None
+        found_any = False
+        def run(self, name, args):
+            return ''
+    ans = asyncio.run(answer_question(None, 'is he lazy?', Facts(), hist, providers=[('fake', fake)]))
+    assert seen and seen[0] == 'how active is dakkkz?', seen
+    assert ans.text.startswith("I don't trash-talk the crew"), ans.text
+
+
 def test_general_notice_question_only_lists_recent_posts():
     """
     Pat, 08/11/2026: "did someone post a leave notice?" quoted a notice from
@@ -9402,6 +9458,7 @@ if __name__ == '__main__':
     test_live_lookups_reuse_the_commands_and_drop_forbidden_lines()
     test_leave_notices_are_quoted_word_for_word()
     test_live_oc_count_follows_the_oc_check_rules()
+    test_oc_now_and_judging_one_member_skip_the_ai()
     test_reaudit_3_notices_stats_and_board_names_skip_the_ai()
     test_torn_text_is_html_decoded_once_at_the_api()
     test_general_notice_question_only_lists_recent_posts()

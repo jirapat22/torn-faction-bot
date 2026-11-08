@@ -758,6 +758,11 @@ class FactBook:
             known = [(m.get(field), tid, m) for tid, m in members if m.get(field) is not None]
             if not known:
                 return f'Most {label}: unknown.'
+            # Zeros are not "the most" of anything ("Ikaros22 (10),
+            # alantheknife (0), dakkkz (0)" read as a three-way race).
+            known = [k for k in known if k[0]]
+            if not known:
+                return f'Most {label}: nobody, every member on record has 0.'
             who = [f'{self._name(tid, m)} ({v})' for v, tid, m in sorted(known, key=lambda x: -x[0])[:3]]
             return f'Most {label} (top 3): ' + ', '.join(who) + '.'
         out.append(top('attacks', 'hits made'))
@@ -1787,6 +1792,49 @@ NOTICE_RX = re.compile(r'\bleave[- ]?notices?\b|\bnotices?\b[^\n]{0,40}\b(?:post
                        re.I)
 
 
+# "How many people are in an OC?", "who is not in an OC right now?". Not
+# "who hasn't done an OC in a week" (history, from the daily check's records)
+# and not "what happens if I'm not in an OC" (the rules).
+OC_NOW_RX = re.compile(
+    r"\b(?:how many|who(?:'s| is| are)?|any ?one|any ?body|which members?|is every ?one|are we all)\b"
+    r"[^?\n]{0,40}?\b(?:in|doing|joined)\s+(?:an?\s+|any\s+)?(?:ocs?|organi[sz]ed crimes?)\b", re.I)
+OC_HISTORY_RX = re.compile(
+    r"\b(?:lately|recent\w*|week\w*|days?|month\w*|since|last|ago|never|rules?|happens?|miss\w*|strikes?|"
+    r"should|must|allowed)\b|\b(?:has|have)\s?n[o']?t\b", re.I)
+
+
+def oc_now_answer(question, raw):
+    """The live OC lines that answer the question, worded by the bot."""
+    lines = (raw or '').split('\n')
+    if not lines or not lines[0].startswith('OC RIGHT NOW'):
+        return raw   # Torn down or no tracker: that notice IS the answer
+    pick = [l for l in lines if l.startswith(('- In an OC', '- Not in an OC', '- Members in an OC'))]
+    if re.search(r"\bnot\b|\bn't\b|\bout of\b", question, re.I):
+        pick = [l for l in pick if not l.startswith('- In an OC')] or pick
+    return 'Checked Torn just now 👀\n\n' + '\n'.join(pick)
+
+
+# Judging ONE member ("is X lazy?", "is he a slacker?"). Questions with no
+# member ("who's been slacking?") still get the ranked lists, management only.
+JUDGE_ONE_RX = re.compile(
+    r"\b(?:lazy|laziest|slack(?:er|ing|s)?|useless|dead ?weight|pull(?:s|ing)? (?:his|her|their) weight|"
+    r"(?:a |any )?(?:good|bad|decent|trash|shit|crap) (?:member|player|hitter)|any good|worth keeping|"
+    r"a liability|carried|freeloader|leech\w*)\b", re.I)
+
+
+def judged_member(question, history, facts):
+    """The one member a judging question is about, or None."""
+    if not JUDGE_ONE_RX.search(question or ''):
+        return None
+    named = names_in(question, facts)
+    if len(named) == 1:
+        return named[0]
+    if named:
+        return None
+    who = pronoun_target(question, history, facts)
+    return who.split(' [')[0] if who else None
+
+
 def guard_question(question, management=True):
     """The bot's own fixed reply for questions the AI must never word, or
     None to go on to the AI. Checked in Python before any AI is asked."""
@@ -1858,7 +1906,28 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
             from features.ask_live import notices_answer
             raw = await facts.live_tools.members_extra('leave_notices', name)
             return Answer(notices_answer(raw), 'bot', raw, True, 0)
-    convo = ' '.join([question] + [t.get('content', '') for t in history or [] if t.get('role') == 'user'])
+    # "How many people are in an OC?": answered by the bot from Torn's live
+    # crimes, no AI. Re-audit 08/11/2026: without "right now" the AI picked
+    # the rulebook and posted the OC rules instead of a count.
+    if OC_NOW_RX.search(question) and not OC_HISTORY_RX.search(question) \
+            and getattr(facts, 'live_tools', None) is not None:
+        raw = await facts.live_tools.live_status('oc')
+        return Answer(oc_now_answer(question, raw), 'bot', raw, True, 0)
+    # "Is he lazy?" about ONE member: the bot never judges (Pat's rule). The
+    # AI was asked nicely and still wrote "They pull their weight just fine!"
+    # on a follow-up, so the judging word never reaches it: it is asked the
+    # neutral "how active is X?" and the bot adds its own line on top.
+    judged = judged_member(question, history, facts)
+    if judged:
+        ans = await answer_question(session, f'how active is {judged}?', facts, history, earlier_facts,
+                                    providers, management)
+        if ans.kind == 'answer':
+            first, sep, rest = ans.text.partition('\n\n')
+            body = rest if sep and len(first) < 100 and not re.search(r'\d', first) else ans.text
+            ans.text = f"I don't trash-talk the crew 😤 Here's what the records say about **{judged}**, " \
+                       f"you be the judge:\n\n{body}"
+        return ans
+    convo =' '.join([question] + [t.get('content', '') for t in history or [] if t.get('role') == 'user'])
     announcing = bool(ANNOUNCE_RX.search(convo))
     # The action tools (features/ask_actions.py) are only shown when the
     # message asks to DO something: every tool costs prompt tokens, and Groq's
