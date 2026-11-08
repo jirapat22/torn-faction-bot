@@ -273,7 +273,9 @@ def plan_action(tool, args, said, now=None):
         # the start. Never for a typed date (that is the person's own words).
         day = lambda raw: (re.findall(r'\b(mon|tue|wed|thu|fri|sat|sun)', raw or '', re.I) or [''])[0].lower()
         if start and end and end <= start and not re.search(r'\d+/\d+', end_raw or '') \
-                and day(end_raw) and day(end_raw) != day(start_raw):
+                and day(end_raw) and (day(end_raw) != day(start_raw)
+                                      or re.search(rf'\bfollowing {day(end_raw)}', said, re.I)):
+            # (also "monday to the following monday": the person's own word)
             end += 7 * 86400
         if start and end and end <= start:
             need.append('an end time after the start')
@@ -355,6 +357,8 @@ async def describe(plan, live, guild, now=None):
             return None, f'**{profile.get("name", tid)}** is one of us, so no.'
         plan['name'] = profile.get('name') or tid
         fac = (profile.get('faction') or {}).get('faction_name')
+        if str(fac).strip().lower() in ('none', '', 'null'):
+            fac = None   # Torn sends the text "None" for a factionless player (the card read ", None")
         lines = [f'Add **{plan["name"]}** [{tid}], level {profile.get("level", "?")}'
                  + (f', {fac}' if fac else '') + ' to the target board',
                  '📌 **Permanently** (until someone removes them)' if plan['permanent'] else 'For **7 days**']

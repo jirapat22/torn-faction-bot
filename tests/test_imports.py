@@ -9252,6 +9252,50 @@ def test_reaudit5_round2_names_bans_typos_leavers_and_past_enemies():
     assert ans.kind == 'ask' and 'Did you mean' in ans.text and 'Level' not in ans.text, ans.text
 
 
+def test_reaudit5_round3_online_now_totals_notice_rules_and_cards():
+    """
+    Re-audit 08/11/2026 (round 3):
+    - "who is online right now?" got the longest-OFFLINE list, and "online
+      every day" got an invented list: both lines are now worked out in Python.
+    - "how many hits did the whole faction make?" had no total to copy.
+    - "what's the rule about leave notices?" went to the notice lookup.
+    - a factionless target's card read "level 1, None".
+    - a draft repeated "Normally runs 24 hours." outside the event's bullets.
+    - "when does her strike expire?" had no date to give.
+    """
+    import tempfile, json, os
+    from datetime import datetime, timezone, timedelta
+    from features.ask_ai import FactBook, NOTICE_RX, NOTICE_RULE_RX
+    from features.torn_events import enrich_draft
+
+    now = datetime(2026, 11, 8, 12, tzinfo=timezone.utc).timestamp()
+    days = [(datetime(2026, 11, 8) - timedelta(days=i)).strftime('%Y-%m-%d') for i in range(14)]
+    with tempfile.TemporaryDirectory() as d:
+        json.dump({'1': {'name': 'Every', 'days': days}, '2': {'name': 'Most', 'days': days[:13]}},
+                  open(os.path.join(d, 'activity_profile.json'), 'w'))
+        json.dump({'wars': [{'timestamp': now - 86400, 'enemy_name': 'NK', 'war_id': 50338,
+                             'members': {'1': {'name': 'Every', 'attacks': 30}, '2': {'name': 'Most', 'attacks': 0},
+                                         '3': {'name': 'Gone', 'attacks': 10}}}]},
+                  open(os.path.join(d, 'war_member_stats.json'), 'w'))
+        roster = {'1': {'name': 'Every', 'last_action': {'status': 'Online', 'timestamp': now}},
+                  '2': {'name': 'Most', 'last_action': {'status': 'Idle', 'timestamp': now - 600}}}
+        fb = FactBook(d, roster=roster, now=now)
+        table = fb.faction_table()
+        assert 'Online in Torn right now (1): Every.' in table and 'Idle right now (1): Most.' in table, table
+        assert 'Online on all 14 of the last 14 days: 1 of 2 members' in table and 'Most (13)' in table
+        war = fb.war_report('latest')
+        assert 'Faction total hits made: 40 by 3 members' in war, war
+        assert '(average 13.3 per member; 20.0 per member who hit at all)' in war, war
+
+    assert NOTICE_RX.search("what's the rule about leave notices?")
+    assert NOTICE_RULE_RX.search("what's the rule about leave notices?")
+    assert not NOTICE_RULE_RX.search('did acid_leaks post a leave notice?')
+
+    draft = enrich_draft('**Chain Event**\nSaturday at 18:00 TCT\nA weekly faction event. Normally runs 24 hours.',
+                         ['Chain'])
+    assert draft.count('Normally runs 24 hours') == 1, draft
+
+
 def test_general_notice_question_only_lists_recent_posts():
     """
     Pat, 08/11/2026: "did someone post a leave notice?" quoted a notice from
@@ -9592,6 +9636,7 @@ if __name__ == '__main__':
     test_oc_now_and_judging_one_member_skip_the_ai()
     test_reaudit5_poll_weekdays_oc_member_roast_and_scores()
     test_reaudit5_round2_names_bans_typos_leavers_and_past_enemies()
+    test_reaudit5_round3_online_now_totals_notice_rules_and_cards()
     test_reaudit_3_notices_stats_and_board_names_skip_the_ai()
     test_torn_text_is_html_decoded_once_at_the_api()
     test_general_notice_question_only_lists_recent_posts()

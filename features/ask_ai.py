@@ -625,6 +625,11 @@ class FactBook:
         active = self._strikes_active(tid)
         history = [s for s in self._strikes_all() if str(s.get('torn_id')) == str(tid)]
         lines.append(f'Strikes active now: {len(active)}. Strikes ever recorded: {len(history)}.')
+        if active:
+            # "When does her strike expire?" had no answer (re-audit 08/11/2026).
+            clears = max(s.get('issued_at', 0) for s in active) + STRIKE_EXPIRY_DAYS * DAY
+            lines.append(f'Active strikes all clear on {_date(clears)} if no new strike comes first '
+                         f'({STRIKE_EXPIRY_DAYS} days after the latest one).')
         for s in history:
             lines.append(f'- {_stype(s)} strike on {_date(s.get("issued_at", 0))} ({s.get("status", "active")}): '
                          f'{(s.get("reason") or "").strip()[:160]}')
@@ -676,6 +681,7 @@ class FactBook:
                 'oc': _days_ago(self.oc[tid], self.now) if tid in self.oc else None,
                 'strikes': len(self._strikes_active(tid)),
                 'chain14': self._chain14(tid),
+                'status': str((m.get('last_action') or {}).get('status') or ''),
             })
         big = 10 ** 9
         keys = {
@@ -703,7 +709,19 @@ class FactBook:
             cut = key(pool[min(n, len(pool)) - 1])
             pick = [r for r in pool if (key(r) >= cut if worst_first else key(r) <= cut)]
             return f'{label}: ' + ', '.join(f'{r["name"]} ({fmt(r)})' for r in pick) + '.'
+        # Worked out here, not by the AI. "Who is online right now?" got the
+        # "longest since last action" list, and "online every day" got an
+        # invented list of 30 that included a 13-day member (re-audit 08/11/2026).
+        by_status = {st: sorted((r['name'] for r in rows if r['status'] == st), key=str.lower)
+                     for st in ('Online', 'Idle')}
+        every_day = [r for r in rows if r['days'] == 14]
+        fewer = sorted((r for r in rows if r['days'] != 14), key=lambda r: r['days'])
         out = [f'FACTION: {len(rows)} members now. "Last war" = {war_txt}.',
+               f'Online in Torn right now ({len(by_status["Online"])}): '
+               + (', '.join(by_status['Online']) or 'nobody') + '. Idle right now '
+               f'({len(by_status["Idle"])}): ' + (', '.join(by_status['Idle']) or 'nobody') + '.',
+               f'Online on all 14 of the last 14 days: {len(every_day)} of {len(rows)} members. Everyone else, '
+               'with their days online: ' + (', '.join(f'{r["name"]} ({r["days"]})' for r in fewer) or 'nobody') + '.',
                ranked('Longest since their last action', lambda r: -(r['la'] or 0), lambda r: r['off'],
                       skip=lambda r: not r['la']),
                ranked('Fewest days online in the last 14 days', lambda r: -r['days'], lambda r: f'{r["days"]} days'),
@@ -794,6 +812,14 @@ class FactBook:
         out.append(top('hosps_given', 'friendly hosps given'))
         zero = [self._name(t, m) for t, m in members if not m.get('attacks')]
         out.append(f'Made no hits at all ({len(zero)}): ' + (', '.join(zero) if zero else 'nobody') + '.')
+        # Totals in Python: asked "how many hits did the whole faction make?",
+        # the AI wrote "the sum of each member's hits listed above"
+        # (re-audit 08/11/2026). It can't add up; it can copy.
+        made = [m.get('attacks') or 0 for _, m in members]
+        if made:
+            out.append(f'Faction total hits made: {sum(made)} by {len(made)} members in this war\'s record '
+                       f'(average {round(sum(made) / len(made), 1)} per member; '
+                       f'{round(sum(made) / max(1, len(made) - len(zero)), 1)} per member who hit at all).')
         out.append('Per member (sorted by hits made):')
         members.sort(key=lambda kv: -(kv[1].get('attacks') or 0))
         for tid, m in members:
@@ -808,7 +834,8 @@ class FactBook:
         active = self._strikes_active()
         out = [f'ACTIVE STRIKES: {len(active)} (they clear {STRIKE_EXPIRY_DAYS} days after a member\'s latest strike).']
         for s in active:
-            out.append(f'- {s.get("torn_name")} [{s.get("torn_id")}]: {_stype(s)} on {_date(s.get("issued_at", 0))}: '
+            out.append(f'- {s.get("torn_name")} [{s.get("torn_id")}]: {_stype(s)} on {_date(s.get("issued_at", 0))} '
+                       f'(clears {_date(s.get("issued_at", 0) + STRIKE_EXPIRY_DAYS * DAY)} unless a newer one): '
                        f'{(s.get("reason") or "").strip()[:160]}')
         pending = (self.sm.pending if self.sm is not None else (self._strike_file or {}).get('pending', {})) or {}
         out.append(f'CANDIDATES waiting for a management decision: {len(pending)}.')
@@ -1872,6 +1899,10 @@ def judged_member(question, history, facts):
     return who.split(' [')[0] if who else None
 
 
+NOTICE_RULE_RX = re.compile(r"\brules?\b|\bwhat happens\b|\bhow (?:do|should|can) (?:i|we|you)\b|\bdo i (?:need|have)\b|"
+                            r"\b(?:allowed|required|supposed)\b|\bwhere do i\b|\bhow long\b", re.I)
+
+
 def guard_question(question, management=True):
     """The bot's own fixed reply for questions the AI must never word, or
     None to go on to the AI. Checked in Python before any AI is asked."""
@@ -1930,7 +1961,10 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
     # The AI sometimes skipped the lookup and said "no records of leave
     # notices for that member" (re-audit 08/11/2026), which reads as "they
     # never posted", exactly the wrong thing before a strike.
-    if NOTICE_RX.search(question) and getattr(facts, 'live_tools', None) is not None:
+    # "What's the rule about leave notices?" is a rules question, not a
+    # lookup: it went to the notice list (re-audit 08/11/2026).
+    if NOTICE_RX.search(question) and not NOTICE_RULE_RX.search(question) \
+            and getattr(facts, 'live_tools', None) is not None:
         named = names_in(question, facts)
         name = named[0] if len(named) == 1 else ''
         if not named:

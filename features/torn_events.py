@@ -367,7 +367,7 @@ def enrich_draft(text, names, path=CALENDAR_FILE):
             # Drop the sentences the draft already says word for word: the AI
             # wrote "Normally runs 24 hours." and the chain line added it again
             # (re-audit 08/11/2026).
-            low = re.sub(r'\s+', ' ', block.lower())
+            low = re.sub(r'\s+', ' ', '\n'.join(lines).lower())   # the whole draft, not just this block
             parts = [p for p in re.split(r'(?<=[.!?])\s+', line) if p.strip().rstrip('.').lower() not in low]
             if parts:
                 new.append('- ' + ' '.join(parts))
