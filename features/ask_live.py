@@ -547,12 +547,20 @@ class LiveTools:
                 if str(f_id) != str(TORN_FACTION_ID) and (not name_part
                                                           or name_part in str(f.get('name', '')).lower()):
                     fid = str(f_id)
-            if fid is None and wt is not None and not name_part:
+            past = [w for w in (getattr(wt, 'war_history', None) or {}).values() if w.get('enemy_faction_id')]
+            if fid is None and past and not name_part:
                 # Torn's live list drops wars a month after they end, so with
                 # no war on, fall back to the newest war the bot archived.
-                past = [w for w in (getattr(wt, 'war_history', None) or {}).values() if w.get('enemy_faction_id')]
-                if past:
-                    fid = str(max(past, key=lambda w: w.get('start') or 0)['enemy_faction_id'])
+                fid = str(max(past, key=lambda w: w.get('start') or 0)['enemy_faction_id'])
+            if fid is None and past and name_part:
+                # "how many members does the naughty kids have?" asked for an ID
+                # though they were our last opponent (re-audit 08/11/2026). A
+                # faction we fought is found by its name, exactly one match only.
+                hits = {str(w['enemy_faction_id']) for w in past
+                        if name_part in str(((w.get('factions') or {}).get(str(w['enemy_faction_id'])) or {})
+                                            .get('name') or '').lower()}
+                if len(hits) == 1:
+                    fid = hits.pop()
             if fid is None:
                 return self.facts._notice('Which faction? Give me its Torn faction ID (it\'s in the faction\'s '
                                           'profile link). I can only find the current war\'s enemy by name.')

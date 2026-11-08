@@ -360,6 +360,16 @@ def enrich_draft(text, names, path=CALENDAR_FILE):
         while end < len(lines) and lines[end].lstrip().startswith(('-', '•')):
             end += 1
         block = '\n'.join(lines[at:end])
-        new = [f'- {line}' for line, already in details if not re.search(already, block, re.I)]
+        new = []
+        for line, already in details:
+            if re.search(already, block, re.I):
+                continue
+            # Drop the sentences the draft already says word for word: the AI
+            # wrote "Normally runs 24 hours." and the chain line added it again
+            # (re-audit 08/11/2026).
+            low = re.sub(r'\s+', ' ', block.lower())
+            parts = [p for p in re.split(r'(?<=[.!?])\s+', line) if p.strip().rstrip('.').lower() not in low]
+            if parts:
+                new.append('- ' + ' '.join(parts))
         lines[end:end] = new
     return '\n'.join(lines)

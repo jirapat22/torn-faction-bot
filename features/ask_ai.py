@@ -630,6 +630,28 @@ class FactBook:
                          f'{(s.get("reason") or "").strip()[:160]}')
         return '\n'.join(lines)
 
+    def _leavers_line(self):
+        """Who left lately. Asked "who left the faction?", the AI said
+        "no members have left" (re-audit 08/11/2026) while BunnyBull's
+        profile, kept a year after leaving, said otherwise."""
+        current = {str(t) for t in (self.roster or {})}
+        gone = sorted(((p.get('last_seen_in_faction'), p.get('name') or tid)
+                       for tid, p in self.profiles.items()
+                       if str(tid) not in current and p.get('last_seen_in_faction')), reverse=True)
+        # Leavers were kept only 7 days before 07/11/2026, so older ones
+        # are simply gone from the records: say so, never "nobody left".
+        kept = ('the bot remembers leavers for a year, but only since 07/11/2026; '
+                'anyone who left before about 31/10/2026 is not in its records')
+        if not gone:
+            return f'Left the faction: nobody in the bot\'s records ({kept}).'
+        def day(d):
+            try:
+                return datetime.strptime(d, '%Y-%m-%d').strftime('%d/%m/%Y')
+            except ValueError:
+                return d
+        return (f'Left the faction ({kept}): '
+                + ', '.join(f'{n} (last seen in the faction {day(d)})' for d, n in gone) + '.')
+
     def faction_table(self, sort_by='name', rows_wanted=False):
         """One line per current member, for 'who...' questions across the faction."""
         if self.roster is None:
@@ -705,6 +727,7 @@ class FactBook:
                       skip=lambda r: not r['strikes']),
                *self._discord_lines(rows),
                *self._faction_chain_lines(),
+               self._leavers_line(),
                ]
         if not rows_wanted:
             # The full member list is ~2/3 of this tool's size, and Groq's free
@@ -1517,7 +1540,9 @@ def near_names(question, facts):
         w = word.lower()
         if w in _QUESTION_STOP or w in names:
             continue
-        for hit in difflib.get_close_matches(w, list(names), n=3, cutoff=0.75):
+        # Short words need a closer match: "rank" scored 0.8 against RavenK
+        # and "what rank is our faction?" got "did you mean RavenK?".
+        for hit in difflib.get_close_matches(w, list(names), n=3, cutoff=0.75 if len(w) >= 5 else 0.86):
             if names[hit] not in found:
                 found.append(names[hit])
     return found[:4]
@@ -1755,7 +1780,8 @@ KICK_RX = re.compile(
     r'|(?<!on )\bfire(?:d)?\b(?!\s+(?:a |the )?(?:chain|event|target|poll))'
     r'|\bget(?:ting)? rid of\b|\b(?:throw|chuck|kick|boot|toss)(?:ed|ing|s)? (?:\w+ ){0,2}out\b'
     r'|\b(?:remove|drop|cut|ban|expel)\w* (?:[\w\']+ ){0,3}(?:from|out of) (?:the |our )?(?:faction|crew|punks|team|fac)\b'
-    r'|\bwho (?:should|must|needs to|has to) (?:go|leave|be gone)\b|\bdead ?weight\b', re.I)
+    r'|\bwho (?:should|must|needs to|has to) (?:go|leave|be gone)\b|\bdead ?weight\b'
+    r'|\bban(?:ned|ning|s)?\b', re.I)
 KICK_DODGE = ("Kick someone? I'm a bot, not a bouncer 🥊 Who stays in the crew is management's call, not mine. "
               "I can pull anyone's records if that helps.")
 
@@ -1932,7 +1958,9 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
     if judged:
         ans = await answer_question(session, f'how active is {judged}?', facts, history, earlier_facts,
                                     providers, management)
-        if ans.kind == 'answer':
+        # Not on "both my brains are offline" (provider 'none'): that is no
+        # record to judge from.
+        if ans.kind == 'answer' and ans.provider != 'none' and not ans.fallback:
             first, sep, rest = ans.text.partition('\n\n')
             body = rest if sep and len(first) < 100 and not re.search(r'\d', first) else ans.text
             ans.text = f"I don't trash-talk the crew 😤 Here's what the records say about **{judged}**, " \
@@ -2134,7 +2162,12 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
             named = names_in(question, facts) or ([who.split(' [')[0]] if who else [])
             if named:
                 who = ', '.join(f'**{n}**' for n in named[:3])
-                return Answer(f"I don't trash-talk the crew 😤 but I can pull {who}'s records. Try "
+                # Only a judging question gets the trash-talk line: "promote
+                # dakkkz to management" got it too (re-audit 08/11/2026).
+                if JUDGE_ONE_RX.search(question) or JUDGE_RX.search(question):
+                    return Answer(f"I don't trash-talk the crew 😤 but I can pull {who}'s records. Try "
+                                  f'"how active is {named[0]}?"', pname, '', True, took(), kind='ask')
+                return Answer(f"Can't do that one by chat, boss 🤷 I can pull {who}'s records though. Try "
                               f'"how active is {named[0]}?"', pname, '', True, took(), kind='ask')
             return Answer(UNSURE_TEXT, pname, '', True, took(), kind='ask')
 
@@ -2190,6 +2223,14 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
                     'Tap 📎 Show data for the records exactly as they are.', pname, _facts_text(used), True,
                     took(), fallback=True)
 
+        # The AI took the bot's own "did you mean spreadjam?" and looked
+        # spreadjam up itself, then posted the records AND the question
+        # (re-audit 08/11/2026). A typo is a guess: the person confirms first.
+        suggested = {n.lower() for note in facts.notices if 'Did you mean' in note
+                     for n in re.findall(r'\*\*(.+?)\*\*', note.split('Did you mean', 1)[1])}
+        looked_up = {str((a or {}).get('name') or '').lower() for _, a, _ in used}
+        if suggested & looked_up:
+            return Answer('\n\n'.join(facts.notices), pname, '', True, took(), kind='ask')
         # 5. Part of the question couldn't be answered (e.g. one of two names
         #    was wrong): say so under the answer, in the bot's words.
         text = tidy_answer(text, facts.notices, question)

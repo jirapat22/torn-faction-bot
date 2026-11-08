@@ -9108,7 +9108,7 @@ def test_oc_now_and_judging_one_member_skip_the_ai():
         seen.append(messages[-1]['content'])
         used.append(('member_report', {'name': 'dakkkz'}, 'MEMBER: dakkkz, 14 days online'))
         f.found_any = True
-        return 'Pulled the files.\n\n- dakkkz: 14 days online. They pull their weight!'
+        return 'Pulled the files.\n\n- dakkkz: 14 days online.', messages
 
     class Facts(F):
         now = 0
@@ -9119,6 +9119,12 @@ def test_oc_now_and_judging_one_member_skip_the_ai():
     ans = asyncio.run(answer_question(None, 'is he lazy?', Facts(), hist, providers=[('fake', fake)]))
     assert seen and seen[0] == 'how active is dakkkz?', seen
     assert ans.text.startswith("I don't trash-talk the crew"), ans.text
+    assert '14 days online' in ans.text and 'Pulled the files' not in ans.text, ans.text
+
+    async def down(session, messages, f, used):
+        raise RuntimeError('provider down')
+    ans = asyncio.run(answer_question(None, 'is he lazy?', Facts(), hist, providers=[('down', down)]))
+    assert "trash-talk" not in ans.text, 'no judging line on top of an outage message'
 
 
 def test_reaudit5_poll_weekdays_oc_member_roast_and_scores():
@@ -9162,6 +9168,88 @@ def test_reaudit5_poll_weekdays_oc_member_roast_and_scores():
     assert judged_member('tell me a roast about me', [], F()) is None      # roasting yourself is chat
 
     assert _score(1223.8899999999999) == '1223.89' and _score(1952) == '1952' and _score(None) == 'None'
+
+
+def test_reaudit5_round2_names_bans_typos_leavers_and_past_enemies():
+    """
+    Re-audit 08/11/2026 (round 2):
+    - "what rank is our faction?" got "did you mean RavenK?" (rank ~ RavenK).
+    - "ban Ellanna" was not treated as a kick question.
+    - the AI took the bot's "did you mean spreadjam?", looked spreadjam up
+      itself and posted records AND the question.
+    - a draft said "Normally runs 24 hours." twice (AI line + bot detail).
+    - "who left the faction?" got "nobody" while BunnyBull's profile said otherwise.
+    - "how many members does the naughty kids have?" asked for an ID though
+      they were our last opponent.
+    """
+    import asyncio
+    from types import SimpleNamespace
+    from features.ask_ai import near_names, KICK_RX, FactBook, answer_question
+    from features.torn_events import enrich_draft
+    from features.ask_live import LiveTools
+    from utils import torn_api
+
+    class N:
+        def _known_names(self):
+            return {'1': 'RavenK', '2': 'dakkkz', '3': 'MrDeath'}
+    assert near_names('what rank is our faction?', N()) == []
+    assert near_names('whats dakkz up to', N()) == ['dakkkz']
+    assert near_names('how is mrdeth', N()) == ['MrDeath']
+    assert KICK_RX.search('ban Ellanna') and not KICK_RX.search('banana split')
+
+    draft = enrich_draft('**Chain Event** Saturday 20:00 TCT\n- A weekly faction event. Normally runs 24 hours.',
+                         ['Chain'])
+    assert draft.count('Normally runs 24 hours') == 1 and 'Minimum 10 hits' in draft
+
+    # Leavers: the faction table says who left, from the kept profiles.
+    me = SimpleNamespace(roster={'1': {}}, profiles={'1': {'name': 'Stays', 'last_seen_in_faction': '2026-11-08'},
+                                                      '9': {'name': 'BunnyBull', 'last_seen_in_faction': '2026-11-01'}})
+    line = FactBook._leavers_line(me)
+    assert 'BunnyBull (last seen in the faction 01/11/2026)' in line and 'Stays' not in line
+    me.profiles.pop('9')
+    assert 'nobody in the bot' in FactBook._leavers_line(me) and 'not in its records' in FactBook._leavers_line(me)
+
+    # A past opponent found by name, no ID needed.
+    calls = []
+
+    async def fake_fetch(fid, sel):
+        calls.append((fid, sel))
+        return {'name': 'The Naughty Kids', 'members': {'1': {}, '2': {}}} if sel == 'basic' else None
+
+    wt = SimpleNamespace(war_history={
+        '50338': {'start': 2, 'enemy_faction_id': 53421, 'factions': {'53421': {'name': 'The Naughty Kids'}}},
+        '46089': {'start': 1, 'enemy_faction_id': 52863, 'factions': {'52863': {'name': 'TGC'}}}})
+
+    async def none():
+        return None
+    wt.get_current_war = wt.get_upcoming_war = wt.get_latest_war = none
+    lt = LiveTools(SimpleNamespace(now=0, _notice=lambda t: t), SimpleNamespace(war_tracker=wt))
+    real = torn_api.fetch_any_faction_data
+    torn_api.fetch_any_faction_data = fake_fetch
+    try:
+        asyncio.run(lt._enemy_faction('the naughty kids'))
+    finally:
+        torn_api.fetch_any_faction_data = real
+    assert calls and calls[0][0] == '53421', calls
+
+    # The AI looking up the bot's own typo suggestion: the bot asks instead.
+    async def guesser(session, messages, f, used):
+        f.notices.append("I couldn't find anyone called **spredjam**. Did you mean **spreadjam**? "
+                         'Reply with the right name.')
+        used.append(('member_report', {'name': 'spreadjam'}, 'MEMBER: spreadjam, level 31'))
+        f.found_any = True
+        return 'Pulled the files.\n\n- Level: 31', messages
+
+    class Facts:
+        now = 0
+        live_tools = None
+        found_any = False
+        def _known_names(self):
+            return {'5': 'spreadjam'}
+        def run(self, name, args):
+            return ''
+    ans = asyncio.run(answer_question(None, 'spredjam', Facts(), [], providers=[('fake', guesser)]))
+    assert ans.kind == 'ask' and 'Did you mean' in ans.text and 'Level' not in ans.text, ans.text
 
 
 def test_general_notice_question_only_lists_recent_posts():
@@ -9503,6 +9591,7 @@ if __name__ == '__main__':
     test_live_oc_count_follows_the_oc_check_rules()
     test_oc_now_and_judging_one_member_skip_the_ai()
     test_reaudit5_poll_weekdays_oc_member_roast_and_scores()
+    test_reaudit5_round2_names_bans_typos_leavers_and_past_enemies()
     test_reaudit_3_notices_stats_and_board_names_skip_the_ai()
     test_torn_text_is_html_decoded_once_at_the_api()
     test_general_notice_question_only_lists_recent_posts()
