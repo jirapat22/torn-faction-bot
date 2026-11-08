@@ -259,7 +259,7 @@ def plan_action(tool, args, said, now=None):
         if kind != 'custom':
             return 'ask', ('Is the poll for the next ranked war (I take the times from Torn), or for times you '
                            'give me?')
-        start, _ = when('start', 'when the poll\'s first block starts (a TCT day and time)')
+        start, start_raw = when('start', 'when the poll\'s first block starts (a TCT day and time)')
         end, end_raw = when('end', 'when the last block ends (a TCT day and time)')
         # "monday and tuesday": a bare day as the END means the end of that
         # day, not its first minute (which made a Monday-only poll).
@@ -267,6 +267,14 @@ def plan_action(tool, args, said, now=None):
             end += 86400
         block = num('block_hours', '', required=False, hi=6)
         open_h = num('open_hours', '', required=False, hi=24 * 7)
+        # "saturday 10:00 to sunday 10:00" asked on a Sunday: each weekday is
+        # read as its next one on its own, so "sunday" became TODAY, before
+        # Saturday (re-audit 08/11/2026). A weekday end means the one after
+        # the start. Never for a typed date (that is the person's own words).
+        day = lambda raw: (re.findall(r'\b(mon|tue|wed|thu|fri|sat|sun)', raw or '', re.I) or [''])[0].lower()
+        if start and end and end <= start and not re.search(r'\d+/\d+', end_raw or '') \
+                and day(end_raw) and day(end_raw) != day(start_raw):
+            end += 7 * 86400
         if start and end and end <= start:
             need.append('an end time after the start')
         if start and end and end - start > 7 * 86400:

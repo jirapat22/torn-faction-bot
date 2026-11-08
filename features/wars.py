@@ -124,6 +124,15 @@ WAR_LOG_INCOMPLETE_NOTE = (
     'outside hits and friendly hosps below are incomplete. Try again shortly.'
 )
 
+
+def _score(x):
+    """A war score for display: Torn scores are floats, and summing them
+    printed "1223.8899999999999". Two decimals at most, no trailing zeros."""
+    try:
+        return f'{float(x):.2f}'.rstrip('0').rstrip('.')
+    except (TypeError, ValueError):
+        return str(x)
+
 class WarTracker:
     """Tracks faction wars and provides statistics"""
 
@@ -1692,7 +1701,7 @@ class WarTracker:
         embed.add_field(
             name='📊 Summary',
             value=f'**Total Attacks Made:** {total_outgoing}\n{hit_line}\n'
-                  f'**Total Score:** {total_score}',
+                  f'**Total Score:** {_score(total_score)}',
             inline=False
         )
 
@@ -1902,7 +1911,8 @@ class WarTracker:
         sorted_members = sorted(member_totals.values(), key=lambda x: x['total_score'], reverse=True)
 
         top_text = '\n'.join([
-            f'{i+1}. **{m["name"]}** · {m["total_score"]} score, '
+            # Scores are floats: summing them printed "1223.8899999999999".
+            f'{i+1}. **{m["name"]}** · {_score(m["total_score"])} score, '
             f'{m["total_attacks"]} attacks ({m["wars_played"]}/{total} wars)'
             for i, m in enumerate(sorted_members[:10])
         ]) or 'No data'

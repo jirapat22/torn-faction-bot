@@ -1803,11 +1803,21 @@ OC_HISTORY_RX = re.compile(
     r"should|must|allowed)\b|\b(?:has|have)\s?n[o']?t\b", re.I)
 
 
-def oc_now_answer(question, raw):
+def oc_now_answer(question, raw, named=()):
     """The live OC lines that answer the question, worded by the bot."""
     lines = (raw or '').split('\n')
     if not lines or not lines[0].startswith('OC RIGHT NOW'):
         return raw   # Torn down or no tracker: that notice IS the answer
+    if named:
+        # "Who's in an OC with Ikaros22?" once got the whole faction's list.
+        # A named member gets their own crime line(s) only.
+        out = []
+        for n in named:
+            mine = [l for l in lines[1:] if l.startswith('- ') and not l.startswith(('- In an OC', '- Not in an OC',
+                    '- Members in an OC', '- Open slots', '- Crimes running'))
+                    and re.search(rf'(?<![\w]){re.escape(n)}(?![\w])', l.split(': ', 1)[-1], re.I)]
+            out += mine or [f'- {n} is not in an OC right now.']
+        return 'Checked Torn just now 👀\n\n' + '\n'.join(dict.fromkeys(out))
     pick = [l for l in lines if l.startswith(('- In an OC', '- Not in an OC', '- Members in an OC'))]
     if re.search(r"\bnot\b|\bn't\b|\bout of\b", question, re.I):
         pick = [l for l in pick if not l.startswith('- In an OC')] or pick
@@ -1819,7 +1829,8 @@ def oc_now_answer(question, raw):
 JUDGE_ONE_RX = re.compile(
     r"\b(?:lazy|laziest|slack(?:er|ing|s)?|useless|dead ?weight|pull(?:s|ing)? (?:his|her|their) weight|"
     r"(?:a |any )?(?:good|bad|decent|trash|shit|crap) (?:member|player|hitter)|any good|worth keeping|"
-    r"a liability|carried|freeloader|leech\w*)\b", re.I)
+    r"a liability|carried|freeloader|leech\w*|roast\w*|insult\w*|diss|trash[- ]?talk\w*|"
+    r"(?:something|anything) (?:mean|nasty|bad|rude))\b", re.I)
 
 
 def judged_member(question, history, facts):
@@ -1912,7 +1923,7 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
     if OC_NOW_RX.search(question) and not OC_HISTORY_RX.search(question) \
             and getattr(facts, 'live_tools', None) is not None:
         raw = await facts.live_tools.live_status('oc')
-        return Answer(oc_now_answer(question, raw), 'bot', raw, True, 0)
+        return Answer(oc_now_answer(question, raw, names_in(question, facts)), 'bot', raw, True, 0)
     # "Is he lazy?" about ONE member: the bot never judges (Pat's rule). The
     # AI was asked nicely and still wrote "They pull their weight just fine!"
     # on a follow-up, so the judging word never reaches it: it is asked the
@@ -2137,6 +2148,13 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
         if used and all(n == 'members_extra' and str((a or {}).get('what')) == 'leave_notices' for n, a, _ in used):
             from features.ask_live import notices_answer
             return Answer(notices_answer('\n'.join(r for _, _, r in used)), pname, _facts_text(used), True, took())
+        # Enemy faction overview: the bot posts the ready-made card itself.
+        # Re-audit 08/11/2026: the small model copied every number right but
+        # wrote "The Naughtyinking" for The Naughty Kids, and the number check
+        # cannot see a garbled name.
+        if used and all(n == 'faction_extra' and str((a or {}).get('what')) == 'enemy_faction'
+                        and str(r).startswith('FACTION ') for n, a, r in used):
+            return Answer('\n\n'.join(r for _, _, r in used), pname, _facts_text(used), True, took())
         if tools == {'torn_events'}:
             displays = [l.split('DISPLAY: ', 1)[1] for l in _facts_text(used).split('\n') if 'DISPLAY: ' in l]
             if displays:

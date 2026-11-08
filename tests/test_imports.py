@@ -9121,6 +9121,49 @@ def test_oc_now_and_judging_one_member_skip_the_ai():
     assert ans.text.startswith("I don't trash-talk the crew"), ans.text
 
 
+def test_reaudit5_poll_weekdays_oc_member_roast_and_scores():
+    """
+    Re-audit 08/11/2026 (round 1, 56 real questions):
+    - "poll saturday 10:00 to sunday 10:00" asked on a Sunday was refused as
+      "end before start": "sunday" was read as today.
+    - "who's in an OC with Ikaros22?" got the whole faction's OC list.
+    - "roast alantheknife" went to the AI (the no-judging rule covers it).
+    - war trends printed float sums like "1223.8899999999999".
+    """
+    from datetime import datetime, timezone
+    from features.ask_actions import plan_action
+    from features.ask_ai import oc_now_answer, judged_member
+    from features.wars import _score
+
+    sunday = datetime(2026, 11, 8, 7, 0, tzinfo=timezone.utc).timestamp()
+    said = 'make a poll for saturday 10:00 to sunday 10:00'
+    kind, plan = plan_action('action_poll', {'kind': 'custom', 'start': 'saturday 10:00', 'end': 'sunday 10:00'},
+                             said, sunday)
+    assert kind == 'plan', plan
+    assert plan['end'] - plan['start'] == 86400, (plan['start'], plan['end'])
+    # A real backwards request still gets asked about, never silently flipped
+    # past a week.
+    kind, _ = plan_action('action_poll', {'kind': 'custom', 'start': 'saturday 10:00', 'end': 'saturday 09:00'},
+                          'poll saturday 10:00 to saturday 09:00', sunday)
+    assert kind == 'ask'
+
+    raw = ('OC RIGHT NOW (live from Torn):\n- In an OC: 2 of 3 members: A1, Ikaros22\n- Not in an OC: 1: C3\n'
+           '- Sneaky Git Grab (level 6) · Planning · 4 of 4 slots filled: ballcrusher3000, Ikaros22, SirAua\n'
+           '- Open slots anyone can join now (Recruiting crimes): 3')
+    mine = oc_now_answer("who's in an OC with Ikaros22?", raw, ['Ikaros22'])
+    assert 'Sneaky Git Grab' in mine and 'A1' not in mine
+    assert 'C3 is not in an OC' in oc_now_answer('is C3 in an OC?', raw, ['C3'])
+
+    class F:
+        def _known_names(self):
+            return {'1': 'alantheknife'}
+    assert judged_member('roast alantheknife', [], F()) == 'alantheknife'
+    assert judged_member('say something mean about alantheknife', [], F()) == 'alantheknife'
+    assert judged_member('tell me a roast about me', [], F()) is None      # roasting yourself is chat
+
+    assert _score(1223.8899999999999) == '1223.89' and _score(1952) == '1952' and _score(None) == 'None'
+
+
 def test_general_notice_question_only_lists_recent_posts():
     """
     Pat, 08/11/2026: "did someone post a leave notice?" quoted a notice from
@@ -9459,6 +9502,7 @@ if __name__ == '__main__':
     test_leave_notices_are_quoted_word_for_word()
     test_live_oc_count_follows_the_oc_check_rules()
     test_oc_now_and_judging_one_member_skip_the_ai()
+    test_reaudit5_poll_weekdays_oc_member_roast_and_scores()
     test_reaudit_3_notices_stats_and_board_names_skip_the_ai()
     test_torn_text_is_html_decoded_once_at_the_api()
     test_general_notice_question_only_lists_recent_posts()
