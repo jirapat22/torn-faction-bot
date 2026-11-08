@@ -542,6 +542,12 @@ async def fetch_faction_crimes():
                 'open_slots': open_slots,
                 'status': status,
                 'difficulty': crime.get('difficulty') or 0,
+                # For the live "who is in an OC" answer (features/ask_live.py).
+                'name': crime.get('name') or '',
+                'ready_at': crime.get('ready_at') or 0,
+                'open_total': sum(1 for s in (slots if isinstance(slots, list) else [])
+                                  if isinstance(s, dict) and not s.get('user')),
+                'slots_total': len(slots) if isinstance(slots, list) else 0,
             })
         if normalized:
             return normalized

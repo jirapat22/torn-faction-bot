@@ -221,7 +221,55 @@ class LiveTools:
             return await self._chain_event()
         if what == 'flights':
             return await self._flights()
-        return 'Pick one of: war, chain, chain_event, flights.'
+        if what == 'oc':
+            return await self._oc()
+        return 'Pick one of: war, chain, chain_event, flights, oc.'
+
+    async def _oc(self):
+        """
+        Who is in an organised crime RIGHT NOW, live from Torn (Pat, 08/11/2026).
+        Same rules as the daily OC check (features/inactivity.py _get_oc_status):
+        - None from fetch_faction_crimes means Torn could not be read. That is
+          said plainly, never shown as "nobody is in an OC" (None-vs-empty).
+        - A member counts as in an OC only in a crime that is not finished and
+          not Expired/Successful/Failure: an expired crime still lists people.
+        - Joinable slots are only on Recruiting crimes.
+        """
+        from utils.torn_api import fetch_faction_crimes
+        crimes = await fetch_faction_crimes()
+        if crimes is None:
+            return self.facts._notice("Torn isn't answering about OCs right now, so I can't say who is in one.")
+        dead = ('Expired', 'Successful', 'Failure')
+        live = [c for c in crimes if isinstance(c, dict) and not c.get('completed') and c.get('status') not in dead]
+        roster = self.facts.roster or {}
+        names = self.facts._known_names()
+        name = lambda tid: names.get(str(tid)) or (roster.get(str(tid)) or {}).get('name') or str(tid)
+        busy = {str(t) for c in live for t in c.get('participants', [])}
+        lines = ['OC RIGHT NOW (live from Torn):']
+        if roster:
+            ours = sorted(str(t) for t in roster)
+            inn = sorted((name(t) for t in ours if t in busy), key=str.lower)
+            out = sorted((name(t) for t in ours if t not in busy), key=str.lower)
+            lines.append(f'- In an OC: {len(inn)} of {len(ours)} members' + (f': {", ".join(inn)}' if inn else ''))
+            lines.append(f'- Not in an OC: {len(out)}' + (f': {", ".join(out)}' if out else '')
+                         + ' (being out is fine while there are no open slots, or for a member not eligible yet)')
+        else:
+            lines.append(f'- Members in an OC: {len(busy)} (the member list could not be read, so no names)')
+        if not live:
+            lines.append('- Crimes running or recruiting: none.')
+        for c in sorted(live, key=lambda c: (c.get('status') != 'Planning', -(c.get('difficulty') or 0))):
+            who = ', '.join(sorted((name(t) for t in c.get('participants', [])), key=str.lower)) or 'nobody yet'
+            bits = [f'{c.get("name") or "OC"}' + (f' (level {c["difficulty"]})' if c.get('difficulty') else ''),
+                    str(c.get('status') or 'unknown status'),
+                    f'{len(c.get("participants", []))} of {c["slots_total"]} slots filled' if c.get('slots_total')
+                    else f'{len(c.get("participants", []))} in it']
+            if c.get('ready_at') and c.get('status') == 'Planning':
+                bits.append(f'ready {_relative(int(c["ready_at"]), self.now)}')
+            lines.append(f'- {" · ".join(bits)}: {who}')
+        known = [c.get('open_slots', -1) for c in live if (c.get('open_slots', -1) or 0) >= 0]
+        if known:
+            lines.append(f'- Open slots anyone can join now (Recruiting crimes): {sum(known)}')
+        return self._found('\n'.join(lines))
 
     async def _war(self):
         wt = self._m('war_tracker')
@@ -538,9 +586,10 @@ LIVE_SPECS = [
         'name': 'live_status',
         'description': 'What is happening RIGHT NOW: the current or next ranked war (score, time left), the '
                        'current chain (count, timeout), the chain event (each member\'s hits, who is short), or '
-                       'flights (enemies and our members flying or abroad).',
+                       'flights (enemies and our members flying or abroad), or oc (who is in an organised '
+                       'crime right now, who is not, each crime\'s status and open slots).',
         'parameters': {'type': 'object', 'properties': {
-            'what': {'type': 'string', 'enum': ['war', 'chain', 'chain_event', 'flights']}},
+            'what': {'type': 'string', 'enum': ['war', 'chain', 'chain_event', 'flights', 'oc']}},
             'required': ['what']}}},
     {'type': 'function', 'function': {
         'name': 'members_extra',

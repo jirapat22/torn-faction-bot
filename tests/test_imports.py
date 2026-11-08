@@ -9175,6 +9175,55 @@ def test_reaudit_3_notices_stats_and_board_names_skip_the_ai():
     assert fb._board_id('Nobody') is None
 
 
+def test_live_oc_count_follows_the_oc_check_rules():
+    """
+    "How many people are in an OC?" (Pat, 08/11/2026): live from Torn, with
+    the daily OC check's rules: Torn unreachable is said, never "nobody";
+    Expired crimes don't count as being in one; open slots only on Recruiting.
+    """
+    import asyncio
+    from types import SimpleNamespace
+    import utils.torn_api as api
+    from features.ask_live import LiveTools
+
+    class Facts:
+        now = 1794100000
+        found_any = False
+        notices = []
+        roster = {'1': {'name': 'Amy'}, '2': {'name': 'Bob'}, '3': {'name': 'Cat'}}
+        def _known_names(self):
+            return {'1': 'Amy', '2': 'Bob', '3': 'Cat'}
+        def _notice(self, text):
+            self.notices.append(text)
+            return 'NO DATA: ' + text
+    crimes = [
+        {'completed': False, 'status': 'Planning', 'participants': ['1'], 'open_slots': 0, 'name': 'Mob Mentality',
+         'difficulty': 2, 'ready_at': 1794103600, 'slots_total': 4, 'completion_ts': 0},
+        {'completed': False, 'status': 'Recruiting', 'participants': [], 'open_slots': 3, 'name': 'Pet Project',
+         'difficulty': 1, 'ready_at': 0, 'slots_total': 3, 'completion_ts': 0},
+        {'completed': False, 'status': 'Expired', 'participants': ['2'], 'open_slots': 0, 'name': 'Old',
+         'difficulty': 1, 'slots_total': 2, 'completion_ts': 0},
+    ]
+    real = api.fetch_faction_crimes
+    try:
+        async def ok():
+            return crimes
+        api.fetch_faction_crimes = ok
+        out = asyncio.run(LiveTools(Facts(), SimpleNamespace(), None).live_status('oc'))
+        assert '- In an OC: 1 of 3 members: Amy' in out, out
+        assert '- Not in an OC: 2: Bob, Cat' in out                 # Bob is only in an EXPIRED crime
+        assert 'Mob Mentality (level 2) · Planning · 1 of 4 slots filled · ready in 1h' in out
+        assert 'Old' not in out and 'Open slots anyone can join now (Recruiting crimes): 3' in out
+
+        async def down():
+            return None
+        api.fetch_faction_crimes = down
+        out = asyncio.run(LiveTools(Facts(), SimpleNamespace(), None).live_status('oc'))
+        assert "can't say who is in one" in out and 'Not in an OC' not in out
+    finally:
+        api.fetch_faction_crimes = real
+
+
 def test_leave_notices_are_quoted_word_for_word():
     """
     Pat: "quote it, I'll read it". The whole notice, newest first, with when
@@ -9352,6 +9401,7 @@ if __name__ == '__main__':
     test_chat_action_reaches_a_card_only_through_python()
     test_live_lookups_reuse_the_commands_and_drop_forbidden_lines()
     test_leave_notices_are_quoted_word_for_word()
+    test_live_oc_count_follows_the_oc_check_rules()
     test_reaudit_3_notices_stats_and_board_names_skip_the_ai()
     test_torn_text_is_html_decoded_once_at_the_api()
     test_general_notice_question_only_lists_recent_posts()
