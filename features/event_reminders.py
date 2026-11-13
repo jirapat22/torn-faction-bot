@@ -12,8 +12,15 @@ Event routing:
 - "Chain" events → CHAINING_CHANNEL_ID
 - "War" events → WAR_CHANNEL_ID
 - Other events → ANNOUNCEMENTS_CHANNEL_ID
+- Torn calendar events (the 🎮 ones calendar_sync puts in the Events tab)
+  → ANNOUNCEMENTS_CHANNEL_ID, twice: 35 hours out, and again when the
+  event opens ("check your start time between 10:00 and 16:00 TCT").
+
+Everything the bot posts in announcements pings the Ascended Punks role
+(Pat, 13/11/2026), plus @everyone for MAJOR_EVENTS.
 """
 
+import re
 import discord
 from datetime import datetime, date, timezone, timedelta
 from utils.helpers import load_json, save_json, create_embed
@@ -124,6 +131,49 @@ def torn_event_name(event_name):
     return name[len(TORN_EVENT_PREFIX):] if name.startswith(TORN_EVENT_PREFIX) else ''
 
 
+# Torn opens most calendar events for a window and each player picks their own
+# start inside it (features/calendar_sync.py TORN_EVENT_START_HOUR).
+START_WINDOW = '10:00 and 16:00 TCT'
+# A start post is only made this soon after the start: after a long outage,
+# "it's on!" for something half over is noise.
+START_POST_WITHIN_HOURS = 3
+
+
+def members_role_id(path='data/verification_config.json'):
+    """The Ascended Punks role (what /register gives), or None if unset."""
+    rid = (load_json(path, default={}) or {}).get('verified_role_id')
+    return int(rid) if rid else None
+
+
+def announcement_ping(major, role_id):
+    """(text, AllowedMentions) for a post in #announcements: the members
+    role always, @everyone too for the big events. The allowed mentions are
+    explicit so only what the text shows can ping."""
+    bits = ([f'<@&{role_id}>'] if role_id else []) + (['@everyone'] if major else [])
+    allowed = discord.AllowedMentions(everyone=bool(major),
+                                      roles=[discord.Object(role_id)] if role_id else False,
+                                      users=False)
+    return ' '.join(bits), allowed
+
+
+def torn_effect(title, path='data/torn_calendar.json'):
+    """Torn's own one-line effect text for a calendar event, or ''."""
+    saved = load_json(path, default={}) or {}
+    for e in (saved.get('events') or []):
+        if (e.get('title') or '').lower() == (title or '').lower():
+            desc = (e.get('description') or '').strip()
+            return re.split(r'(?<=[.!])\s', desc)[0].rstrip('.') if desc else ''
+    return ''
+
+
+def start_post_text(name, effect=''):
+    """The "it's on" message for a Torn event. Pure, for tests."""
+    out = f"\U0001f3ae **{name}** has started! Check your start time between {START_WINDOW}."
+    if effect:
+        out += f"\n-# Torn: {effect}."
+    return out
+
+
 def _synced_torn_event(name, year, state_file=None):
     """True when calendar_sync has a Discord event for this Torn event."""
     from features import calendar_sync
@@ -139,6 +189,7 @@ class EventReminderManager:
         self.data_file = 'data/event_reminders.json'
         self.announced_events = set()  # Discord scheduled event IDs that have been announced
         self.announced_calendar = set()  # 'calendar:{name}:{year}' keys already announced
+        self.announced_starts = set()  # Discord event IDs whose "has started" post went out
         self.last_newsletter_id = 0  # highest Faction Newsletter message ID already posted
 
     async def load_data(self):
@@ -146,6 +197,7 @@ class EventReminderManager:
         data = load_json(self.data_file, default={'announced': [], 'announced_calendar': [], 'last_newsletter_id': 0})
         self.announced_events = set(data.get('announced', []))
         self.announced_calendar = set(data.get('announced_calendar', []))
+        self.announced_starts = set(data.get('announced_starts', []))
         self.last_newsletter_id = data.get('last_newsletter_id', 0)
         logger.info(f'Loaded {len(self.announced_events)} announced event IDs, '
                     f'{len(self.announced_calendar)} announced calendar events, '
@@ -156,6 +208,7 @@ class EventReminderManager:
         save_json(self.data_file, {
             'announced': list(self.announced_events),
             'announced_calendar': list(self.announced_calendar),
+            'announced_starts': list(self.announced_starts),
             'last_newsletter_id': self.last_newsletter_id,
         })
 
@@ -201,8 +254,7 @@ class EventReminderManager:
             # The big ones interrupt people, in the channel where faction
             # wide notices already go. Everything else stays where it was.
             major = name in MAJOR_EVENTS
-            channel = self.bot.get_channel(
-                ANNOUNCEMENTS_CHANNEL_ID if major else GENERAL_CHANNEL_ID)
+            channel = self.bot.get_channel(ANNOUNCEMENTS_CHANNEL_ID)
             if channel:
                 embed = create_embed(
                     title='📅 Torn Event Reminder',
@@ -213,13 +265,13 @@ class EventReminderManager:
                     ),
                     color=EMBED_COLOR_INFO
                 )
-                content = '@everyone' if major else None
+                content, allowed = announcement_ping(major, members_role_id())
                 if name in STACKING_EVENTS:
                     embed.add_field(
                         name='⏱️ Stack now',
                         value='Start stacking your Xanax so you go in full.',
                         inline=False)
-                await channel.send(content=content, embed=embed)
+                await channel.send(content=content or None, embed=embed, allowed_mentions=allowed)
                 logger.info(f'Calendar event reminder posted for '
                             f'"{display_name}"{" (@everyone)" if major else ""}')
             else:
@@ -346,6 +398,7 @@ class EventReminderManager:
         upcoming = []
 
         for event in events:
+            await self._maybe_post_start(event, now)
             if event.status != discord.EventStatus.scheduled:
                 continue
 
@@ -379,7 +432,7 @@ class EventReminderManager:
         torn_name = torn_event_name(event.name)
         major = torn_name in MAJOR_EVENTS
         if torn_name:
-            channel_id = ANNOUNCEMENTS_CHANNEL_ID if major else GENERAL_CHANNEL_ID
+            channel_id = ANNOUNCEMENTS_CHANNEL_ID
         channel = self.bot.get_channel(channel_id)
 
         if not channel:
@@ -411,19 +464,56 @@ class EventReminderManager:
         # find the event in a sidebar that only says "2 Events".
         link = f'https://discord.com/events/{event.guild_id}/{event.id}'
         try:
+            ping, allowed = (announcement_ping(major, members_role_id())
+                             if channel_id == ANNOUNCEMENTS_CHANNEL_ID else ('', None))
             await channel.send(
-                content=('@everyone\n' if major else '') + f'{link}\n-# Click **Interested** above and Discord '
+                content=(ping + '\n' if ping else '') + f'{link}\n-# Click **Interested** above and Discord '
                         f'will remind you itself.',
+                allowed_mentions=allowed or discord.AllowedMentions.none(),
                 embed=embed)
             logger.info(f'Event reminder posted for "{event.name}" in channel {channel_id}')
         except Exception as e:
             logger.error(f'Event reminders: Failed to post reminder for "{event.name}": {e}')
+
+    async def _maybe_post_start(self, event, now):
+        """
+        "World Diabetes Day has started!" when a Torn event opens (Pat,
+        13/11/2026). Only Torn calendar events: chain and war events already
+        announce themselves. The loop is hourly, so this lands within an hour
+        of the start, inside the window players pick their start from anyway.
+        """
+        name = torn_event_name(event.name)
+        if not name or event.id in self.announced_starts:
+            return
+        if event.status not in (discord.EventStatus.scheduled, discord.EventStatus.active):
+            return
+        since = (now - event.start_time).total_seconds() / 3600
+        if not (0 <= since <= START_POST_WITHIN_HOURS):
+            return
+        channel = self.bot.get_channel(ANNOUNCEMENTS_CHANNEL_ID)
+        if not channel:
+            logger.warning(f'Event start: announcements channel {ANNOUNCEMENTS_CHANNEL_ID} not found')
+            return
+        ping, allowed = announcement_ping(name in MAJOR_EVENTS, members_role_id())
+        try:
+            await channel.send(content=(ping + '\n' if ping else '') + start_post_text(name, torn_effect(name)),
+                               allowed_mentions=allowed)
+            logger.info(f'Event start posted for "{name}"')
+        except Exception as e:
+            logger.error(f'Event start: could not post for "{name}": {e}')
+            return
+        self.announced_starts.add(event.id)
+        await self.save_data()
 
     async def _cleanup_old_events(self, current_events: list):
         """Remove event IDs that no longer exist in Discord."""
         current_ids = {event.id for event in current_events}
         old_ids = self.announced_events - current_ids
 
+        old_starts = self.announced_starts - current_ids
+        if old_starts:
+            self.announced_starts -= old_starts
+            await self.save_data()
         if old_ids:
             self.announced_events -= old_ids
             await self.save_data()

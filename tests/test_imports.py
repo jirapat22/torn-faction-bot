@@ -9338,6 +9338,67 @@ def test_days_in_faction_capped_and_torn_events_announced_once():
     assert 'stacking' in EventReminderManager(None)._get_reminder_message('Happy Jump', 1794564000)
 
 
+def test_torn_event_start_post_and_announcement_pings():
+    """
+    Pat, 13/11/2026: post when a Torn event opens ("check your start time
+    between 10:00 and 16:00 TCT"), and everything in #announcements pings
+    the Ascended Punks role (plus @everyone for the big events).
+    """
+    import asyncio
+    from datetime import datetime, timedelta, timezone
+    import discord
+    from features import event_reminders as er
+
+    text, allowed = er.announcement_ping(False, 42)
+    assert text == '<@&42>' and not allowed.everyone
+    text, allowed = er.announcement_ping(True, 42)
+    assert text == '<@&42> @everyone' and allowed.everyone
+    assert er.announcement_ping(False, None)[0] == ''
+
+    msg = er.start_post_text('World Diabetes Day', 'Candy effects are tripled')
+    assert 'has started' in msg and '10:00 and 16:00 TCT' in msg and 'Candy effects are tripled.' in msg
+
+    sent = []
+
+    class Chan:
+        async def send(self, content=None, **kw):
+            sent.append((content, kw.get('allowed_mentions')))
+
+    class Bot:
+        def get_channel(self, cid):
+            return Chan()
+
+    class Ev:
+        def __init__(self, name, hours_ago, eid=1):
+            self.name, self.id = name, eid
+            self.status = discord.EventStatus.active
+            self.start_time = datetime.now(timezone.utc) - timedelta(hours=hours_ago)
+
+    m = er.EventReminderManager(Bot())
+    saves = []
+
+    async def fake_save():
+        saves.append(1)
+    m.save_data = fake_save
+    real = er.members_role_id, er.torn_effect
+    er.members_role_id = lambda path='': 42
+    er.torn_effect = lambda title, path='': ''
+    now = datetime.now(timezone.utc)
+
+    async def run():
+        await m._maybe_post_start(Ev('\U0001f3ae World Diabetes Day', 0.5), now)
+        await m._maybe_post_start(Ev('\U0001f3ae World Diabetes Day', 0.6), now)   # same id: once only
+        await m._maybe_post_start(Ev('\u26d3\ufe0f Bonus Week', 0.5, eid=2), now)  # not a Torn event
+        await m._maybe_post_start(Ev('\U0001f3ae Old Event', 5, eid=3), now)       # too long ago
+        await m._maybe_post_start(Ev('\U0001f3ae Soon', -2, eid=4), now)           # not started
+    try:
+        asyncio.run(run())
+    finally:
+        er.members_role_id, er.torn_effect = real
+    assert len(sent) == 1, sent
+    assert sent[0][0].startswith('<@&42>\n') and 'World Diabetes Day' in sent[0][0]
+
+
 def test_general_notice_question_only_lists_recent_posts():
     """
     Pat, 08/11/2026: "did someone post a leave notice?" quoted a notice from
@@ -9677,6 +9738,7 @@ if __name__ == '__main__':
     test_live_oc_count_follows_the_oc_check_rules()
     test_oc_now_and_judging_one_member_skip_the_ai()
     test_days_in_faction_capped_and_torn_events_announced_once()
+    test_torn_event_start_post_and_announcement_pings()
     test_reaudit5_poll_weekdays_oc_member_roast_and_scores()
     test_reaudit5_round2_names_bans_typos_leavers_and_past_enemies()
     test_reaudit5_round3_online_now_totals_notice_rules_and_cards()
