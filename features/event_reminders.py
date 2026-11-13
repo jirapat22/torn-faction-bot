@@ -288,16 +288,18 @@ class EventReminderManager:
         else:
             return ANNOUNCEMENTS_CHANNEL_ID
 
-    def _get_reminder_message(self, event_name: str, hours_until: float) -> str:
+    def _get_reminder_message(self, event_name: str, start_ts: int) -> str:
         """
         Get the reminder message based on event type.
 
         Returns a motivational message for the event.
         """
         name_lower = event_name.lower()
-        hours_text = f"{int(hours_until)}" if hours_until == int(hours_until) else f"{hours_until:.1f}"
-
-        head = f"**{event_name}** starts in **{hours_text} hours**."
+        # Discord timestamps, not a typed "36.4 hours": the message stays in
+        # the channel, and a frozen number read "starts in 36.4 hours" right
+        # above "(in 2 hours)" by the time people looked (Pat, 13/11/2026).
+        # <t:..:R> counts down live and <t:..:F> shows each reader's own time.
+        head = f"**{event_name}** starts <t:{start_ts}:R> (<t:{start_ts}:F>)."
         if 'happy' in name_lower or 'jump' in name_lower:
             head += " Let's get stacking!!"
         elif 'chain' in name_lower:
@@ -384,8 +386,10 @@ class EventReminderManager:
             logger.warning(f'Event reminders: Could not find channel (ID: {channel_id}) for event "{event.name}"')
             return
 
-        # Build the message
-        message = self._get_reminder_message(event.name, hours_until)
+        # Build the message. The 🎮 prefix is for the Events tab; in bold
+        # text it rendered as a broken glyph.
+        start_ts = int(event.start_time.timestamp())
+        message = self._get_reminder_message(torn_name or event.name, start_ts)
 
         # Create embed
         embed = create_embed(
@@ -394,25 +398,12 @@ class EventReminderManager:
             color=EMBED_COLOR_INFO
         )
 
-        # Add event details
-        embed.add_field(
-            name='Start Time',
-            value=f"<t:{int(event.start_time.timestamp())}:F>\n(<t:{int(event.start_time.timestamp())}:R>)",
-            inline=True
-        )
-
         if torn_name in STACKING_EVENTS:
             embed.add_field(name='⏱️ Stack now',
                             value='Start stacking your Xanax so you go in full.', inline=False)
 
-        if event.description:
-            # Truncate description if too long
-            desc = event.description[:200] + '...' if len(event.description) > 200 else event.description
-            embed.add_field(
-                name='Details',
-                value=desc,
-                inline=False
-            )
+        # No Start Time or Details fields: the event card the link renders
+        # right above already shows both, so the reminder said everything twice.
 
         # The raw event URL in the content is what makes Discord render the
         # event card with its Interested button. Without it the reminder is

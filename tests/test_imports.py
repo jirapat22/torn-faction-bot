@@ -9331,6 +9331,12 @@ def test_days_in_faction_capped_and_torn_events_announced_once():
         assert _synced_torn_event('World Diabetes Day', 2026, state_file=f)
         assert not _synced_torn_event('Black Friday', 2026, state_file=f)
 
+    # The reminder stays in the channel, so its countdown must be live, not typed.
+    from features.event_reminders import EventReminderManager
+    msg = EventReminderManager(None)._get_reminder_message('World Diabetes Day', 1794564000)
+    assert '<t:1794564000:R>' in msg and 'hours**' not in msg
+    assert 'stacking' in EventReminderManager(None)._get_reminder_message('Happy Jump', 1794564000)
+
 
 def test_general_notice_question_only_lists_recent_posts():
     """
