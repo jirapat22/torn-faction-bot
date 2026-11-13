@@ -9296,6 +9296,42 @@ def test_reaudit5_round3_online_now_totals_notice_rules_and_cards():
     assert draft.count('Normally runs 24 hours') == 1, draft
 
 
+def test_days_in_faction_capped_and_torn_events_announced_once():
+    """
+    13/11/2026: yoang joined 12/11, Torn said 56 days in faction, and the OC
+    check asked for a strike ("eligible for 52 days"). 11/11/2026: World
+    Diabetes Day was announced twice, once from the Discord event and once
+    from the calendar list (with a start a day late).
+    """
+    import json, os, tempfile
+    from datetime import date
+    from utils.torn_api import cap_days_in_faction
+    from features.event_reminders import torn_event_name, _synced_torn_event
+
+    profiles = {'1': {'first_seen': '2026-09-04'},   # there when tracking began
+                '2': {'first_seen': '2026-11-12'},   # seen arriving yesterday
+                '3': {'first_seen': '2026-10-01'}}   # rejoined: Torn reset its count
+    members = {'1': {'name': 'old', 'days_in_faction': 400},
+               '2': {'name': 'yoang', 'days_in_faction': 56},
+               '3': {'name': 'back', 'days_in_faction': 2},
+               '4': {'name': 'noprofile', 'days_in_faction': 9}}
+    out = cap_days_in_faction(members, profiles, date(2026, 11, 13))
+    assert out['1']['days_in_faction'] == 400       # unknown join date: Torn stands
+    assert out['2']['days_in_faction'] == 1         # the bot saw him arrive
+    assert out['3']['days_in_faction'] == 2         # smaller number wins
+    assert out['4']['days_in_faction'] == 9
+    assert members['2']['days_in_faction'] == 56    # cached Torn data untouched
+    assert cap_days_in_faction(members, {}, date(2026, 11, 13)) == members
+
+    assert torn_event_name('\U0001f3ae World Diabetes Day') == 'World Diabetes Day'
+    assert torn_event_name('⛓️ Bonus Week') == ''
+    with tempfile.TemporaryDirectory() as d:
+        f = os.path.join(d, 'cal.json')
+        json.dump({'torn:World Diabetes Day:2026': {'id': '123'}}, open(f, 'w'))
+        assert _synced_torn_event('World Diabetes Day', 2026, state_file=f)
+        assert not _synced_torn_event('Black Friday', 2026, state_file=f)
+
+
 def test_general_notice_question_only_lists_recent_posts():
     """
     Pat, 08/11/2026: "did someone post a leave notice?" quoted a notice from
@@ -9634,6 +9670,7 @@ if __name__ == '__main__':
     test_leave_notices_are_quoted_word_for_word()
     test_live_oc_count_follows_the_oc_check_rules()
     test_oc_now_and_judging_one_member_skip_the_ai()
+    test_days_in_faction_capped_and_torn_events_announced_once()
     test_reaudit5_poll_weekdays_oc_member_roast_and_scores()
     test_reaudit5_round2_names_bans_typos_leavers_and_past_enemies()
     test_reaudit5_round3_online_now_totals_notice_rules_and_cards()

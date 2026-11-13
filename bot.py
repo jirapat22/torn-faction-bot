@@ -301,6 +301,10 @@ async def on_ready():
         # member, fed by the same hourly faction fetch role sync already makes)
         activity_profile_manager = ActivityProfileManager(bot)
         await activity_profile_manager.load_data()
+        # Torn's days_in_faction was once 56 for a member who joined the day
+        # before; the roster fetch now caps it at how long we've seen them.
+        from utils import torn_api
+        torn_api.first_seen_source = activity_profile_manager
 
         # Initialize enemy watchlist - builds the /enemy command group
         # (stakeout attaches to it below; added to the tree once, after)

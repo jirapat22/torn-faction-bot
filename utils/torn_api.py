@@ -6,6 +6,7 @@ Handles all API calls to Torn.com
 import aiohttp
 import asyncio
 import html
+from datetime import datetime, timezone
 import time
 from collections import deque
 from config import (
@@ -261,7 +262,54 @@ async def fetch_faction_members():
 
     members = data.get('members', {})
     logger.info(f'Fetched data for {len(members)} faction members from Torn API')
+    if first_seen_source is not None:
+        try:
+            members = cap_days_in_faction(members, getattr(first_seen_source, 'profiles', None) or {},
+                                          datetime.now(timezone.utc).date())
+        except Exception as e:   # a bad profile file must never cost the roster itself
+            logger.error(f'Could not check days_in_faction against first-seen dates: {e}')
     return members
+
+
+# Set by bot.py to the ActivityProfileManager: it records the day the bot
+# first saw each member on the roster.
+first_seen_source = None
+
+
+def cap_days_in_faction(members, profiles, today):
+    """
+    Torn's days_in_faction, capped at how long the bot has actually watched
+    them on the roster. Pure, so it is testable.
+
+    13/11/2026: yoang joined on 12/11 and Torn said 56 days. The OC check
+    took that at face value and asked management to strike him for "never
+    joined an OC, eligible for 52 days" on his first day, and his 14-day
+    trial was skipped as long over. Every feature reads this one roster, so
+    the number is fixed here once.
+
+    Only members the bot saw ARRIVE are capped (first seen after tracking
+    began). Members already there on day one were first seen that day too,
+    which says nothing about when they joined. A rejoin keeps the old first
+    seen date, but Torn resets its count then, so the smaller number still
+    wins. Returns copies; the cached Torn response is never changed.
+    """
+    dates = [p.get('first_seen') for p in (profiles or {}).values() if p.get('first_seen')]
+    if not dates:
+        return members
+    tracking_start = min(dates)
+    out = {}
+    for tid, m in (members or {}).items():
+        first = ((profiles or {}).get(str(tid)) or {}).get('first_seen')
+        torn_days = m.get('days_in_faction') if isinstance(m, dict) else None
+        if first and first > tracking_start and isinstance(torn_days, int):
+            try:
+                seen_days = (today - datetime.strptime(first, '%Y-%m-%d').date()).days
+            except ValueError:
+                seen_days = None
+            if seen_days is not None and 0 <= seen_days < torn_days:
+                m = dict(m, days_in_faction=seen_days)
+        out[tid] = m
+    return out
 
 
 async def fetch_faction_data(selections='basic', cache_seconds=None):

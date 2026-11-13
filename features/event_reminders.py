@@ -115,6 +115,22 @@ MAJOR_EVENTS = {'Trick or Treat', 'Christmas Town', 'Easter Egg Hunt'}
 STACKING_EVENTS = {'Trick or Treat'}
 
 
+TORN_EVENT_PREFIX = '\U0001f3ae '   # how calendar_sync names Torn events in the Events tab
+
+
+def torn_event_name(event_name):
+    """'🎮 Trick or Treat' -> 'Trick or Treat'; '' for any other event."""
+    name = event_name or ''
+    return name[len(TORN_EVENT_PREFIX):] if name.startswith(TORN_EVENT_PREFIX) else ''
+
+
+def _synced_torn_event(name, year, state_file=None):
+    """True when calendar_sync has a Discord event for this Torn event."""
+    from features import calendar_sync
+    state = load_json(state_file or calendar_sync.STATE_FILE, default={}) or {}
+    return any((state.get(f'torn:{name}:{y}') or {}).get('id') for y in (year - 1, year, year + 1))
+
+
 class EventReminderManager:
     """Manages 35-hour advance event reminders"""
 
@@ -169,6 +185,16 @@ class EventReminderManager:
             key = f'calendar:{name}:{start.year}'
 
             if key in self.announced_calendar or not (33 <= hours_until <= 37):
+                continue
+            # The Events tab (features/calendar_sync.py) already holds this
+            # event, and check_and_announce_events reminds people about it,
+            # with the right window (players get it from the day before) and
+            # an Interested button. This path then posted a SECOND reminder
+            # two hours later with a start a day late (World Diabetes Day,
+            # 11/11/2026). It now only runs when there is no such event.
+            if _synced_torn_event(name, start.year):
+                self.announced_calendar.add(key)
+                await self.save_data()
                 continue
 
             display_name = name.format(year=start.year)
@@ -345,6 +371,13 @@ class EventReminderManager:
     async def _announce_event(self, event: discord.ScheduledEvent, hours_until: float):
         """Post the reminder message for an event."""
         channel_id = self._get_channel_for_event(event.name)
+        # A Torn calendar event the bot put in the Events tab carries what the
+        # old calendar reminder had: the big ones go to announcements with
+        # @everyone, the rest to general, and stacking events get the Xanax line.
+        torn_name = torn_event_name(event.name)
+        major = torn_name in MAJOR_EVENTS
+        if torn_name:
+            channel_id = ANNOUNCEMENTS_CHANNEL_ID if major else GENERAL_CHANNEL_ID
         channel = self.bot.get_channel(channel_id)
 
         if not channel:
@@ -368,6 +401,10 @@ class EventReminderManager:
             inline=True
         )
 
+        if torn_name in STACKING_EVENTS:
+            embed.add_field(name='⏱️ Stack now',
+                            value='Start stacking your Xanax so you go in full.', inline=False)
+
         if event.description:
             # Truncate description if too long
             desc = event.description[:200] + '...' if len(event.description) > 200 else event.description
@@ -384,7 +421,7 @@ class EventReminderManager:
         link = f'https://discord.com/events/{event.guild_id}/{event.id}'
         try:
             await channel.send(
-                content=f'{link}\n-# Click **Interested** above and Discord '
+                content=('@everyone\n' if major else '') + f'{link}\n-# Click **Interested** above and Discord '
                         f'will remind you itself.',
                 embed=embed)
             logger.info(f'Event reminder posted for "{event.name}" in channel {channel_id}')
