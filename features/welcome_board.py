@@ -22,7 +22,7 @@ link to them - which is the exact audience this post is for.
 
 import logging
 
-from utils.helpers import create_embed
+from utils.helpers import create_embed, TORN_LINK_HOW
 from config import (
     EMBED_COLOR_INFO,
     WELCOME_CHANNEL_ID,
@@ -41,9 +41,9 @@ def build_embed():
         "fix that, and the first one is the easier:\n\n"
 
         "**1 · Link your Torn account to Discord, in Torn**\n"
-        "-# Do it once and the bot finds you by itself overnight. Nothing to "
-        "type, no ID to get wrong, and nobody can claim your account by "
-        "mistake.\n\n"
+        "To do it: " + TORN_LINK_HOW + ".\n"
+        "-# Do it once and the bot finds you by itself overnight. No ID to "
+        "get wrong, and nobody can claim your account by mistake.\n\n"
 
         "**2 · Or register here**\n"
         "`/register torn_id:<your Torn ID>`\n"

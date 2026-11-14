@@ -32,7 +32,7 @@ from features.stakeout import StakeoutManager, setup_stakeout_commands
 from features.flytrack import FlyTracker
 from features.commands import setup_commands
 from features.faction import setup_faction_commands
-from utils.helpers import ensure_data_directories
+from utils.helpers import ensure_data_directories, TORN_LINK_HOW
 from utils.torn_api import verify_api_key, close_session
 
 import logging
@@ -1051,7 +1051,7 @@ async def on_member_join(member):
     welcome_message = (
         f"🎉 Welcome to Ascended Punks, {member.mention}!\n\n"
         f"1️⃣ **Get verified** in **#welcome-pit**, either way:\n"
-        f" • Link your Torn account to Discord in Torn, and the bot "
+        f" • Link Torn to Discord ({TORN_LINK_HOW}), and the bot "
         f"picks you up automatically overnight.\n"
         f" • Or run `/register` with your Torn ID (the number in your "
         f"Torn profile URL).\n"

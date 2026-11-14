@@ -9447,6 +9447,32 @@ def test_ux_audit_wording_fixes():
     assert '`15-11-2026`, `02-12-2026`' in am.missing_date_text('check')
 
 
+def test_link_steps_spelled_out_and_management_commands_hidden():
+    """
+    UX audit 14/11/2026: every message said "link your Torn account to
+    Discord in Torn" without saying how. And members saw /announce, /strikes
+    and other management-only commands in their / menu.
+    """
+    import re
+    from utils.helpers import TORN_LINK_HOW
+    from features.welcome_board import build_embed
+    from features.lobby import dm_text
+    assert '!verify' in TORN_LINK_HOW and 'official Torn Discord' in TORN_LINK_HOW
+    assert TORN_LINK_HOW in build_embed().description
+    assert TORN_LINK_HOW in dm_text()
+
+    # Each fully management-only command carries default_permissions, which
+    # hides it from anyone without Kick Members (the Management role has it).
+    hidden = {'announce': 'features/commands.py', 'createevent': 'features/commands.py',
+              'strikes': 'features/commands.py', 'faction': 'features/faction.py',
+              'rolesync': 'features/roles.py', 'rules': 'features/rules_posts.py',
+              'verify': 'features/verification.py'}
+    for name, path in hidden.items():
+        src = open(path, encoding='utf-8').read()
+        i = re.search(r"name=['\"]%s['\"]" % name, src).start()
+        assert 'default_permissions(kick_members=True)' in src[max(0, i - 300):i], name
+
+
 def test_general_notice_question_only_lists_recent_posts():
     """
     Pat, 08/11/2026: "did someone post a leave notice?" quoted a notice from
@@ -9787,6 +9813,7 @@ if __name__ == '__main__':
     test_oc_now_and_judging_one_member_skip_the_ai()
     test_days_in_faction_capped_and_torn_events_announced_once()
     test_torn_event_start_post_and_announcement_pings()
+    test_link_steps_spelled_out_and_management_commands_hidden()
     test_ux_audit_wording_fixes()
     test_reaudit5_poll_weekdays_oc_member_roast_and_scores()
     test_reaudit5_round2_names_bans_typos_leavers_and_past_enemies()

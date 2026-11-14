@@ -272,6 +272,7 @@ class EditPostModal(discord.ui.Modal):
 
 
 async def setup_rules_commands(bot, store):
+    @app_commands.default_permissions(kick_members=True)   # management only: hidden from members' / menu
     @bot.tree.command(name='rules', description='The rulebook in #faction-edicts (management)')
     @app_commands.describe(action='What to do', post='[Edit] Which post, 1 to 9')
     @app_commands.choices(action=[

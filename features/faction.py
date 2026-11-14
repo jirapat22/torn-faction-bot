@@ -416,6 +416,7 @@ def _build_threat_embed(enemy_members, own_members, ff_data, has_ff,
 async def setup_faction_commands(bot):
     """Register /faction slash commands"""
 
+    @app_commands.default_permissions(kick_members=True)   # management only: hidden from members' / menu
     @bot.tree.command(
         name='faction',
         description='[Management] Faction tools: compare overview or analyse battle strength'

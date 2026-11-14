@@ -7,7 +7,7 @@ A Discord bot for a Torn.com faction (Ascended Punks), running on Pat's home Mac
 ## Commands
 
 ```bash
-<py> -m pytest -q tests/          # full suite (177 tests), the one to trust
+<py> -m pytest -q tests/          # full suite (178 tests), the one to trust
 <py> -m pytest -q tests/test_imports.py::test_flytrack_logic   # single test
 <py> tests/test_imports.py        # runs test_imports.py ONLY, see note below
 <py> bot.py                       # run locally (needs .env)
@@ -176,4 +176,5 @@ Anything accumulating per-player needs an explicit retention policy; several fil
 - Comments explain **why**, especially the non-obvious constraint a line defends against. Much of this codebase's value is in knowing which failure a guard exists for.
 - Slash commands use a single command with an `action`/`view` choice dropdown rather than many top-level commands (`/war`, `/avail`, `/verify`). Management-gated actions check `is_management(interaction)` per-action, not per-command.
 - Channel IDs come from `config.py` env vars. Features post to their own channel; none is hardcoded.
+- Commands that are management-only from top to bottom (`/announce`, `/createevent`, `/strikes`, `/faction`, `/rolesync`, `/rules`, `/verify`) carry `@app_commands.default_permissions(kick_members=True)`, which hides them from members' `/` menu (the Management role has Kick Members; admins see everything). The in-code `is_management` check stays as the real lock. Mixed commands (`/war`, `/avail`, `/stakeout`...) can't be hidden per option, so they stay visible.
 - Restricting a command to certain channels is done in Discord's own server settings, not in code. Note that **Discord exempts Administrators from command permissions entirely**, so testing as an admin will not reflect what members see.

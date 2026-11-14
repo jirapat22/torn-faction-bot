@@ -3,6 +3,13 @@ Helper functions for the Torn Faction Bot
 Includes JSON file handling, embed creation, etc.
 """
 
+# How a member links Torn to Discord on Torn's side (the link the bot reads
+# through Torn's API to verify people by itself overnight). Every message
+# used to say "link it in Torn" without saying how, and new members got
+# stuck there (UX audit, 14/11/2026). Steps from Torn forum posts.
+TORN_LINK_HOW = ("join the official Torn Discord server, send `!verify` to the Torn bot "
+                 "there, and open the link it sends you while logged in to Torn")
+
 import json
 import os
 import tempfile

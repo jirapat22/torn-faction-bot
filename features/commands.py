@@ -584,6 +584,7 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
     # ===== STRIKES COMMAND =====
 
     if strike_manager:
+        @app_commands.default_permissions(kick_members=True)   # management only: hidden from members' / menu
         @bot.tree.command(name='strikes', description='Strike ledger (Management)')
         @app_commands.describe(
             view='What to show (default: everyone with active strikes)',
@@ -932,6 +933,7 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
             ping_everyone = select.values[0] == 'yes'
             await interaction.response.send_modal(AnnouncementModal(ping_everyone))
 
+    @app_commands.default_permissions(kick_members=True)   # management only: hidden from members' / menu
     @bot.tree.command(name='announce', description='[Management] Post an announcement to the announcements channel')
     async def announce(interaction: discord.Interaction):
         """Post an announcement to the announcements channel (Management only)"""
@@ -953,6 +955,7 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
         )
         await interaction.response.send_message(embed=embed, view=AnnouncementView(), ephemeral=True)
 
+    @app_commands.default_permissions(kick_members=True)   # management only: hidden from members' / menu
     @bot.tree.command(name='createevent', description='[Management] Create a Discord scheduled event')
     async def createevent(interaction: discord.Interaction):
         """Create a Discord scheduled event with TCT (UTC) time (Management only)"""

@@ -243,6 +243,7 @@ async def setup_rolesync_commands(bot, role_sync_manager: RoleSyncManager):
     from config import (EMBED_COLOR_SUCCESS, EMBED_COLOR_INFO,
                         EMBED_COLOR_CRITICAL, EMBED_COLOR_WARNING)
 
+    @app_commands.default_permissions(kick_members=True)   # management only: hidden from members' / menu
     @bot.tree.command(
         name='rolesync',
         description='[Management] Configure automatic role sync with Torn positions'

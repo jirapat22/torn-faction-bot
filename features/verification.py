@@ -14,7 +14,7 @@ import asyncio
 from discord import app_commands
 from discord.ext import tasks
 from datetime import datetime, timezone
-from utils.helpers import load_json, save_json, create_embed, is_management
+from utils.helpers import load_json, save_json, create_embed, is_management, TORN_LINK_HOW
 from utils.torn_api import fetch_player_data
 from config import (
     GUILD_ID,
@@ -209,8 +209,8 @@ class VerificationSystem:
         if linked_discord_id and linked_discord_id != discord_id:
             return False, (
                 f'Torn ID {torn_id} is linked to a different Discord account via Torn\'s '
-                f'own Torn<->Discord link. If this is your ID, link your Discord account '
-                f'in Torn\'s settings first, or contact an admin.'
+                f'own Torn<->Discord link. If this is your ID, log in to that Discord account, '
+                f'or re-link this one ({TORN_LINK_HOW}), or contact management.'
             )
 
         # Check faction requirement if enabled
@@ -582,6 +582,7 @@ async def setup_verification_commands(bot, verification_system: VerificationSyst
         await interaction.followup.send(embed=embed)
 
     # Verification options command (admin only)
+    @app_commands.default_permissions(kick_members=True)   # management only: hidden from members' / menu
     @bot.tree.command(
         name='verify',
         description='Verification settings and admin commands'

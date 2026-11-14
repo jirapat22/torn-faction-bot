@@ -26,7 +26,7 @@ import time
 
 import discord
 
-from utils.helpers import create_embed, load_json, save_json
+from utils.helpers import create_embed, load_json, save_json, TORN_LINK_HOW
 from config import (
     EMBED_COLOR_WARNING,
     WELCOME_CHANNEL_ID,
@@ -111,8 +111,8 @@ def nag_text(member_ids):
         '**Fix it in one of two ways**\n'
         '- Run `/register torn_id:<your Torn ID>` right here. Your ID is the '
         'number in your Torn profile URL.\n'
-        '- Or link your Torn account to Discord in Torn itself, and the bot '
-        'picks you up automatically overnight - no command needed.\n\n'
+        '- Or link Torn to Discord: ' + TORN_LINK_HOW + '. The bot then '
+        'picks you up automatically overnight, no command needed.\n\n'
         '-# Never paste an API key in Discord. The bot never asks for one.')
 
 
@@ -128,8 +128,8 @@ def dm_text():
         "**Two ways to fix it**\n"
         "- Run `/register torn_id:<your Torn ID>` in the server. Your ID is "
         "the number in your Torn profile URL.\n"
-        "- Or link your Torn account to Discord inside Torn itself, and the "
-        "bot picks you up automatically overnight.\n\n"
+        "- Or link Torn to Discord: " + TORN_LINK_HOW + ". The bot then "
+        "picks you up automatically overnight.\n\n"
         "-# Never paste an API key in Discord. The bot never asks for one.")
 
 
