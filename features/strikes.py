@@ -34,7 +34,7 @@ import logging
 
 import discord
 
-from utils.helpers import load_json, save_json, create_embed
+from utils.helpers import load_json, save_json, create_embed, plural, verb
 from config import (
     STRIKE_EXPIRY_DAYS,
     STRIKE_DIGEST_WEEKDAY,
@@ -464,13 +464,13 @@ class StrikeManager:
                 rows.append(f'**{name}**{left_tag(tid, self.roster_ids)} '
                             f'\u00b7 {len(recs)}\n-# {detail}')
             body = '\n'.join(rows)
-            desc = (f'{len(counts)} member(s) hold {len(self.active())} active '
-                    f'strike(s).\n\n{body}')
+            desc = (f'{plural(len(counts), "member")} {verb(len(counts), "holds", "hold")} '
+                    f'{plural(len(self.active()), "active strike")}.\n\n{body}')
             pend = len(self.pending)
             wait = len(self.awaiting_notice())
             if pend or wait:
-                desc += (f'\n\n-# {pend} candidate(s) waiting on a decision, '
-                         f'{wait} strike(s) nobody has told the member about.')
+                desc += (f'\n\n-# {plural(pend, "candidate")} waiting on a decision, '
+                         f'{plural(wait, "strike")} nobody has told the member about.')
             colour = EMBED_COLOR_WARNING
         else:
             # Nothing to report, so report nothing. A weekly "nobody has a
@@ -640,7 +640,7 @@ class StrikeChoice(discord.ui.Button):
                     description=(f'**{cand["torn_name"]}** \u00b7 `{rec["id"]}`\n\n'
                                  f'{cand["reason"]}\n\n'
                                  f'-# Issued by **{actor}**, bot notified. '
-                                 f'{total} active strike(s). {CLEARS_NOTE}'),
+                                 f'{plural(total, "active strike")}. {CLEARS_NOTE}'),
                     color=EMBED_COLOR_CRITICAL), view=None)
                 head = f'\U0001f4e8 DM sent to {who}:'
             else:
@@ -656,8 +656,8 @@ class StrikeChoice(discord.ui.Button):
                                  f'{cand["reason"]}\n\n'
                                  f'**The DM did not go through, so somebody has '
                                  f'to tell them.**\n'
-                                 f'-# Issued by **{actor}**. {total} active '
-                                 f'strike(s). Click below once they know.'),
+                                 f'-# Issued by **{actor}**. {plural(total, "active strike")}. '
+                                 f'Click below once they know.'),
                     color=EMBED_COLOR_CRITICAL),
                     view=StrikeDeliveredView(m, rec['id']))
                 head = (f'\u26a0\ufe0f Could not DM {who} (blocked, or not '
@@ -678,8 +678,8 @@ class StrikeChoice(discord.ui.Button):
             description=(f'**{cand["torn_name"]}** \u00b7 `{rec["id"]}`\n\n'
                          f'{cand["reason"]}\n\n'
                          f'**{actor} is telling them personally.**\n'
-                         f'-# Recorded and awaiting notice. {total} active '
-                         f'strike(s). Click below once you have told them, so '
+                         f'-# Recorded and awaiting notice. {plural(total, "active strike")}. '
+                         f'Click below once you have told them, so '
                          f'it stops showing as outstanding.'),
             color=EMBED_COLOR_CRITICAL),
             view=StrikeDeliveredView(m, rec['id']))
@@ -722,5 +722,5 @@ class MarkToldButton(discord.ui.Button):
                          f'{rec["reason"]}\n\n'
                          f'-# Issued by **{rec.get("issued_by")}**, told by '
                          f'**{interaction.user.display_name}**. '
-                         f'{len(m.active(rec["torn_id"]))} active strike(s).'),
+                         f'{plural(len(m.active(rec["torn_id"])), "active strike")}.'),
             color=EMBED_COLOR_CRITICAL), view=None)

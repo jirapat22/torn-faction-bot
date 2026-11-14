@@ -1059,7 +1059,7 @@ async def on_member_join(member):
         f"3️⃣ Once you're Verified, jump into **#punk-plaza** and say hi.\n\n"
         f"⚠️ Never paste an API key in Discord, here or anywhere else. "
         f"The bot never asks for one.\n"
-        f"Please contact Ikaros22[3571142] if there is any issue with register process."
+        f"Stuck registering? Ask here, or message Ikaros22 [3571142] in Torn."
     )
 
     # Send to welcome channel

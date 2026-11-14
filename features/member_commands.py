@@ -83,10 +83,10 @@ SECTIONS = [
     ]),
     ('\U0001f5d3️ Availability', [
         ('/avail action:Mine date:DD-MM-YYYY',
-         'The blocks you picked on that poll.',
+         'The blocks you picked on that poll. Leave the date out when only one poll is open.',
          [GENERAL_CHANNEL_ID, AVAILABILITY_CHANNEL_ID]),
         ('/avail action:Summary date:DD-MM-YYYY',
-         'Everyone\'s answers for that poll.',
+         'Everyone\'s answers for that poll. Same: no date needed for a single poll.',
          [GENERAL_CHANNEL_ID, AVAILABILITY_CHANNEL_ID]),
         ('/avail action:List',
          'Which polls are open.',

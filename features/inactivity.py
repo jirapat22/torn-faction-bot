@@ -13,7 +13,7 @@ NEW BEHAVIOR:
 import time
 import discord
 from datetime import datetime
-from utils.helpers import load_json, save_json, create_embed, format_timestamp, get_days_since, get_current_timestamp
+from utils.helpers import load_json, save_json, create_embed, format_timestamp, get_days_since, get_current_timestamp, plural, verb
 from utils.torn_api import fetch_faction_members, fetch_faction_crimes
 from config import (
     VERIFIED_ROLE_NAME,
@@ -1121,7 +1121,7 @@ class InactivityTracker:
                 )
 
             # Chunk into multiple embeds if needed (4096 char description limit)
-            header = f'**{len(critical_members)} faction member(s)** have been inactive on Torn for {INACTIVITY_CRITICAL_DAYS}+ days:\n-# React \u2705 once you have dealt with it, so nobody chases them twice.\n\n'
+            header = f'**{plural(len(critical_members), "faction member")}** {verb(len(critical_members), "has", "have")} been inactive on Torn for {INACTIVITY_CRITICAL_DAYS}+ days:\n-# React \u2705 once you have dealt with it, so nobody chases them twice.\n\n'
             chunks = []
             current = header
             for line in lines:
@@ -1177,7 +1177,7 @@ class InactivityTracker:
                     + (f'\n  {note}' if note else '')
                 )
 
-            header = f'**{len(warning_members)} faction member(s)** have been inactive on Torn for {INACTIVITY_WARNING_DAYS}+ days:\n-# React \u2705 once you have dealt with it, so nobody chases them twice.\n\n'
+            header = f'**{plural(len(warning_members), "faction member")}** {verb(len(warning_members), "has", "have")} been inactive on Torn for {INACTIVITY_WARNING_DAYS}+ days:\n-# React \u2705 once you have dealt with it, so nobody chases them twice.\n\n'
             chunks = []
             current = header
             for line in lines:
@@ -1232,7 +1232,7 @@ class InactivityTracker:
                     f'{detail}'
                 )
 
-            header = (f'**{len(oc_critical)} member(s)** have not joined an OC for '
+            header = (f'**{plural(len(oc_critical), "member")}** {verb(len(oc_critical), "has", "have")} not joined an OC for '
                       f'{OC_CRITICAL_DAYS}+ days. They were warned at '
                       f'{OC_WARNING_DAYS} days, so this is strike territory:\n\n')
             if oc_no_slots:
@@ -1309,7 +1309,7 @@ class InactivityTracker:
                     f'{detail}'
                 )
 
-            header = (f'**{len(oc_warning)} member(s)** have not joined an OC for '
+            header = (f'**{plural(len(oc_warning), "member")}** {verb(len(oc_warning), "has", "have")} not joined an OC for '
                       f'{OC_WARNING_DAYS}+ days. Nudge them now - at '
                       f'{OC_CRITICAL_DAYS} days it becomes a strike.\n'
                       f'-# React ✅ once you have dealt with it, so nobody '
@@ -1346,7 +1346,7 @@ class InactivityTracker:
                 suffix = ' · 🔒 access removed' if revoked else ''
                 lines.append(f'**{torn_name}** {mention} · {days_gone:.0f}d since leaving faction{suffix}')
 
-            header = (f'**{len(left_faction)} verified Discord member(s)** have not returned to the '
+            header = (f'**{plural(len(left_faction), "verified Discord member")}** {verb(len(left_faction), "has", "have")} not returned to the '
                       f'faction in {LEFT_FACTION_ALERT_DAYS}+ days. Their verified role is removed, '
                       f'so they keep only the access @everyone has:\n\n')
             chunks = []

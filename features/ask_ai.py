@@ -2470,7 +2470,12 @@ class AskAI:
             last = self.refused_at.get(message.author.id, 0)
             if time.time() - last >= REFUSE_EVERY_S:
                 self.refused_at[message.author.id] = time.time()
-                await message.reply("Sorry, you don't have permission to ask me that. Only management can 🔒",
+                # Says what they CAN do: a bare "no permission" left members
+                # guessing whether the bot was broken.
+                from config import MEMBER_COMMANDS_CHANNEL_ID as where
+                board = f'<#{where}>' if where else '`/help`'
+                await message.reply("Asking me questions is management only for now 🔒 "
+                                    f"Slash commands work for everyone though: see {board}.",
                                     mention_author=False, delete_after=30)
             return
 

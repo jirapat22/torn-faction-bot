@@ -11,7 +11,7 @@ Features:
 import asyncio
 import discord
 from datetime import datetime
-from utils.helpers import load_json, save_json, create_embed, format_timestamp, get_current_timestamp
+from utils.helpers import load_json, save_json, create_embed, format_timestamp, get_current_timestamp, plural
 from utils.torn_api import fetch_faction_data
 from config import (
     CHAINING_CHANNEL_ID,
@@ -363,7 +363,10 @@ class ChainTracker:
         if time_remaining < 60 and timeout_valid:  # Less than 1 minute
             color = EMBED_COLOR_CRITICAL
             status = '🔴 CRITICAL - Chain about to timeout!'
-        elif time_remaining < 300 and timeout_valid:  # Less than 5 minutes
+        # Every hit resets the timer to 5:00, so "under 5 minutes" was true of
+        # EVERY live chain and each milestone post said "timeout soon", a
+        # false alarm people learn to ignore. Warn only under 2 minutes.
+        elif time_remaining < 120 and timeout_valid:
             color = EMBED_COLOR_WARNING
             status = '⚠️ Warning - Chain timeout soon'
         else:
@@ -448,7 +451,9 @@ class ChainTracker:
 
         # Build embed
         embed = create_embed(
-            title=f'Chain Report #{chain_id}',
+            # Torn's chain report "chain" is the chain's LENGTH, not an id:
+            # "Chain Report #147" read like the 147th chain.
+            title=f'Chain Report · {chain_id} hits' if chain_id else 'Chain Report',
             description=f'Chain completed {format_timestamp(end_time, "R")}',
             color=EMBED_COLOR_SUCCESS,
             fields=[
@@ -465,7 +470,7 @@ class ChainTracker:
         contributors = self.contributors_of(sorted_members)
         if contributors:
             top_contributors = '\n'.join([
-                f'{i+1}. **{m["name"]}**: {m["hits"]} hits' + (f' ({m["respect"]:.2f} respect)' if m["respect"] > 0 else '')
+                f'{i+1}. **{m["name"]}**: {plural(m["hits"], "hit")}' + (f' ({m["respect"]:.2f} respect)' if m["respect"] > 0 else '')
                 for i, m in enumerate(contributors[:5])
             ])
             embed.add_field(

@@ -217,7 +217,11 @@ class VerificationSystem:
         if self.config.get('require_faction'):
             from config import TORN_FACTION_ID
             if player_info['faction_id'] != TORN_FACTION_ID:
-                return False, f'You must be a member of our faction to verify. Your faction: {player_info["faction_name"] or "None"}'
+                # "Your faction: None" read like an error code to new players.
+                where = (f'Torn shows you in **{player_info["faction_name"]}**'
+                         if player_info.get('faction_name') else 'Torn shows you in no faction yet')
+                return False, (f'You need to be in Ascended Punks in Torn before you can register here. '
+                               f'{where}. Once you have been accepted, run `/register` again.')
 
         # Build new nickname
         new_name = player_info['name']

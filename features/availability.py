@@ -389,6 +389,29 @@ class AvailabilityManager:
                 return poll_id
         return None
 
+    def poll_dates(self) -> List[str]:
+        """Start dates (DD-MM-YYYY) of every poll on record, oldest first."""
+        return sorted((p.get('start_date') for p in self.polls.values() if p.get('start_date')),
+                      key=lambda d: parse_date(d))
+
+    def default_date(self) -> Optional[str]:
+        """
+        The date to use when someone leaves `date` empty: the only poll's
+        start date, or None when there are none or several. Typing
+        DD-MM-YYYY on a phone to check the one poll that exists was the
+        main reason members gave up on Mine/Summary.
+        """
+        dates = self.poll_dates()
+        return dates[0] if len(dates) == 1 else None
+
+    def missing_date_text(self, verb: str) -> str:
+        """What to say when no date was given and there is no single poll."""
+        dates = self.poll_dates()
+        if not dates:
+            return 'There are no availability polls right now.'
+        return (f'There are {len(dates)} polls, so pick one with `date`: '
+                + ', '.join(f'`{d}`' for d in dates) + f' (to {verb}).')
+
     def get_summary(self, poll_id: str) -> Optional[Dict]:
         """
         Get availability summary for a poll
@@ -1183,7 +1206,7 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
     )
     @app_commands.describe(
         action='What to do',
-        date='Date for the poll (DD-MM-YYYY) · required for Setup/Summary/Mine/Delete',
+        date='Poll date (DD-MM-YYYY). Summary/Mine: leave empty when only one poll is open',
         start_time='[Setup] Start time in TCT/UTC (HH:MM, e.g., 00:00)',
         end_time='[Setup] End time in TCT/UTC (HH:MM, e.g., 24:00)',
         end_date='[Setup] End date if multi-day (DD-MM-YYYY) · leave empty for same day',
@@ -1375,10 +1398,11 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
 
         # ── Summary ──
         elif action_value == 'summary':
+            date = date or manager.default_date()
             if not date:
                 await interaction.response.send_message(
-                    embed=create_embed(title='Missing Date',
-                                       description='Please provide a `date` (DD-MM-YYYY) for the poll to view.',
+                    embed=create_embed(title='Which poll?',
+                                       description=manager.missing_date_text('view'),
                                        color=EMBED_COLOR_WARNING),
                     ephemeral=True)
                 return
@@ -1463,10 +1487,11 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
 
         # ── Mine ──
         elif action_value == 'mine':
+            date = date or manager.default_date()
             if not date:
                 await interaction.response.send_message(
-                    embed=create_embed(title='Missing Date',
-                                       description='Please provide a `date` (DD-MM-YYYY) for the poll to check.',
+                    embed=create_embed(title='Which poll?',
+                                       description=manager.missing_date_text('check'),
                                        color=EMBED_COLOR_WARNING),
                     ephemeral=True)
                 return

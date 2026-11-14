@@ -20,6 +20,7 @@ from config import (
     OC_WARNING_DAYS,
     OC_CRITICAL_DAYS,
     BOT_VERSION,
+    MEMBER_COMMANDS_CHANNEL_ID,
 )
 
 
@@ -175,7 +176,10 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
         """Show available commands and basic help"""
         embed = create_embed(
             title='Ascended Punks Bot - Commands',
-            description='Use these slash commands to interact with the bot',
+            description=('Type `/` and pick a command from the menu. Members: the full list, with '
+                         'which channel each one works in, is pinned in '
+                         + (f'<#{MEMBER_COMMANDS_CHANNEL_ID}>' if MEMBER_COMMANDS_CHANNEL_ID else '#commands-the-punk')
+                         + '. Commands marked Management only work for management.'),
             color=EMBED_COLOR_INFO,
             fields=[
                 {
@@ -215,6 +219,8 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
                 {
                     'name': 'Management',
                     'value': (
+                        '`/strikes` - Strike ledger and decisions\n'
+                        '`/rules` - Edit the rulebook posts\n'
                         '`/announce` - Post announcement\n'
                         '`/createevent` - Schedule event\n'
                         '`/verify` - Verification tools\n'
@@ -227,7 +233,9 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
                 },
             ]
         )
-        await interaction.response.send_message(embed=embed)
+        # Only the asker sees it: a public /help pushed real chat up the
+        # channel for everyone, and most of the list is management-only.
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @bot.tree.command(name='myactivity', description='Check your Torn activity status')
     async def myactivity(interaction: discord.Interaction):

@@ -7,7 +7,7 @@ A Discord bot for a Torn.com faction (Ascended Punks), running on Pat's home Mac
 ## Commands
 
 ```bash
-<py> -m pytest -q tests/          # full suite (176 tests), the one to trust
+<py> -m pytest -q tests/          # full suite (177 tests), the one to trust
 <py> -m pytest -q tests/test_imports.py::test_flytrack_logic   # single test
 <py> tests/test_imports.py        # runs test_imports.py ONLY, see note below
 <py> bot.py                       # run locally (needs .env)
@@ -170,6 +170,8 @@ Activity profiles of leavers are now kept 365 days (not 7) so they can be asked 
 Anything accumulating per-player needs an explicit retention policy; several files grow forever otherwise. Current ones: activity profiles prune after 365 days absent from the roster (kept for "@bot" lookups), chain_session keeps 24 hours (live board only; it keys chains by LENGTH, so two same-length chains in a day collide), `chain_log.json` keeps a year of per-member chain hits keyed by Torn's real chain ID (`features/chain_log.py`, ~2 MB/year, backfilled 60 days at 15 reports per 5-minute tick).
 
 ## Conventions
+
+- User-facing counts use `plural()` / `verb()` from `utils/helpers.py` ("1 member has"), never "member(s) have" (UX audit 14/11/2026, read from the real channels).
 
 - Comments explain **why**, especially the non-obvious constraint a line defends against. Much of this codebase's value is in knowing which failure a guard exists for.
 - Slash commands use a single command with an `action`/`view` choice dropdown rather than many top-level commands (`/war`, `/avail`, `/verify`). Management-gated actions check `is_management(interaction)` per-action, not per-command.

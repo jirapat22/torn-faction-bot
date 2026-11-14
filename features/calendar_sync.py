@@ -231,8 +231,11 @@ async def sync(bot, guild, chain_event_manager=None, war_tracker=None,
                     if ch:
                         link = (f'https://discord.com/events/'
                                 f'{guild.id}/{event.id}')
+                        # Our event names already start with an emoji
+                        # (🎮 ⛓️ ⚔️); a 📅 in front read as two icons.
+                        icon = '' if not w['name'][:1].isalnum() else '\U0001f4c5 '
                         await ch.send(
-                            f"\U0001f4c5 **{w['name']}** is on the calendar."
+                            f"{icon}**{w['name']}** is on the calendar."
                             + '\n' + link + '\n'
                             + '-# Click **Interested** and Discord will '
                               'remind you when it starts.')

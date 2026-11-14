@@ -2577,7 +2577,10 @@ class WarTracker:
             note = note_for(self._discord_id_for(tid), notices)
             if note:
                 covered += 1
-            line = f'- {who} ({name}) {hrs:.0f}h' + (f'\n  -# {note}' if note else '')
+            # The Torn name in brackets only helps next to a Discord mention;
+            # on its own it read "**Kiwisupercar** (Kiwisupercar) 49h".
+            label = f'{who} ({name})' if who.startswith('<@') else who
+            line = f'- {label} · quiet {hrs:.0f}h' + (f'\n  -# {note}' if note else '')
             if used + len(line) + 1 > 3400:
                 lines.append(f'- ...and {len(quiet) - len(lines)} more')
                 break

@@ -9399,6 +9399,54 @@ def test_torn_event_start_post_and_announcement_pings():
     assert sent[0][0].startswith('<@&42>\n') and 'World Diabetes Day' in sent[0][0]
 
 
+def test_ux_audit_wording_fixes():
+    """
+    UX audit 14/11/2026, read from the real channels: "1 member(s) have",
+    "1 hits", "Chain Report #147" (147 is the LENGTH, not an id), every
+    milestone post saying "Warning - Chain timeout soon" (a fresh chain is
+    always under 5 minutes), and /avail Mine needing a typed date when only
+    one poll exists.
+    """
+    import asyncio
+    from utils.helpers import plural, verb
+    from features.chains import ChainTracker
+    from features.availability import AvailabilityManager
+
+    assert plural(1, 'member') == '1 member' and plural(3, 'member') == '3 members'
+    assert plural(1, 'enemy', 'enemies') == '1 enemy' and plural(2, 'enemy', 'enemies') == '2 enemies'
+    assert verb(1, 'has', 'have') == 'has' and verb(0, 'has', 'have') == 'have'
+
+    ct = ChainTracker(None)
+    fresh = asyncio.run(ct.format_chain_embed({'current': 25, 'timeout': 270, 'modifier': 1.1}))
+    assert 'Chain Active' in fresh.description, fresh.description
+    low = asyncio.run(ct.format_chain_embed({'current': 25, 'timeout': 90, 'modifier': 1.1}))
+    assert 'timeout soon' in low.description
+
+    async def no_roster():
+        return {}
+    import utils.torn_api as ta
+    real = ta.fetch_faction_members
+    ta.fetch_faction_members = no_roster
+    try:
+        rep = asyncio.run(ct.format_chainreport_embed({
+            'chain': 147, 'start': 1, 'end': 2, 'respect': 5.0,
+            'members': {'1': {'attacks': 1, 'respect': 2.0}}}))
+    finally:
+        ta.fetch_faction_members = real
+    assert rep.title == 'Chain Report · 147 hits', rep.title
+    top = [f.value for f in rep.fields if f.name == 'Top Contributors'][0]
+    assert ': 1 hit (' in top, top
+
+    am = AvailabilityManager(None)
+    assert am.default_date() is None
+    assert 'no availability polls' in am.missing_date_text('check')
+    am.polls = {'a': {'start_date': '15-11-2026'}}
+    assert am.default_date() == '15-11-2026'
+    am.polls['b'] = {'start_date': '02-12-2026'}
+    assert am.default_date() is None
+    assert '`15-11-2026`, `02-12-2026`' in am.missing_date_text('check')
+
+
 def test_general_notice_question_only_lists_recent_posts():
     """
     Pat, 08/11/2026: "did someone post a leave notice?" quoted a notice from
@@ -9739,6 +9787,7 @@ if __name__ == '__main__':
     test_oc_now_and_judging_one_member_skip_the_ai()
     test_days_in_faction_capped_and_torn_events_announced_once()
     test_torn_event_start_post_and_announcement_pings()
+    test_ux_audit_wording_fixes()
     test_reaudit5_poll_weekdays_oc_member_roast_and_scores()
     test_reaudit5_round2_names_bans_typos_leavers_and_past_enemies()
     test_reaudit5_round3_online_now_totals_notice_rules_and_cards()

@@ -263,3 +263,21 @@ def member_is_management(member) -> bool:
         if any(role_id in MANAGEMENT_ROLE_IDS for role_id in user_role_ids):
             return True
     return False
+
+
+def plural(n, one, many=None):
+    """'1 member', '3 members', '1 strike', '2 strikes'. User-facing posts
+    used "1 member(s) have", which reads as a bot that does not care."""
+    try:
+        k = int(n)
+    except (TypeError, ValueError):
+        k = n
+    return f'{n} {one if k == 1 else (many or one + "s")}'
+
+
+def verb(n, one, many):
+    """The verb that agrees with plural(n, ...): verb(1, 'has', 'have')."""
+    try:
+        return one if int(n) == 1 else many
+    except (TypeError, ValueError):
+        return many
