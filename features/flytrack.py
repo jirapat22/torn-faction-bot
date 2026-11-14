@@ -28,7 +28,7 @@ import statistics
 from datetime import datetime, timezone
 from typing import Optional, Dict, Tuple
 
-from utils.helpers import load_json, save_json, create_embed, TORN_LINK_HOW
+from utils.helpers import load_json, save_json, create_embed
 from config import (
     TORN_FACTION_ID,
     FFSCOUTER_API_KEY,
@@ -887,9 +887,9 @@ class FlyTracker:
         if not mention:
             # Discord subtext (-#) keeps this small and grey so it nags the one
             # person who needs it without cluttering the alert for everyone.
-            lines.append('-# Not getting pinged? Run `/register` in this server, '
-                         'or link Torn to Discord (' + TORN_LINK_HOW + ') '
-                         'and the bot will pick you up automatically.')
+            # Kept short: it repeats on every alert, so the full linking steps
+            # (TORN_LINK_HOW) live in #welcome-pit instead.
+            lines.append('-# Not getting pinged? Run `/register` in this server.')
         return '\n'.join(lines)
 
     async def _follow_alerts(self, departures: list, now_ts: float) -> list:

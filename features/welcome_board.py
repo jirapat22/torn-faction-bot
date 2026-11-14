@@ -40,7 +40,7 @@ def build_embed():
         "You can only see this channel until you are verified. Two ways to "
         "fix that, and the first one is the easier:\n\n"
 
-        "**1 · Link your Torn account to Discord, in Torn**\n"
+        "**1 · Link Torn to Discord**\n"
         "To do it: " + TORN_LINK_HOW + ".\n"
         "-# Do it once and the bot finds you by itself overnight. No ID to "
         "get wrong, and nobody can claim your account by mistake.\n\n"

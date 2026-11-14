@@ -664,11 +664,11 @@ class InactivityTracker:
         if warning:
             body = '\n'.join(
                 f'{line(d)}\n  day {d["days"]} of {TRIAL_DAYS} \u00b7 '
-                f'**{d["days_left"]} day(s) left** to reach level {TRIAL_TARGET_LEVEL}'
+                f'**{plural(d["days_left"], "day")} left** to reach level {TRIAL_TARGET_LEVEL}'
                 for d in sorted(warning, key=lambda x: x['days_left']))
             await channel.send(embed=create_embed(
                 title='\u23f3 Trial deadline approaching',
-                description=(f'**{len(warning)} new member(s)** are not level '
+                description=(f'**{plural(len(warning), "new member")}** {verb(len(warning), "is", "are")} not level '
                              f'{TRIAL_TARGET_LEVEL} yet with their trial running out.'
                              f'\n\n{body}\n\n'
                              f'-# Nudge them now. Levelling is fastest with '
@@ -693,7 +693,7 @@ class InactivityTracker:
             else:
                 await strikes.send(embed=create_embed(
                     title='\U0001f534 Trial failed \u00b7 strike or remove',
-                    description=(f'**{len(failed)} member(s)** did not reach level '
+                    description=(f'**{plural(len(failed), "member")}** did not reach level '
                              f'{TRIAL_TARGET_LEVEL} within {TRIAL_DAYS} days.'
                              f'\n\n{body}\n\n'
                              f'-# The rules say strike or removal "depending on '
@@ -704,7 +704,7 @@ class InactivityTracker:
         if passed:
             await channel.send(embed=create_embed(
                 title='\u2705 Trial complete \u00b7 review due',
-                description=(f'**{len(passed)} member(s)** finished their '
+                description=(f'**{plural(len(passed), "member")}** finished their '
                              f'{TRIAL_DAYS}-day trial at level '
                              f'{TRIAL_TARGET_LEVEL}+:\n\n'
                              + '\n'.join(f'{line(d)}\n  level {d["torn_level"]} '
@@ -979,7 +979,7 @@ class InactivityTracker:
             await channel.send(embed=create_embed(
                 title='\U0001f9f9 Strikes cleared',
                 description=(f'{", ".join(f"**{n}**" for n in names)} left the '
-                             f'faction, so their {len(cleared)} strike(s) were '
+                             f'faction, so their {plural(len(cleared), "strike")} {verb(len(cleared), "was", "were")} '
                              f'cleared.'),
                 color=EMBED_COLOR_INFO))
         except Exception as e:
@@ -1202,8 +1202,8 @@ class InactivityTracker:
                         if d.get('never_joined')
                         else f'{d["days"]:.0f} days since their last OC')
                      for d in oc_waiting]
-            body = (f'Every OC slot is taken, so **{len(oc_waiting)} member(s)** '
-                    f'have nothing to join. Please create more crimes.\n'
+            body = (f'Every OC slot is taken, so **{plural(len(oc_waiting), "member")}** '
+                    f'{verb(len(oc_waiting), "has", "have")} nothing to join. Please create more crimes.\n'
                     f'-# Nobody is warned or struck for OCs while there are no '
                     f'open slots.\n\n' + '\n'.join(lines))
             embed = create_embed(title='\U0001f6e0\ufe0f No open OC slots',
@@ -1263,7 +1263,7 @@ class InactivityTracker:
                 for data in oc_to_raise:
                     reason = (f"{data['days']:.0f} days without joining an OC "
                               f"(strike territory at {OC_CRITICAL_DAYS} days). "
-                              f"They were nudged at {OC_WARNING_DAYS} days.")
+                              f"They were nudged at {plural(OC_WARNING_DAYS, 'day')}.")
                     if data.get('never_joined'):
                         reason = (f"Never joined an OC, and has been eligible for "
                                   f"{data['days']:.0f} days.")

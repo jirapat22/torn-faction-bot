@@ -6,7 +6,7 @@ Defines all slash commands for the bot
 import discord
 from discord import app_commands
 from datetime import datetime, timezone
-from utils.helpers import create_embed, format_timestamp, format_timestamp_with_tct, get_days_since, is_management
+from utils.helpers import create_embed, format_timestamp, format_timestamp_with_tct, get_days_since, is_management, plural
 from utils.torn_api import fetch_faction_members
 from features.event_ui import EventTypeView
 from config import (
@@ -656,7 +656,7 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
                     f'{s.get("issued_by", "?")}'
                     for s in sorted(out, key=lambda x: x.get('issued_at', 0)))
                 await interaction.followup.send(embed=create_embed(
-                    title=f'\u23f3 {len(out)} strike(s) awaiting notice',
+                    title=f'\u23f3 {plural(len(out), "strike")} awaiting notice',
                     description=(f'{body}\n\n-# Use the "Mark as told" button '
                                  f'on the original message once the member has '
                                  f'been spoken to.')[:4000],
@@ -718,15 +718,15 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
                     description=f'Nobody has an active strike. {CLEARS_NOTE}',
                     color=EMBED_COLOR_SUCCESS), ephemeral=True)
                 return
-            footer = (f'\n\n-# {CLEARS_NOTE} {len(sm.pending)} candidate(s) '
-                      f'waiting on a decision, {len(sm.awaiting_notice())} '
-                      f'strike(s) awaiting notice. Full record: view Member.')
+            footer = (f'\n\n-# {CLEARS_NOTE} {plural(len(sm.pending), "candidate")} '
+                      f'waiting on a decision, '
+                      f'{plural(len(sm.awaiting_notice()), "strike")} awaiting notice. Full record: view Member.')
             # Fresh roster (cached ~30s) so people who left are tagged even
             # before the next daily check; None on failure tags nobody.
             members = await fetch_faction_members()
             roster = {str(t) for t in members} if members else None
             body = ledger_summary(sm, roster_ids=roster)
-            head = f'{len(counts)} member(s) with active strikes.\n\n'
+            head = f'{plural(len(counts), "member")} with active strikes.\n\n'
             if len(head) + len(body) + len(footer) > 4000:
                 body = ledger_summary(sm, reason_len=30, roster_ids=roster)
             await interaction.followup.send(embed=create_embed(
@@ -1108,7 +1108,7 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
                     count = stakeout_manager.get_stakeout_count()
                     if count > 0:
                         await stakeout_manager.check_all_stakeouts()
-                        note = f'Checked **{count}** stakeout target(s). Any updates posted to their channel.'
+                        note = f'Checked **{plural(count, "stakeout target")}**. Any updates posted to their channel.'
                     else:
                         note = 'No stakeout targets active.'
                     color = EMBED_COLOR_SUCCESS

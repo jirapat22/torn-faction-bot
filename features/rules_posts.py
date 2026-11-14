@@ -29,7 +29,7 @@ import discord
 from discord import app_commands
 
 from config import MANAGEMENT_CHANNEL_ID, RULES_CHANNEL_ID
-from utils.helpers import is_management, load_json, save_json
+from utils.helpers import is_management, load_json, save_json, plural
 
 logger = logging.getLogger(__name__)
 
@@ -170,7 +170,7 @@ class RulesPosts:
                     await msg.edit(content=content, allowed_mentions=discord.AllowedMentions.none())
                     edited += 1
             await self._ensure_confirm(msgs[-1] if msgs else None)
-            return f'{edited} post(s) updated in place.'
+            return f'{plural(edited, "post")} updated in place.'
 
         # Repost everything: delete whatever of ours is left, then post in order.
         for mid in ids:
@@ -185,7 +185,7 @@ class RulesPosts:
         self.data['message_ids'] = new_ids
         self.save()
         await self._ensure_confirm(last)
-        return f'{len(new_ids)} post(s) posted fresh.'
+        return f'{plural(len(new_ids), "post")} posted fresh.'
 
     async def _ensure_confirm(self, msg):
         """The ✅ members click to confirm they read the rules, on the last post."""

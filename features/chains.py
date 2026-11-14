@@ -550,7 +550,7 @@ class ChainTracker:
                 )
             header = f'**{chain_count} Chains (last 24h)**'
             if chains_with_data < chain_count:
-                header += f'\nMember breakdown from {chains_with_data} chain(s) · older chains only show totals'
+                header += f'\nMember breakdown from {plural(chains_with_data, "chain")} · older chains only show totals'
             if not aggregated_data.get('chains_list_ok', True):
                 # Say the total is short rather than present a quietly low
                 # number as the whole picture.

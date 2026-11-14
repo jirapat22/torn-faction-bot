@@ -13,7 +13,7 @@ Features:
 import asyncio
 import discord
 from datetime import datetime
-from utils.helpers import load_json, save_json, create_embed, format_timestamp, get_current_timestamp
+from utils.helpers import load_json, save_json, create_embed, format_timestamp, get_current_timestamp, plural
 from utils.torn_api import fetch_faction_data, fetch_faction_data_v2, fetch_faction_attacks
 from config import (
     WAR_CHANNEL_ID,
@@ -2229,7 +2229,7 @@ class WarTracker:
 
             name = (st.get('name') or m.get('name') or f'ID:{tid}')
             detail = (f'{taken} hits taken against {made} made in war '
-                      f'#{war_id}, {rec["streak"]} war(s) in a row.')
+                      f'#{war_id}, {plural(rec["streak"], "war")} in a row.')
 
             if not rec.get('warned'):
                 rec['warned'] = True
@@ -2378,7 +2378,7 @@ class WarTracker:
 
         if sm:
             await channel.send(embed=create_embed(
-                title=f'\u2696\ufe0f War #{war_id} \u00b7 {len(candidates)} strike candidate(s)',
+                title=f'\u2696\ufe0f War #{war_id} \u00b7 {plural(len(candidates), "strike candidate")}',
                 description='Each one below has its own Issue / Dismiss '
                             'buttons. Nothing is recorded until someone clicks, '
                             'and a dismissal is remembered.',
@@ -2505,7 +2505,7 @@ class WarTracker:
                 f'Set revives to **nobody** before the war starts.\n\n'
                 + '\n'.join(lines))
         if unknown:
-            desc += (f'\n\n-# {unknown} member(s) could not be read this pass '
+            desc += (f'\n\n-# {plural(unknown, "member")} could not be read this pass '
                      f'and are not listed either way.')
         desc += ('\n-# A revived member goes straight back to being farmed, '
                  'which is where most of our points bleed.')

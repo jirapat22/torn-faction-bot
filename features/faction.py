@@ -9,7 +9,7 @@ Features:
 
 import discord
 from discord import app_commands
-from utils.helpers import create_embed, is_management
+from utils.helpers import create_embed, is_management, plural
 from utils.torn_api import fetch_faction_data, fetch_any_faction_data, fetch_ffscouter_stats
 from config import (
     TORN_FACTION_ID,
@@ -395,9 +395,9 @@ def _build_threat_embed(enemy_members, own_members, ff_data, has_ff,
     desc += f'**✅ Our Top Fighters:**\n```\n{own_table}\n```\n'
 
     if avoid_count:
-        desc += f'\n> **{avoid_count} member(s) ◀ AVOID**. Outstat your top 3. Use your strongest members to hospital them, then leave them alone.'
+        desc += f'\n> **{plural(avoid_count, "member")} ◀ AVOID**. Outstat your top 3. Use your strongest members to hospital them, then leave them alone.'
     if caution_count:
-        desc += f'\n> **{caution_count} member(s) ◀ CAUTION**. Above your faction average. Approach selectively.'
+        desc += f'\n> **{plural(caution_count, "member")} ◀ CAUTION**. Above your faction average. Approach selectively.'
 
     if avoid_count >= 5:
         color = EMBED_COLOR_CRITICAL

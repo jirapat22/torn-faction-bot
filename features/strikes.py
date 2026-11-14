@@ -372,7 +372,7 @@ class StrikeManager:
         # Only worth saying when there IS a record. "0 active strike(s)
         # already" is noise on what is usually a first offence, and it buries
         # the line that matters when somebody genuinely is a repeat.
-        history = (f'{prior} active strike(s) already. ' if prior else '')
+        history = (f'{plural(prior, "active strike")} already. ' if prior else '')
         embed = create_embed(
             title=f'⚖️ {STRIKE_TYPES.get(stype, stype)}',
             description=(f'**{torn_name}** '

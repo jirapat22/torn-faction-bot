@@ -14,7 +14,7 @@ import asyncio
 from discord import app_commands
 from discord.ext import tasks
 from datetime import datetime, timezone
-from utils.helpers import load_json, save_json, create_embed, is_management, TORN_LINK_HOW
+from utils.helpers import load_json, save_json, create_embed, is_management, TORN_LINK_HOW, plural
 from utils.torn_api import fetch_player_data
 from config import (
     GUILD_ID,
@@ -805,7 +805,7 @@ async def setup_verification_commands(bot, verification_system: VerificationSyst
 
             if not confirm:
                 await interaction.followup.send(embed=create_embed(
-                    title=f'\U0001f9f9 {len(dead)} dead record(s) · nothing removed yet',
+                    title=f'\U0001f9f9 {plural(len(dead), "dead record")} · nothing removed yet',
                     description=(f'{listing}\n\nEach one is off the faction '
                                  f'roster **and** not in this server.\n'
                                  f'-# Run `/verify prune confirm:True` to clear '

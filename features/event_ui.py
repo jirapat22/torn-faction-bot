@@ -10,7 +10,7 @@ Also auto-announces a created event to the channel matching its type.
 
 import discord
 from datetime import datetime, timezone, timedelta
-from utils.helpers import create_embed, is_management
+from utils.helpers import create_embed, is_management, plural
 from utils.when import parse_when, WhenError
 from config import (
     EMBED_COLOR_INFO,
@@ -153,7 +153,7 @@ class CommonEventModal(discord.ui.Modal):
                 confirm_desc = (f'**{name}**\n\n'
                                f'📅 Date: {date}\n'
                                f'{time_line}\n'
-                               f'⏱️ Duration: {duration} hour(s)\n\n'
+                               f'⏱️ Duration: {plural(duration, "hour")}\n\n'
                                f'Event ID: {event.id}')
 
             confirm_embed = create_embed(
@@ -266,7 +266,7 @@ class CustomEventModal(discord.ui.Modal):
                 confirm_desc = (f'**{name}**\n\n'
                                f'📅 Date: {date}\n'
                                f'{time_line}\n'
-                               f'⏱️ Duration: {duration} hour(s) (placeholder)\n\n'
+                               f'⏱️ Duration: {plural(duration, "hour")} (placeholder)\n\n'
                                f'⚠️ **Manual End Event**\n'
                                f'Right-click event → End Event when complete\n\n'
                                f'Event ID: {event.id}')
@@ -274,7 +274,7 @@ class CustomEventModal(discord.ui.Modal):
                 confirm_desc = (f'**{name}**\n\n'
                                f'📅 Date: {date}\n'
                                f'{time_line}\n'
-                               f'⏱️ Duration: {duration} hour(s)\n\n'
+                               f'⏱️ Duration: {plural(duration, "hour")}\n\n'
                                f'Event ID: {event.id}')
 
             confirm_embed = create_embed(

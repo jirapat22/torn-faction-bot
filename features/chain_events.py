@@ -34,7 +34,7 @@ import time
 
 import discord
 
-from utils.helpers import save_json
+from utils.helpers import save_json, plural
 
 logger = logging.getLogger(__name__)
 
@@ -725,7 +725,7 @@ class ShortfallView(discord.ui.View):
             child.disabled = True
         await interaction.edit_original_response(view=self)
         await interaction.followup.send(
-            f'⚖️ Filed **{filed}** strike candidate(s) in the '
+            f'⚖️ Filed **{plural(filed, "strike candidate")}** in the '
             f'strikes channel. Each still needs its own confirmation there.')
 
     @discord.ui.button(label='Dismiss all', style=discord.ButtonStyle.secondary)

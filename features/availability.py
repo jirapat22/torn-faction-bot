@@ -17,7 +17,7 @@ import discord
 from discord import app_commands
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict
-from utils.helpers import load_json, save_json, create_embed, is_management
+from utils.helpers import load_json, save_json, create_embed, is_management, plural
 from features.activity_profile import format_window
 from config import (
     AVAILABILITY_CHANNEL_ID,
@@ -1531,7 +1531,7 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
                 title = f"Your Availability – {poll['start_date']} to {poll['end_date']}"
 
             embed = create_embed(title=title, description='\n'.join(selected_blocks), color=EMBED_COLOR_SUCCESS)
-            embed.set_footer(text=f"You've selected {len(selections)} time block(s)")
+            embed.set_footer(text=f"You've selected {plural(len(selections), 'time block')}")
             await interaction.response.send_message(embed=embed, ephemeral=True)
 
         # ── List ──
@@ -1596,7 +1596,7 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
                         title='Not deleted',
                         description=(
                             f"The poll for **{poll['start_date']}** holds "
-                            f'**{answered}** answer(s). Those are what exempt '
+                            f'**{plural(answered, "answer")}**. Those are what exempt '
                             f'people from the absence strike, and deleting '
                             f'the poll deletes them permanently.\n\n'
                             f'-# Run it again with `confirm:True` if you '
@@ -1651,7 +1651,7 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
             embed = create_embed(
                 title='📊 Faction Coverage',
                 description=(
-                    f'Based on {member_count} member(s) with enough tracked history.\n\n'
+                    f'Based on {plural(member_count, "member")} with enough tracked history.\n\n'
                     f'**Best overlap window:** {format_window(best_start, best_end)} UTC · '
                     f'~{best_count}/{member_count} usually active\n'
                     f'**Quietest window:** {format_window(quiet_start, quiet_end)} UTC · '
@@ -1717,7 +1717,7 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
                 consistency_text = ''
                 if consistency and consistency[1] > 0:
                     active, tracked = consistency
-                    consistency_text = f'\n\nActive {active}/{tracked} of the last {tracked} tracked day(s).'
+                    consistency_text = f'\n\nActive {active}/{tracked} of the last {plural(tracked, "tracked day")}.'
 
                 embed = create_embed(
                     title=f'🕒 Activity · {name}',

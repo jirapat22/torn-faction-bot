@@ -27,7 +27,7 @@ from datetime import datetime, timedelta, timezone
 
 import discord
 
-from utils.helpers import load_json, save_json, create_embed
+from utils.helpers import load_json, save_json, create_embed, plural
 from config import (
     CLEANUP_DAYS,
     CLEANUP_MAX_PER_RUN,
@@ -197,11 +197,11 @@ class CleanupManager:
         for stat in results.values():
             bits = []
             if stat['bot']:
-                bits.append(f'{stat["bot"]} bot message(s)')
+                bits.append(f'{plural(stat["bot"], "bot message")}')
             if stat['joins']:
-                bits.append(f'{stat["joins"]} join notice(s)')
+                bits.append(f'{plural(stat["joins"], "join notice")}')
             if stat.get('human'):
-                bits.append(f'{stat["human"]} member message(s)')
+                bits.append(f'{plural(stat["human"], "member message")}')
             kept_why = ('pinned posts' if stat.get('human')
                         else 'members\' own messages and pinned posts')
             lines.append(
@@ -210,7 +210,7 @@ class CleanupManager:
                 + f'\n-# kept {stat["kept"]} ({kept_why})'
                 + (f', {stat["left"]} still queued' if stat['left'] else ''))
 
-        desc = (f'Removed **{total}** message(s) older than {CLEANUP_DAYS} '
+        desc = (f'Removed **{plural(total, "message")}** older than {CLEANUP_DAYS} '
                 f'days.\n\n' + '\n'.join(lines))
         if left:
             desc += (f'\n\n-# {left} more are over the limit of '

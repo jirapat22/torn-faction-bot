@@ -23,7 +23,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, List
 from collections import defaultdict
 
-from utils.helpers import load_json, save_json, create_embed, is_management, next_occurrence_of_hour
+from utils.helpers import load_json, save_json, create_embed, is_management, next_occurrence_of_hour, plural
 from utils.torn_api import fetch_player_data
 from config import (
     EMBED_COLOR_INFO,
@@ -1124,7 +1124,7 @@ async def setup_stakeout_commands(bot, manager: StakeoutManager, enemy_group):
 
         embed = create_embed(
             title='Stakeouts Cleared',
-            description=f'Cleared {count} stakeout(s) and all history data.',
+            description=f'Cleared {plural(count, "stakeout")} and all history data.',
             color=EMBED_COLOR_SUCCESS
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)

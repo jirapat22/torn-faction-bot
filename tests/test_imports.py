@@ -5155,7 +5155,7 @@ def test_strikes_never_announce_that_there_are_none():
     mgr.add('2', 'Repeat', 'bonus', 'earlier')
     sent.clear()
     asyncio.run(mgr.post_candidate('2', 'Repeat', 'oc', 'again'))
-    assert '1 active strike(s) already' in sent[0].description, sent[0].description
+    assert '1 active strike already' in sent[0].description, sent[0].description
 
     # --- an empty week posts nothing, but is still stamped ---
     quiet = StrikeManager(bot=FakeBot())
@@ -8249,7 +8249,7 @@ def test_rules_posts_links_publish_and_takeover():
     assert len(first_ids) == 2 and ('react', first_ids[-1], '✅') in ch.log
 
     store.data['posts'][1] = 'post B v2'
-    assert asyncio.run(store.publish()) == '1 post(s) updated in place.'
+    assert asyncio.run(store.publish()) == '1 post updated in place.'
     assert store.data['message_ids'] == first_ids and ch.msgs[first_ids[1]].content == 'post B v2' + rp.SEPARATOR
 
     del ch.msgs[first_ids[0]]                       # someone deleted post 1 by hand
@@ -9473,6 +9473,28 @@ def test_link_steps_spelled_out_and_management_commands_hidden():
         assert 'default_permissions(kick_members=True)' in src[max(0, i - 300):i], name
 
 
+def test_no_member_facing_s_plurals_left():
+    """
+    UX re-audit 15/11/2026: "1 member(s) are", "nudged at 1 days" and
+    "1 post(s)" were still in posts after the first pass. Counts in
+    user-facing text go through utils.helpers.plural(). Log lines and the
+    AI's internal fact text don't count.
+    """
+    import glob, re
+    pat = re.compile(r"\{[^{}]+\}(?:\*\*)? [a-z]+(?: [a-z]+)?\(s\)")
+    bad = []
+    for path in glob.glob('features/*.py'):
+        if path.endswith('ask_ai.py'):
+            continue
+        lines = open(path, encoding='utf-8').read().split('\n')
+        for i, line in enumerate(lines):
+            if pat.search(line) and 'logger.' not in ' '.join(lines[max(0, i - 4):i + 1]):
+                bad.append(f'{path}:{i + 1}')
+    assert not bad, bad
+    from utils.helpers import plural
+    assert plural(1, 'day') == '1 day' and plural(2, 'time block') == '2 time blocks'
+
+
 def test_general_notice_question_only_lists_recent_posts():
     """
     Pat, 08/11/2026: "did someone post a leave notice?" quoted a notice from
@@ -9814,6 +9836,7 @@ if __name__ == '__main__':
     test_days_in_faction_capped_and_torn_events_announced_once()
     test_torn_event_start_post_and_announcement_pings()
     test_link_steps_spelled_out_and_management_commands_hidden()
+    test_no_member_facing_s_plurals_left()
     test_ux_audit_wording_fixes()
     test_reaudit5_poll_weekdays_oc_member_roast_and_scores()
     test_reaudit5_round2_names_bans_typos_leavers_and_past_enemies()
