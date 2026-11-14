@@ -977,6 +977,7 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
         )
         await interaction.response.send_message(embed=embed, view=EventTypeView(), ephemeral=True)
 
+    @app_commands.default_permissions(kick_members=True)   # management only: hidden from members' / menu
     @bot.tree.command(name='test', description='[Management] Manually trigger a background feature check')
     @app_commands.describe(feature='Which feature to test')
     @app_commands.choices(feature=[

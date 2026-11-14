@@ -9466,7 +9466,7 @@ def test_link_steps_spelled_out_and_management_commands_hidden():
     hidden = {'announce': 'features/commands.py', 'createevent': 'features/commands.py',
               'strikes': 'features/commands.py', 'faction': 'features/faction.py',
               'rolesync': 'features/roles.py', 'rules': 'features/rules_posts.py',
-              'verify': 'features/verification.py'}
+              'verify': 'features/verification.py', 'test': 'features/commands.py'}
     for name, path in hidden.items():
         src = open(path, encoding='utf-8').read()
         i = re.search(r"name=['\"]%s['\"]" % name, src).start()
