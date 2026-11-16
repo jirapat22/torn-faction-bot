@@ -22,12 +22,18 @@ Those are all channels you would cite in a dispute, so nothing in them is
 touched regardless of age.
 """
 
+import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 
 import discord
 
 from utils.helpers import load_json, save_json, create_embed, plural
+
+# Pause between single deletes. Discord allows roughly 5 deletes per 5 seconds per channel; going
+# flat out made ~100 "We are being rate limited ... DELETE ... 429" warnings in the log every week
+# (15/11/2026). One second apart stays under the limit and a 100-message run still takes < 2 min.
+DELETE_GAP_S = 1.0
 from config import (
     CLEANUP_DAYS,
     CLEANUP_MAX_PER_RUN,
@@ -152,6 +158,7 @@ class CleanupManager:
                                    and msg.author.id == me.id)
                     try:
                         await msg.delete()
+                        await asyncio.sleep(DELETE_GAP_S)
                     except discord.NotFound:
                         continue            # already gone, fine
                     except discord.Forbidden:

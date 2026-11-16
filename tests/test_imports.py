@@ -4774,6 +4774,8 @@ def test_cleanup_only_ever_deletes_the_bots_own_noise():
     import asyncio
     import discord
     from features.cleanup import CleanupManager
+    import features.cleanup as _cleanup
+    _cleanup.DELETE_GAP_S = 0          # the real 1 s pause between deletes would only slow the test
     from config import (WELCOME_CHANNEL_ID, WAR_TRACKER_CHANNEL_ID,
                         STRIKES_CHANNEL_ID, WAR_MANAGEMENT_CHANNEL_ID,
                         INACTIVITY_ALERTS_CHANNEL_ID)
@@ -4857,6 +4859,8 @@ def test_cleanup_sweeps_once_a_week_and_reports_what_it_took():
     from datetime import datetime, timezone
     import features.cleanup as cleanup_mod
     from features.cleanup import CleanupManager
+    import features.cleanup as _cleanup
+    _cleanup.DELETE_GAP_S = 0          # the real 1 s pause between deletes would only slow the test
 
     saved = {}
     cleanup_mod.load_json = lambda path, default=None: dict(saved) or (default or {})

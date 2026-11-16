@@ -89,16 +89,31 @@ def _normalise(token):
     return token.lstrip('0') or '0'
 
 
+_DATE = re.compile(r'\b(\d{1,2})/(\d{1,2})(?:/(\d{2,4}))?\b')
+_MONTHS = 'jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec'
+# "28th", "28 Oct", "Oct 28": a day of the month written in words around it
+_DAY_WORDS = re.compile(rf'\b(\d{{1,2}})(?:st|nd|rd|th)\b|\b(\d{{1,2}})\s+(?:{_MONTHS})[a-z]*\b|'
+                        rf'\b(?:{_MONTHS})[a-z]*\s+(\d{{1,2}})\b', re.I)
+
+
 def numbers_in(text):
     """
     Every number written in `text`, as normalised strings.
 
     Thousands commas are dropped first ("1,952" is one number, not 1 and 952).
-    Dates and times split into their parts ("28/10/2026" -> 28, 10, 2026),
-    which is fine because the facts are written the same way.
+    Dates stay whole: "28/10/2026" -> "28/10" and "28/10/2026", plus "day:28" so "the 28th" or
+    "28 Oct" can match it. They used to split into 28, 10 and 2026, so on the 16th of any month a
+    made-up "16 hits" passed as real because the records said "16/11/2026" (test failed 16/11/2026).
     """
     text = re.sub(r'(?<=\d),(?=\d{3}\b)', '', text or '')
-    found = {_normalise(t) for t in re.findall(r'\d+(?:\.\d+)?', text)}
+    found = set()
+    for d, m, y in _DATE.findall(text):
+        found |= {f'{int(d)}/{int(m)}', f'day:{int(d)}'} | ({f'{int(d)}/{int(m)}/{y}'} if y else set())
+    text = _DATE.sub(' ', text)
+    for a, b, c in _DAY_WORDS.findall(text):
+        found.add(f'day:{int(a or b or c)}')
+    text = _DAY_WORDS.sub(' ', text)
+    found |= {_normalise(t) for t in re.findall(r'\d+(?:\.\d+)?', text)}
     cleaned = _NOT_A_NUMBER.sub(' ', text.lower())
     for word in re.findall(r'[a-z]+', cleaned):
         if word in NUMBER_WORDS:
@@ -123,7 +138,11 @@ def allowed_numbers(*sources):
 def unsupported_numbers(answer, *sources):
     """Numbers in the answer that none of the sources contain (sorted)."""
     ok = allowed_numbers(*sources)
-    return sorted(numbers_in(answer) - ok, key=lambda s: float(s))
+    # A plain number in the facts also allows it as a day ("day 28" in a table, "the 28th" in the answer)
+    ok |= {f'day:{n}' for n in ok if n.isdigit()}
+    bad = numbers_in(answer) - ok
+    return sorted((n.replace('day:', '') + ('th' if n.startswith('day:') else '') for n in bad),
+                  key=lambda s: float(re.sub(r'[^\d.]', '', s.split('/')[0]) or 0))
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -127,3 +127,15 @@ def test_bulksync_is_not_callable_unattended_with_nickname_trust():
         'bot.py must not call bulksync_members - nickname matching is not identity '
         'proof and must not run unattended'
     )
+
+
+def test_dates_dont_let_made_up_numbers_through():
+    """16/11/2026: the records said '16/11/2026', so an invented '16 hits' looked real. Dates now count
+    as whole dates; a day written as '16th' or '16 Nov' still matches the record's date."""
+    from features.ask_ai import unsupported_numbers
+    facts = "War 7 vs Kids (16/11/2026): Bob attacks 12, defends 4"
+    assert unsupported_numbers("Bob made 16 hits.", facts) == ["16"]
+    assert unsupported_numbers("Bob made 12 hits on 16/11.", facts) == []
+    assert unsupported_numbers("The war on the 16th: Bob made 12 hits.", facts) == []
+    assert unsupported_numbers("On 16 Nov Bob defended 4 times.", facts) == []
+    assert unsupported_numbers("On the 17th Bob made 12.", facts) == ["17th"]
