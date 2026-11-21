@@ -241,8 +241,8 @@ class LiveTools:
         if scan is None:
             return self.facts._notice("Torn isn't answering right now, so I can't check revives.")
         on = [n for n, _ in scan['on']]
-        lines = [f"REVIVE CHECK (live from Torn, checked just now): {len(on)} of {scan['total']} members "
-                 f"can still be revived" + (f": {', '.join(on)}" if on else '.')]
+        lines = [f"\U0001fa78 **Revive check** (live from Torn, just now): **{len(on)} of {scan['total']}** members "
+                 f"can still be revived" + (f": {', '.join(on)}" if on else '. All clear!')]
         if scan.get('unknown'):
             lines.append(f"- Could not check {scan['unknown']} (Torn didn't answer for them).")
         if on:
