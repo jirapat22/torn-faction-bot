@@ -9563,6 +9563,49 @@ def test_revive_check_by_chat_is_info_only():
     assert "can't check" in down and 'nobody' not in down.lower()
 
 
+def test_torn_lookup_items_wiki_pages_and_link():
+    """
+    Pat, 22/11/2026: @ApexPunk answers how Torn works from (a) Torn's item
+    list, (b) hand-saved wiki pages, (c) always a wiki search link.
+    """
+    import os, tempfile
+    from features.torn_wiki import slim_items, find_items, load_pages, lookup_text, search_link
+    from features.ask_ai import game_question, not_recorded_note
+
+    items = slim_items({
+        '1': {'name': 'Lollipop', 'type': 'Candy', 'effect': 'Increases happiness by 25.',
+              'description': 'Tasty fruity candy. Many flavours.', 'buy_price': 100, 'market_value': 9},
+        '2': {'name': 'Blood Bag : O+', 'type': 'Medical', 'effect': 'Reduces hospital time by 120 mins.'},
+        '3': {'name': 'Blood Bag', 'type': 'Medical', 'effect': 'Empty.'},
+    })
+    assert 'buy_price' not in items['1'] and 'market_value' not in items['1'], 'no prices, ever'
+    assert [i['name'] for i in find_items('what does a lollipop do?', items)] == ['Lollipop']
+    assert find_items('what does a Blood Bag : O+ do', items)[0]['name'] == 'Blood Bag : O+'
+    assert find_items('how does travel work', items) == []
+
+    with tempfile.TemporaryDirectory() as d:
+        open(os.path.join(d, 'travel.md'), 'w').write(
+            '# Travel\nSource: https://wiki.torn.com/wiki/Travel\n\n## Flight times\nMexico takes 26 minutes.\n'
+            '\n## Items abroad\nYou can buy plushies.\n')
+        open(os.path.join(d, 'README.md'), 'w').write('# not a page')
+        pages = load_pages(d)
+        assert [p[0] for p in pages] == ['Travel']
+        text, found = lookup_text('how long are flight times when I travel?', items, pages)
+        assert found and 'Mexico takes 26 minutes' in text and 'WIKI SEARCH LINK' in text
+        text, found = lookup_text('how do crimes work', items, pages)
+        assert not found and 'wiki.torn.com' in text, 'nothing saved: the link is the answer'
+
+    assert search_link('how does travel work?').endswith('search=travel')
+
+    class F:
+        def _known_names(self):
+            return {'1': 'Ikaros22'}
+    assert game_question('how does travel work?', F())
+    assert not game_question('how active is Ikaros22?', F())
+    assert not_recorded_note('what does a lollipop item do?') == '', 'item effects are not "not recorded"'
+    assert 'items' in not_recorded_note("what's in the faction armoury?")
+
+
 def test_general_notice_question_only_lists_recent_posts():
     """
     Pat, 08/11/2026: "did someone post a leave notice?" quoted a notice from
@@ -9906,6 +9949,7 @@ if __name__ == '__main__':
     test_link_steps_spelled_out_and_management_commands_hidden()
     test_flight_alerts_compact_with_flags()
     test_revive_check_by_chat_is_info_only()
+    test_torn_lookup_items_wiki_pages_and_link()
     test_no_member_facing_s_plurals_left()
     test_ux_audit_wording_fixes()
     test_reaudit5_poll_weekdays_oc_member_roast_and_scores()

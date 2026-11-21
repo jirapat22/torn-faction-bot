@@ -227,6 +227,16 @@ class LiveTools:
             return await self._revives()
         return 'Pick one of: war, chain, chain_event, flights, oc, revives.'
 
+    async def torn_lookup(self, query):
+        """Items (Torn's API), saved wiki pages and a wiki search link
+        (features/torn_wiki.py). Money and Xanax lines are dropped like
+        everywhere else in chat (Pat's rule)."""
+        from features.torn_wiki import refresh_items, load_pages, lookup_text
+        items = await refresh_items(os.path.join(self.data_dir, 'torn_items.json'))
+        text, found = lookup_text(query, items, load_pages())
+        text = '\n'.join(l for l in text.split('\n') if not FORBIDDEN_LINE.search(l))
+        return self._found(text) if found else text
+
     async def _revives(self):
         """
         Who can still be revived, live from Torn (Pat, 22/11/2026: "dont ping
@@ -644,5 +654,14 @@ LIVE_SPECS = [
             'query': {'type': 'string'}},
             'required': ['what']}}},
 ]
+
+LIVE_SPECS.append({'type': 'function', 'function': {
+    'name': 'torn_lookup',
+    'description': 'How Torn itself works (not our faction): what an item does (from Torn\'s official item '
+                   'list), game mechanics from saved Torn wiki pages, plus a wiki search link. Use it for '
+                   '"what does X do", "how does Y work in Torn". Never answer game questions from memory.',
+    'parameters': {'type': 'object', 'properties': {
+        'query': {'type': 'string', 'description': 'The item or topic, in the person\'s words'}},
+        'required': ['query']}}})
 
 LIVE_TOOL_NAMES = {s['function']['name'] for s in LIVE_SPECS}

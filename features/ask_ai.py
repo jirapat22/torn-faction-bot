@@ -899,6 +899,8 @@ class FactBook:
                 return await lt.live_status(args.get('what', ''))
             if name == 'members_extra':
                 return await lt.members_extra(args.get('what', ''), str(args.get('name') or ''))
+            if name == 'torn_lookup':
+                return await lt.torn_lookup(str(args.get('query') or ''))
             return await lt.faction_extra(args.get('what', ''), str(args.get('query') or ''))
         except Exception as e:
             logger.exception(f'ask_ai: tool {name} failed')
@@ -1068,6 +1070,7 @@ CAPABILITIES = (
     '- Torn events (official dates and effects) and our weekly war, chain and happy jump\n'
     '- right now: the war score, the chain, the chain event (who is short), who is flying or abroad, '
     'who can still be revived\n'
+    '- how Torn works: what an item does (Torn\'s official list), saved Torn wiki pages, and a wiki search link\n'
     '- leave notices (quoted word for word), timezones, new members on trial, the availability poll\n'
     '- war win/loss trends, the target board, the enemy watchlist, another faction\'s overview\n'
     'I can also, after you press ✅ on a card: add/remove targets, start/end/cancel a chain event, '
@@ -1153,7 +1156,8 @@ def system_prompt(announce=False, acting=False):
         '- Faction-wide chain totals (chains this week, hits, respect) are in faction_table.\n'
         '- For what is happening NOW (war score, chain, chain event, flights, who is in an OC right now) call live_status. For leave notices, '
         'timezones, trials and the availability poll call members_extra; never judge whether a notice covers a '
-        'date. War trends, targets, the enemy watchlist and other factions: faction_extra.\n'
+        'date. War trends, targets, the enemy watchlist and other factions: faction_extra. How Torn itself '
+        'works (what an item does, game mechanics): torn_lookup, and always include the wiki search link it gives.\n'
         '- Never talk about money, items, payouts (any kind), Xanax or battle stats, even if asked: call '
         'cannot_answer.\n'        '- For questions about Torn events ("what is X?", "what\'s coming up?"), call torn_events and answer '
         'with each event\'s DISPLAY line copied exactly, one per line, nothing else added.\n'
@@ -1418,7 +1422,10 @@ NOT_RECORDED = [
     (re.compile(r'battle ?stats?|\bbs\b|strength|defen[cs]e|\bspeed\b|dexterity|\bstats? estimate', re.I),
      'battle stats (strength, defence, speed, dexterity)'),
     (re.compile(r'net ?worth|\bmoney\b|\bcash\b|\bbank\b', re.I), 'money or networth'),
-    (re.compile(r'\bitems?\b|inventory|\barmou?ry\b', re.I), 'items or the armoury'),
+    # Members' items, not what an item DOES: "what does a Lollipop do?" is a
+    # torn_lookup question (22/11/2026).
+    (re.compile(r'inventor\w*|\barmou?ry\b|\b(?:our|faction|their|his|her|my) items?\b', re.I),
+     'items or the armoury'),
     # Pat's rule (07/11/2026): Xanax stays out completely, use AND payouts.
     (re.compile(r'\bxan(ax)?s?\b|refills?|energy cans?', re.I),
      'Xanax use'),
@@ -1621,6 +1628,25 @@ def raw_records_text(facts, question='', limit=1500):
         body.append(line)
         size += len(line) + 1
     return intro + '```\n' + '\n'.join(body) + '\n```'
+
+
+# "How does travel work?", "what does a Lollipop do?": a question about Torn
+# itself. When the bot has nothing on it, the answer is a wiki search link
+# rather than "not recorded" (SirAua, 22/11/2026).
+GAME_Q = re.compile(r"\b(?:how (?:does|do|to|can|long)|what (?:does|do|is|are|'s)|what's|whats|where (?:do|can|is)|"
+                    r"explain|tell me about)\b", re.I)
+
+
+def game_question(question, facts):
+    """A how/what question about the game, not about a member or our records."""
+    return bool(GAME_Q.search(question or '')) and not names_in(question, facts) \
+        and not DATA_WORDS.search(question or '') and not RULES_CUE.search(question or '')
+
+
+def wiki_fallback(question):
+    from features.torn_wiki import search_link
+    return (f"I don't have that one saved, boss 🤷 Try the Torn wiki: <{search_link(question)}>\n"
+            "-# Ask management if a saved wiki page would help; they can add it.")
 
 
 UNSURE_TEXT = ("Not sure what you're after, boss 🤔 Ask me about a member, a war, chains, OCs, strikes "
@@ -2179,6 +2205,8 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
             close = near_names(question, facts) if not facts.found_any else []
             if close:
                 return Answer(did_you_mean(close), pname, '', True, took(), kind='ask')
+            if game_question(question, facts):
+                return Answer(wiki_fallback(question), pname, '', True, took(), kind='ask')
             if unsupported_numbers(facts.final, *sources()):
                 return Answer(UNSURE_TEXT, pname, '', True, took(), kind='ask')
             return Answer(tidy_answer(facts.final, [], ''), pname, '', True, took(), kind='ask')
@@ -2235,6 +2263,8 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
                                   f'"how active is {named[0]}?"', pname, '', True, took(), kind='ask')
                 return Answer(f"Can't do that one by chat, boss 🤷 I can pull {who}'s records though. Try "
                               f'"how active is {named[0]}?"', pname, '', True, took(), kind='ask')
+            if game_question(question, facts):
+                return Answer(wiki_fallback(question), pname, '', True, took(), kind='ask')
             return Answer(UNSURE_TEXT, pname, '', True, took(), kind='ask')
 
         # 2b. Event questions answered only from the event tool: the bot writes
@@ -2300,6 +2330,11 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
         # 5. Part of the question couldn't be answered (e.g. one of two names
         #    was wrong): say so under the answer, in the bot's words.
         text = tidy_answer(text, facts.notices, question)
+        # The wiki search link always reaches the person when a Torn game
+        # question was looked up, even if the AI left it out (c, 22/11/2026).
+        if any(n == 'torn_lookup' for n, _, _ in used) and 'wiki.torn.com' not in text:
+            from features.torn_wiki import search_link
+            text += f'\n-# More on the Torn wiki: <{search_link(question)}>'
         return Answer(text, pname, _facts_text(used), True, took())
     logger.warning(f'ask_ai: no AI could answer: {"; ".join(problems)}')
     return Answer("Both my brains are offline right now 🔌 (the cloud AI and the one on the Mac). "
