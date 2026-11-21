@@ -9582,6 +9582,8 @@ def test_torn_lookup_items_wiki_pages_and_link():
     assert [i['name'] for i in find_items('what does a lollipop do?', items)] == ['Lollipop']
     assert find_items('what does a Blood Bag : O+ do', items)[0]['name'] == 'Blood Bag : O+'
     assert find_items('how does travel work', items) == []
+    mugs = slim_items({'7': {'name': 'Travel Mug'}, '8': {'name': 'Travel Socks'}})
+    assert find_items('how does travel work in torn?', mugs) == [], 'one shared word is not a match'
 
     with tempfile.TemporaryDirectory() as d:
         open(os.path.join(d, 'travel.md'), 'w').write(

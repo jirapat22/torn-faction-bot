@@ -106,7 +106,9 @@ def find_items(question, items):
         nw = set(words(name))
         if nw and nw <= kw:
             phrase.append(it)
-        elif kw & nw and len(kw & nw) >= max(1, len(nw) - 1):
+        elif len(kw & nw) >= 2 and len(kw & nw) >= len(nw) - 1:
+            # Two shared words at least: one ("travel") pulled in the Travel
+            # Mug and Travel Socks for "how does travel work?" (22/11/2026).
             partial.append(it)
     # Longer exact names first: "Blood Bag : O+" before "Blood Bag".
     exact.sort(key=lambda it: -len(it['name']))
