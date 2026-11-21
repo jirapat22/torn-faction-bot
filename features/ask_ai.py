@@ -2284,6 +2284,15 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
         if used and all(n == 'faction_extra' and str((a or {}).get('what')) == 'enemy_faction'
                         and str(r).startswith('FACTION ') for n, a, r in used):
             return Answer('\n\n'.join(r for _, _, r in used), pname, _facts_text(used), True, took())
+        # Item questions are written by the bot from Torn's own text. The AI
+        # turned "increases booster cooldown by 30 minutes" into "shaves 30
+        # minutes off" (22/11/2026): right number, opposite meaning, which the
+        # number check cannot see.
+        if tools == {'torn_lookup'}:
+            from features.torn_wiki import item_answer
+            written = item_answer(_facts_text(used), question)
+            if written:
+                return Answer(written, pname, _facts_text(used), True, took())
         if tools == {'torn_events'}:
             displays = [l.split('DISPLAY: ', 1)[1] for l in _facts_text(used).split('\n') if 'DISPLAY: ' in l]
             if displays:

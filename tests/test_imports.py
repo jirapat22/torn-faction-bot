@@ -9597,6 +9597,14 @@ def test_torn_lookup_items_wiki_pages_and_link():
 
     assert search_link('how does travel work?').endswith('search=travel')
 
+    # Items are written by the bot, word for word ("increases", never "shaves off")
+    from features.torn_wiki import item_answer
+    raw, _ = lookup_text('how much does a lollipop cost?', items, [])
+    ans = item_answer(raw, 'how much does a lollipop cost?')
+    assert '**Lollipop (Candy)**' in ans and 'Increases happiness by 25.' in ans
+    assert "I don't do prices" in ans and 'wiki.torn.com' in ans
+    assert item_answer('WIKI (Travel): x\nITEM Lollipop', 'q') is None, 'wiki text goes to the AI'
+
     class F:
         def _known_names(self):
             return {'1': 'Ikaros22'}

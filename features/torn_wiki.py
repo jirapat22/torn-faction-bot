@@ -193,3 +193,34 @@ def lookup_text(question, items, pages):
     if not [f for f in found if not f.startswith('(')]:
         return f'Nothing saved about that. {tail}', False
     return '\n'.join(found + [tail]), True
+
+
+PRICE_RX = re.compile(r'\b(?:cost|costs|price|prices|worth|sell|sells|buy for|how much is|value)\b', re.I)
+
+
+def item_answer(raw, question):
+    """
+    The bot's own answer when the lookup found items and no wiki text:
+    Torn's effect text word for word. None when there is wiki text (the AI
+    summarises that) or no item at all.
+    """
+    lines = (raw or '').split('\n')
+    if any(l.startswith('WIKI (') for l in lines):
+        return None
+    found = [l for l in lines if l.startswith('ITEM ')]
+    if not found:
+        return None
+    out = []
+    for line in found[:3]:
+        parts = line.split(' | ')
+        out.append('**' + parts[0][len('ITEM '):] + '**')
+        for part in parts[1:]:
+            label, _, text = part.partition(': ')
+            out.append(f'- {label}: {text}' if text else f'- {part}')
+        out.append('')
+    if len(found) > 3:
+        out.append('Also matching: ' + ', '.join(l.split(' | ')[0][len('ITEM '):] for l in found[3:]))
+    if PRICE_RX.search(question or ''):
+        out.append("-# I don't do prices, money stays out of chat. Check the item market in Torn.")
+    out.append(f'-# From Torn\'s official item list. More on the wiki: <{search_link(question)}>')
+    return '\n'.join(out).strip()
