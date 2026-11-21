@@ -1675,6 +1675,9 @@ def test_flytrack_eta_window_biases_early():
     # Rendering: the countdown tracks the EARLY edge, never the optimistic one
     text = mgr._eta_text(eta_known, early_known)
     assert f'<t:{early_known}:R>' in text and f'<t:{eta_known}:t>' in text
+    # ...and the late edge's countdown too, so a passed early edge never
+    # reads as "landed" while they are still flying (HazyShark, 22/11/2026)
+    assert f'earliest <t:{early_known}:R>' in text and f'latest <t:{eta_known}:R>' in text
     # Without an early edge it degrades to a single time
     assert mgr._eta_text(eta_known, None) == f'<t:{eta_known}:t> (<t:{eta_known}:R>)'
 

@@ -896,7 +896,7 @@ class FlyTracker:
             # Only the countdown here: the full landing window is already in
             # the flight line just above, and printing it twice was half of
             # what made these hard to read.
-            when = (f"lands <t:{dep['early'] or dep['eta']}:R>" if dep['eta']
+            when = (f"lands earliest <t:{dep['early'] or dep['eta']}:R>" if dep['eta']
                     else 'landing time unknown')
             stat = f" ({self._format_bs(enemy_bs)})" if enemy_bs else ''
             profile = f"https://www.torn.com/profiles.php?XID={dep['tid']}"
@@ -1109,9 +1109,15 @@ class FlyTracker:
         otherwise a single time. The relative countdown always tracks the EARLY
         edge, so "in 5 minutes" is the moment to be ready by, never an optimistic
         one that leaves people exposed.
+
+        The LATE edge's countdown is shown too. These messages stay in the
+        channel, and once the early edge passed a lone "(4 minutes ago)" read
+        as "landed" while the enemy was still in the air (HazyShark,
+        22/11/2026). "earliest 4 minutes ago, latest in 17 minutes" stays
+        true for the whole window.
         """
         if early:
-            return f'<t:{early}:t>–<t:{eta}:t> (<t:{early}:R>)'
+            return f'<t:{early}:t>–<t:{eta}:t> (earliest <t:{early}:R>, latest <t:{eta}:R>)'
         return f'<t:{eta}:t> (<t:{eta}:R>)'
 
     def _format_outbound_alert(self, dest: Optional[str], name: str, eta: Optional[int],
