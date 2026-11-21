@@ -2736,19 +2736,21 @@ def test_follow_warning_splits_stronger_from_weaker():
         msgs = asyncio.run(mgr._follow_alerts(deps, 1_000_000))
         assert len(msgs) == 1
         msg = msgs[0]
-        assert 'Stronger than you' in msg and 'Weaker than you' in msg, \
+        assert 'stronger than you' in msg and 'weaker than you' in msg, \
             'the faction asked for the two groups to be separated in the text'
-        assert 'Unknown strength' in msg, 'no estimate fails open into its own band'
+        assert 'strength unknown' in msg, 'no estimate fails open into its own band'
         assert '~20.0b' in msg, 'the estimate is shown so the member can judge'
 
-        # Each enemy must land under the right heading
-        strong_at = msg.index('Stronger than you')
-        unknown_at = msg.index('Unknown strength')
-        weak_at = msg.index('Weaker than you')
-        assert strong_at < msg.index('Monster') < unknown_at, 'Monster is the strong one'
-        assert unknown_at < msg.index('Nameless') < weak_at, 'no estimate -> Unknown'
-        assert msg.index('Middling') > weak_at and msg.index('Weakling') > weak_at, \
-            'both below-par enemies sit under Weaker'
+        # Each enemy carries its own label, strongest first (22/11/2026: one
+        # line per enemy instead of a heading per band).
+        line = {n: next(l for l in msg.split('\n') if n in l)
+                for n in ('Monster', 'Nameless', 'Middling', 'Weakling')}
+        assert 'stronger than you' in line['Monster'], 'Monster is the strong one'
+        assert 'strength unknown' in line['Nameless'], 'no estimate -> unknown'
+        assert 'weaker than you' in line['Middling'] and 'weaker than you' in line['Weakling'], \
+            'both below-par enemies are labelled weaker'
+        assert msg.index('Monster') < msg.index('Nameless') < msg.index('Middling'), 'strongest first'
+        assert '\U0001f534' not in msg, 'red dot means outbound in this channel, never strength'
 
         # The member must not be named twice: the mention already renders as
         # their nickname, which carries the Torn name in this server.
@@ -9499,6 +9501,65 @@ def test_no_member_facing_s_plurals_left():
     assert plural(1, 'day') == '1 day' and plural(2, 'time block') == '2 time blocks'
 
 
+def test_flight_alerts_compact_with_flags():
+    """
+    Pat, 22/11/2026: #war-tracker was hard to read. A red dot meant both
+    "flying out" and "stronger than you", and the landing time was printed
+    twice. Now: flags on countries, one line per single-enemy warning,
+    strength as words.
+    """
+    import asyncio
+    from features.flytrack import place, FlyTracker
+    assert place('South Africa') == '\U0001f1ff\U0001f1e6 **South Africa**'
+    assert place('Atlantis') == '**Atlantis**' and place(None) == '**unknown**'
+
+    mgr = FlyTracker.__new__(FlyTracker)
+    out = mgr._format_outbound_alert('Japan', 'brantlers', 1000, 900)
+    assert out.startswith('\U0001f534 **brantlers** \u2192 \U0001f1ef\U0001f1f5 **Japan**')
+
+    mgr._mention_for = lambda tid: '<@1>'
+    dep = {'tid': '9', 'name': 'HazyShark', 'dest': 'South Africa', 'eta': 2000, 'early': 1900}
+    msg = mgr._format_follow_alert({'tid': '5', 'name': 'Sadrapp'}, [(dep, 449_000, 'stronger')])
+    assert msg.count('\n') == 0, 'one enemy fits on one line'
+    assert '<t:1900:R>' in msg and '<t:1900:t>' not in msg, 'countdown only, the window is in the flight line'
+    assert 'stronger than you' in msg and '~449.0k' in msg and 'where you are' in msg
+
+
+def test_revive_check_by_chat_is_info_only():
+    """
+    SirAua, 22/11/2026: "@ApexPunk do a revive check again" got "Revive
+    checks are not recorded". Pat: answer it, but names only, no pings.
+    """
+    import asyncio
+    from types import SimpleNamespace
+    from features.ask_ai import REVIVE_RX, RULES_CUE
+    from features.ask_live import LiveTools
+    assert REVIVE_RX.search('do a revive check again')
+    assert REVIVE_RX.search('who still has revives on?')
+    assert RULES_CUE.search('what is the rule on revives?')
+
+    class WT:
+        def __init__(self, scan):
+            self.scan = scan
+        async def scan_revive_status(self):
+            return self.scan
+
+    class Facts:
+        def _notice(self, t):
+            return t
+    def tools(scan):
+        lt = LiveTools.__new__(LiveTools)
+        lt.facts, lt.live = Facts(), SimpleNamespace(war_tracker=WT(scan))
+        lt._found = lambda t: t
+        return lt
+    out = asyncio.run(tools({'on': [('Ellanna', '1'), ('yihong', '2')], 'off': 30, 'unknown': 1,
+                             'total': 33}).live_status('revives'))
+    assert '2 of 33' in out and 'Ellanna, yihong' in out and 'Could not check 1' in out
+    assert '<@' not in out, 'information only, nobody gets pinged'
+    down = asyncio.run(tools(None).live_status('revives'))
+    assert "can't check" in down and 'nobody' not in down.lower()
+
+
 def test_general_notice_question_only_lists_recent_posts():
     """
     Pat, 08/11/2026: "did someone post a leave notice?" quoted a notice from
@@ -9840,6 +9901,8 @@ if __name__ == '__main__':
     test_days_in_faction_capped_and_torn_events_announced_once()
     test_torn_event_start_post_and_announcement_pings()
     test_link_steps_spelled_out_and_management_commands_hidden()
+    test_flight_alerts_compact_with_flags()
+    test_revive_check_by_chat_is_info_only()
     test_no_member_facing_s_plurals_left()
     test_ux_audit_wording_fixes()
     test_reaudit5_poll_weekdays_oc_member_roast_and_scores()

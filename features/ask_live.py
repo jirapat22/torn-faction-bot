@@ -223,7 +223,31 @@ class LiveTools:
             return await self._flights()
         if what == 'oc':
             return await self._oc()
-        return 'Pick one of: war, chain, chain_event, flights, oc.'
+        if what == 'revives':
+            return await self._revives()
+        return 'Pick one of: war, chain, chain_event, flights, oc, revives.'
+
+    async def _revives(self):
+        """
+        Who can still be revived, live from Torn (Pat, 22/11/2026: "dont ping
+        people, just information"). Same scan as /war view:Revives, but names
+        only: no mentions, nothing posted. None from the scan means the roster
+        could not be read, which is said plainly, never "nobody".
+        """
+        wt = self._m('war_tracker')
+        if wt is None:
+            return self.facts._notice('War tracking is not running on the bot right now.')
+        scan = await wt.scan_revive_status()
+        if scan is None:
+            return self.facts._notice("Torn isn't answering right now, so I can't check revives.")
+        on = [n for n, _ in scan['on']]
+        lines = [f"REVIVE CHECK (live from Torn, checked just now): {len(on)} of {scan['total']} members "
+                 f"can still be revived" + (f": {', '.join(on)}" if on else '.')]
+        if scan.get('unknown'):
+            lines.append(f"- Could not check {scan['unknown']} (Torn didn't answer for them).")
+        if on:
+            lines.append('- Set revives to nobody before the war starts.')
+        return self._found('\n'.join(lines))
 
     async def _oc(self):
         """
@@ -595,9 +619,10 @@ LIVE_SPECS = [
         'description': 'What is happening RIGHT NOW: the current or next ranked war (score, time left), the '
                        'current chain (count, timeout), the chain event (each member\'s hits, who is short), or '
                        'flights (enemies and our members flying or abroad), or oc (who is in an organised '
-                       'crime right now, who is not, each crime\'s status and open slots).',
+                       'crime right now, who is not, each crime\'s status and open slots), or revives (who can still be '
+                       'revived, live from Torn).',
         'parameters': {'type': 'object', 'properties': {
-            'what': {'type': 'string', 'enum': ['war', 'chain', 'chain_event', 'flights', 'oc']}},
+            'what': {'type': 'string', 'enum': ['war', 'chain', 'chain_event', 'flights', 'oc', 'revives']}},
             'required': ['what']}}},
     {'type': 'function', 'function': {
         'name': 'members_extra',

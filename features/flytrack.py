@@ -146,11 +146,32 @@ BAND_STRONGER = 'stronger'   # at or above the member's estimate
 BAND_UNKNOWN = 'unknown'     # no estimate - treated as a threat, never hidden
 BAND_WEAKER = 'weaker'       # below the member, but still above the trigger bar
 BAND_TRIVIAL = 'trivial'     # too weak to warrant a notification on its own
+# Words with arrows, not coloured dots: 🔴/🟢 already mean "flying out" /
+# "coming back" in the same channel, and a red dot for "stronger" right
+# under a red dot for "outbound" made the alerts hard to read (Pat, 22/11/2026).
 BAND_LABELS = {
-    BAND_STRONGER: '\U0001f534 **Stronger than you**',
-    BAND_UNKNOWN: '\U0001f7e1 **Unknown strength**',
-    BAND_WEAKER: '\U0001f7e2 **Weaker than you**',
+    BAND_STRONGER: '\u2b06\ufe0f **stronger than you**',
+    BAND_UNKNOWN: '\u2754 **strength unknown**',
+    BAND_WEAKER: '\u2b07\ufe0f weaker than you',
 }
+
+# Flags make the destination readable at a glance in a long feed.
+COUNTRY_FLAGS = {
+    'Mexico': '\U0001f1f2\U0001f1fd', 'Cayman Islands': '\U0001f1f0\U0001f1fe',
+    'Canada': '\U0001f1e8\U0001f1e6', 'Hawaii': '\U0001f1fa\U0001f1f8',
+    'United Kingdom': '\U0001f1ec\U0001f1e7', 'Argentina': '\U0001f1e6\U0001f1f7',
+    'Switzerland': '\U0001f1e8\U0001f1ed', 'Japan': '\U0001f1ef\U0001f1f5',
+    'China': '\U0001f1e8\U0001f1f3', 'UAE': '\U0001f1e6\U0001f1ea',
+    'United Arab Emirates': '\U0001f1e6\U0001f1ea', 'South Africa': '\U0001f1ff\U0001f1e6',
+}
+
+
+def place(dest, fallback='unknown'):
+    """'🇨🇭 **Switzerland**' (no flag for anything not in the table)."""
+    if not dest:
+        return f'**{fallback}**'
+    flag = COUNTRY_FLAGS.get(dest)
+    return f'{flag} **{dest}**' if flag else f'**{dest}**'
 BAND_ORDER = [BAND_STRONGER, BAND_UNKNOWN, BAND_WEAKER]
 
 # Abroad-hospital descriptions read "In a <adjective> hospital"
@@ -861,28 +882,34 @@ class FlyTracker:
         mention = self._mention_for(mem['tid'])
         who = mention or f"**{mem['name']}** (not registered)"
         dest = items[0][0]['dest']
-        count = '**1 enemy**' if len(items) == 1 else f'**{len(items)} enemies**'
-        lines = [f"\u26a0\ufe0f {who} \u00b7 {count} heading to **{dest}**, where you are:"]
 
-        # BAND_TRIVIAL shares the "weaker" heading - the split the faction asked
-        # for is strong vs weak, not a third tier nobody would act on.
-        grouped = {}
+        # BAND_TRIVIAL counts as "weaker": the split the faction asked for is
+        # strong vs weak, not a third tier nobody would act on. Strongest
+        # first, then by landing time, so the real threat is always on top.
+        rows = []
         for dep, enemy_bs, band in items:
-            grouped.setdefault(BAND_WEAKER if band == BAND_TRIVIAL else band, []).append(
-                (dep, enemy_bs))
+            band = BAND_WEAKER if band == BAND_TRIVIAL else band
+            rows.append((BAND_ORDER.index(band), dep['eta'] or float('inf'), dep, enemy_bs, band))
+        rows.sort(key=lambda r: (r[0], r[1]))
 
-        for band in BAND_ORDER:
-            rows = grouped.get(band)
-            if not rows:
-                continue
-            lines.append(BAND_LABELS[band])
-            for dep, enemy_bs in rows:
-                profile = f"https://www.torn.com/profiles.php?XID={dep['tid']}"
-                stat = f" \u00b7 {self._format_bs(enemy_bs)}" if enemy_bs else ''
-                when = (f"lands {self._eta_text(dep['eta'], dep['early'])}"
-                        if dep['eta'] else 'landing time unknown')
-                lines.append(f"\u2003\u2022 **{dep['name']}** {when}{stat} "
-                             f"\u00b7 [Profile]({profile})")
+        def enemy_bits(dep, enemy_bs, band):
+            # Only the countdown here: the full landing window is already in
+            # the flight line just above, and printing it twice was half of
+            # what made these hard to read.
+            when = (f"lands <t:{dep['early'] or dep['eta']}:R>" if dep['eta']
+                    else 'landing time unknown')
+            stat = f" ({self._format_bs(enemy_bs)})" if enemy_bs else ''
+            profile = f"https://www.torn.com/profiles.php?XID={dep['tid']}"
+            return f"{when} \u00b7 {BAND_LABELS[band]}{stat} \u00b7 [Profile]({profile})"
+
+        if len(rows) == 1:
+            _, _, dep, enemy_bs, band = rows[0]
+            lines = [f"\u26a0\ufe0f {who} \u00b7 **{dep['name']}** heading to {place(dest)}, where you are "
+                     f"\u00b7 {enemy_bits(dep, enemy_bs, band)}"]
+        else:
+            lines = [f"\u26a0\ufe0f {who} \u00b7 **{len(rows)} enemies** heading to {place(dest)}, where you are:"]
+            for _, _, dep, enemy_bs, band in rows:
+                lines.append(f"\u2003\u2022 **{dep['name']}** \u00b7 {enemy_bits(dep, enemy_bs, band)}")
 
         if not mention:
             # Discord subtext (-#) keeps this small and grey so it nags the one
@@ -1091,19 +1118,19 @@ class FlyTracker:
                                early: Optional[int] = None) -> str:
         # 🔴/🟢 instead of plane emoji - ✈️/🛬 look nearly identical at a
         # glance, which was the actual reason out/in was hard to tell apart.
-        dest_label = dest or 'an unknown destination'
+        dest_label = place(dest, 'an unknown destination')
         if eta:
-            return f'🔴 **{name}** → **{dest_label}** · lands {self._eta_text(eta, early)}'
-        return f'🔴 **{name}** → **{dest_label}** · flight time unknown'
+            return f'🔴 **{name}** → {dest_label} · lands {self._eta_text(eta, early)}'
+        return f'🔴 **{name}** → {dest_label} · flight time unknown'
 
     def _format_return_alert(self, torn_id: str, name: str, dest: Optional[str],
                              eta: Optional[int], early: Optional[int] = None) -> str:
-        dest_label = dest or 'abroad'
+        dest_label = place(dest, 'abroad')
         attack = f'https://www.torn.com/page.php?sid=attack&user2ID={torn_id}'
         if eta:
-            return (f'🟢 **{name}** ← **{dest_label}** · lands {self._eta_text(eta, early)} '
+            return (f'🟢 **{name}** ← {dest_label} · lands {self._eta_text(eta, early)} '
                     f'· [Attack]({attack})')
-        return f'🟢 **{name}** ← **{dest_label}** · landing time unknown · [Attack]({attack})'
+        return f'🟢 **{name}** ← {dest_label} · landing time unknown · [Attack]({attack})'
 
     def _format_group_line(self, name: str, phase: str, dest: Optional[str], eta: Optional[int],
                            early: Optional[int] = None) -> str:

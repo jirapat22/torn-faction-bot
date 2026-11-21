@@ -1066,7 +1066,8 @@ CAPABILITIES = (
     '- who is not in our Discord server, or in it but not linked to the bot\n'
     '- the faction rules, word for word\n'
     '- Torn events (official dates and effects) and our weekly war, chain and happy jump\n'
-    '- right now: the war score, the chain, the chain event (who is short), who is flying or abroad\n'
+    '- right now: the war score, the chain, the chain event (who is short), who is flying or abroad, '
+    'who can still be revived\n'
     '- leave notices (quoted word for word), timezones, new members on trial, the availability poll\n'
     '- war win/loss trends, the target board, the enemy watchlist, another faction\'s overview\n'
     'I can also, after you press ✅ on a card: add/remove targets, start/end/cancel a chain event, '
@@ -1864,6 +1865,12 @@ NOTICE_RX = re.compile(r'\bleave[- ]?notices?\b|\bnotices?\b[^\n]{0,40}\b(?:post
                        re.I)
 
 
+# "Do a revive check", "who still has revives on?", "who can be revived".
+REVIVE_RX = re.compile(r"\brevive ?checks?\b|\brevives? (?:on|enabled|open|turned on)\b|"
+                       r"\b(?:can|could) (?:still )?be revived\b|\brevivable\b|"
+                       r"\bwho(?:'s| is| has)?\b[^?\n]{0,30}\brevives?\b", re.I)
+
+
 # "How many people are in an OC?", "who is not in an OC right now?". Not
 # "who hasn't done an OC in a week" (history, from the daily check's records)
 # and not "what happens if I'm not in an OC" (the rules).
@@ -1999,6 +2006,12 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
     # "How many people are in an OC?": answered by the bot from Torn's live
     # crimes, no AI. Re-audit 08/11/2026: without "right now" the AI picked
     # the rulebook and posted the OC rules instead of a count.
+    # "Do a revive check": answered by the bot from Torn, names only, no
+    # pings (Pat, 22/11/2026). The AI said "Revive checks are not recorded".
+    if REVIVE_RX.search(question) and not RULES_CUE.search(question) \
+            and getattr(facts, 'live_tools', None) is not None:
+        raw = await facts.live_tools.live_status('revives')
+        return Answer(raw, 'bot', raw, True, 0)
     if OC_NOW_RX.search(question) and not OC_HISTORY_RX.search(question) \
             and getattr(facts, 'live_tools', None) is not None:
         raw = await facts.live_tools.live_status('oc')
