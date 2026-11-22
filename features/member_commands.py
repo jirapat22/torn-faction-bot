@@ -153,10 +153,14 @@ async def refresh(bot, channel_id=None, force=False):
     embed = build_embed()
     new_desc = embed.description
 
+    from features.ask_help_post import guide_message_id
+    guide_id = guide_message_id()
     mine = []
     try:
         async for msg in channel.history(limit=50):
-            if bot.user and msg.author.id == bot.user.id:
+            # The "how to ask @ApexPunk" guide (features/ask_help_post.py)
+            # shares this channel: it is not an old board to edit or delete.
+            if bot.user and msg.author.id == bot.user.id and msg.id != guide_id:
                 mine.append(msg)
     except Exception as e:
         logger.error(f'Member commands: could not read channel history: {e}')

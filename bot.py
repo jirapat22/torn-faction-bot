@@ -126,6 +126,7 @@ chain_event_manager = None
 target_manager = None
 chain_log = None
 rules_store = None
+incoming_attacks = None
 _initialized = False  # Prevent re-initialization on reconnect
 
 
@@ -188,7 +189,7 @@ async def on_ready():
     global inactivity_tracker, chain_tracker, war_tracker, verification_system
     global role_sync_manager, activity_profile_manager, enemy_watchlist, availability_manager
     global event_reminder_manager, stakeout_manager, fly_tracker, _initialized
-    global strike_manager, chain_event_manager, target_manager, chain_log, rules_store
+    global strike_manager, chain_event_manager, target_manager, chain_log, rules_store, incoming_attacks
 
     try:
         logger.info(f'Bot logged in as {bot.user.name} (ID: {bot.user.id})')
@@ -379,6 +380,11 @@ async def on_ready():
         from features.chain_log import ChainLog
         chain_log = ChainLog()
         ask_ai = AskAI(bot, strike_manager=strike_manager)
+        # The members switch needs the Ascended Punks role id (verification config).
+        ask_ai.verification_system = verification_system
+        # Hits ON our members, kept 90 days, for "who hit us?" (features/incoming_attacks.py).
+        from features.incoming_attacks import IncomingAttacks
+        incoming_attacks = IncomingAttacks()
         bot.add_listener(ask_ai.on_message, 'on_message')
         from features.ask_ai import ShowDataView
         bot.add_view(ShowDataView(ask_ai))   # keeps old 📎 buttons answering after a restart
@@ -466,6 +472,8 @@ async def on_ready():
             chain_log_check.start()
         if not rules_sync_check.is_running():
             rules_sync_check.start()
+        if not incoming_attacks_check.is_running():
+            incoming_attacks_check.start()
 
         if not loop_watchdog.is_running():
             loop_watchdog.start()
@@ -503,6 +511,17 @@ async def on_ready():
             result = await refresh_welcome(bot)
             if result:
                 logger.info(f'Welcome board: {result}')
+
+            # "How to ask @ApexPunk" guide in #commands-the-punk, posted once
+            # and edited in place after (features/ask_help_post.py). After the
+            # command board, which skips this message by its saved id.
+            from features.ask_help_post import HelpPost, guide_text
+            from config import ASK_AI_MEMBERS, ASK_AI_MEMBER_COOLDOWN_S, MEMBER_COMMANDS_CHANNEL_ID
+            ask_ai.help_post = HelpPost()
+            result = await ask_ai.help_post.publish(bot.get_guild(GUILD_ID),
+                                                    guide_text(ASK_AI_MEMBERS, ASK_AI_MEMBER_COOLDOWN_S),
+                                                    MEMBER_COMMANDS_CHANNEL_ID)
+            logger.info(f'Ask guide post: {result}')
 
             from features.timezones import post_picker, refresh_board
             result = await post_picker(bot)
@@ -961,6 +980,23 @@ async def before_rules_sync_check():
     logger.info('Rules sync started (reads #faction-edicts every 30 minutes)')
 
 
+@tasks.loop(minutes=10)
+async def incoming_attacks_check():
+    """Save hits ON our members (features/incoming_attacks.py). The first
+    runs walk back 30 days, at most 20 pages a tick, 3 s apart."""
+    try:
+        if incoming_attacks is not None:
+            await incoming_attacks.tick()
+    except Exception as e:
+        logger.error(f'Error in incoming attacks check: {e!r}')
+
+
+@incoming_attacks_check.before_loop
+async def before_incoming_attacks_check():
+    await bot.wait_until_ready()
+    logger.info('Incoming attacks log started (every 10 minutes)')
+
+
 def _background_loops():
     """Every feature loop, by name. One list, shared by the health page and
     the watchdog, so a new loop cannot be added to one and forgotten in the other."""
@@ -979,6 +1015,7 @@ def _background_loops():
         'timezone_board_check': timezone_board_check,
         'chain_log_check': chain_log_check,
         'rules_sync_check': rules_sync_check,
+        'incoming_attacks_check': incoming_attacks_check,
     }
 
 

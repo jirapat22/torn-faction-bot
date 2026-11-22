@@ -313,6 +313,45 @@ class FactBook:
         self.live_tools = None     # LiveTools: the war/chain/poll/notice lookups
         self.said = ''             # everything the person typed, for checking action details
         self.action = None         # a checked action plan, waiting for its confirm card
+        # Who is asking, as (torn_id, name), or None when their Discord isn't
+        # linked to Torn (or unknown, in tests). Members may only see their
+        # OWN records; "I/me/my" in a question means this person.
+        self.asker = None
+        self.asker_known = False   # True once AskAI looked the asker up (linked or not)
+
+    def set_asker(self, discord_id):
+        """Look the asker up by their Discord ID (discord_to_torn.json plus
+        verified_users.json). Unlinked: asker stays None."""
+        self.asker_known = True
+        tid = self.discord_links.get(str(discord_id))
+        if tid:
+            self.asker = (str(tid), self._known_names().get(str(tid)) or str(tid))
+        return self.asker
+
+    def _is_asker(self, tid):
+        return self.asker is not None and str(tid) == self.asker[0]
+
+    def _member_only(self):
+        """True for an ordinary member (not management)."""
+        return not getattr(self, 'management', True)
+
+    def incoming_store(self):
+        """The incoming attacks log (features/incoming_attacks.py), read fresh."""
+        from features.incoming_attacks import IncomingAttacks
+        return IncomingAttacks(path=os.path.join(self.data_dir, 'incoming_attacks.json'))
+
+    def incoming_attacks(self, question='', member=''):
+        """Tool: hits ON our members, worked out in Python."""
+        from features.incoming_attacks import incoming_answer
+        target = None
+        if str(member or '').strip():
+            tid, real, others = self.resolve(member)
+            if not tid:
+                return self.member_report(member)   # records the "did you mean" notice
+            target = (tid, real)
+        self.found_any = True
+        return 'INCOMING HITS (hits on our members, from the bot\'s log):\n' + incoming_answer(
+            question or self.said or '', self.incoming_store(), target, now=self.now)
 
     def _board_id(self, who):
         """Torn ID of a target-board entry whose name is `who`, if the person
@@ -521,6 +560,11 @@ class FactBook:
         if not tid:
             if not str(name or '').strip():
                 return self._notice('Which member do you mean? Give me their Torn name or ID.')
+            if others and self._member_only():
+                # Members are never offered other members' names (see near_names).
+                others = [o for o in others if self.asker and o.lower() == self.asker[1].lower()]
+                if not others:
+                    return self._notice(OTHERS_REFUSAL)
             if others:
                 return self._notice(f'I couldn\'t find anyone called **{name}**. Did you mean '
                                     + ', '.join(f'**{o}**' for o in others[:-1])
@@ -528,6 +572,11 @@ class FactBook:
                                     'Reply with the right name.')
             return self._notice(f'I have no records of anyone called **{name}**. Check the spelling, '
                                 'or give me their Torn ID.')
+        if self._member_only() and not self._is_asker(tid):
+            # Members see only their own records (Pat, 22/11/2026). Checked
+            # here too, not just before the AI, so a pronoun follow-up ("and
+            # her?") can't reach someone else's report either.
+            return self._notice(OTHERS_REFUSAL)
         self.found_any = True
         lines = [f'MEMBER: {real} [{tid}]']
         if str(name).strip().lower() not in (real.lower(), tid):
@@ -638,8 +687,9 @@ class FactBook:
         else:
             lines.append('OC: never seen in an OC by the bot.')
 
-        # Strikes (management only: a member never sees anyone's strikes)
-        if not getattr(self, 'management', True):
+        # Strikes: management, or a member asking about their OWN (count and
+        # clear dates; giving or removing them stays on /strikes).
+        if self._member_only() and not self._is_asker(tid):
             return '\n'.join(lines)
         active = self._strikes_active(tid)
         history = [s for s in self._strikes_all() if str(s.get('torn_id')) == str(tid)]
@@ -810,6 +860,22 @@ class FactBook:
                   ' Stats rebuilt later, treat as rough.' if w.get('reconstructed') else ''),
                f'Other wars on record: {listing}.']
         members = list(w.get('members', {}).items())
+        if self._member_only():
+            # A member gets the war's totals and their own row only: no top
+            # 3, no "made no hits" list, nobody else's numbers.
+            made = [m.get('attacks') or 0 for _, m in members]
+            if made:
+                out.append(f'Faction total hits made: {sum(made)} by {len(made)} members in this war\'s record.')
+            mine = [(tid, m) for tid, m in members if self._is_asker(tid)]
+            for tid, m in mine:
+                out.append(f'- {self._name(tid, m)} [{tid}] (the person asking): hits made {m.get("attacks", 0)}, '
+                           f'hits taken from the enemy {_num(m.get("defends"))}, hits taken from outside '
+                           f'{_num(m.get("outside_incoming"))}, friendly hosps given {_hosp(w, m, "hosps_given")}, '
+                           f'friendly hosps received {_hosp(w, m, "hosps_received")}')
+            if self.asker and not mine:
+                out.append(f'{self.asker[1]} (the person asking) is not in this war\'s member stats.')
+            out.append('Other members\' numbers are for management only.')
+            return '\n'.join(out)
         # Rankings are worked out HERE, not by the AI: a model picking "the
         # most" out of a list once named the runner-up (60) over the real top
         # (68). Every number it then quotes passes the check, so the check
@@ -904,7 +970,12 @@ class FactBook:
                 # the AI's rewording: "ranked war duration" missed the section
                 # "how long can a ranked war last?" finds (live 22/11/2026).
                 return await lt.torn_lookup(getattr(self, 'mech_question', None) or str(args.get('query') or ''))
-            return await lt.faction_extra(args.get('what', ''), str(args.get('query') or ''))
+            out = await lt.faction_extra(args.get('what', ''), str(args.get('query') or ''))
+            if self._member_only() and 'Top Contributors' in str(out):
+                # The win/loss record is faction-wide; the contributor list
+                # ranks members, which stays management only.
+                out = str(out).split('Top Contributors')[0].rstrip() + '\n(Member rankings: management only.)'
+            return out
         except Exception as e:
             logger.exception(f'ask_ai: tool {name} failed')
             return f'Tool {name} failed ({type(e).__name__}), so this data is unavailable.'
@@ -917,6 +988,17 @@ class FactBook:
             from features.ask_actions import ACTION_TOOL_NAMES
             if name in MEMBER_BLOCKED_TOOLS or name in ACTION_TOOL_NAMES:
                 return 'That tool is for management only.'
+            if name == 'members_extra':
+                # Notices and timezones: their own only. Trials: other
+                # members' records. The poll is public (/avail Summary).
+                what = str(args.get('what') or '').lower()
+                who = str(args.get('name') or '').strip()
+                if what == 'trials':
+                    return self._notice(OTHERS_REFUSAL)
+                if what in ('leave_notices', 'timezones'):
+                    tid = self.resolve(who)[0] if who else None
+                    if not self._is_asker(tid):
+                        return self._notice(OTHERS_REFUSAL)
         try:
             if name == 'member_report':
                 return self.member_report(args.get('name', ''))
@@ -928,6 +1010,8 @@ class FactBook:
                 return self.strikes_overview()
             if name == 'faction_rules':
                 return self.faction_rules(args.get('topic', ''))
+            if name == 'incoming_attacks':
+                return self.incoming_attacks(str(args.get('question') or ''), str(args.get('member') or ''))
             if name == 'torn_events':
                 from features.torn_events import events_text, CALENDAR_FILE
                 self.found_any = True
@@ -1019,6 +1103,15 @@ TOOL_SPECS = [
         'parameters': {'type': 'object', 'properties': {
             'topic': {'type': 'string', 'description': 'What the rule is about, e.g. "OC", "chain minimum", '
                                                        '"strikes", "leave notice"'}}, 'required': ['topic']}}},
+    {'type': 'function', 'function': {
+        'name': 'incoming_attacks',
+        'description': 'Hits ON our members by other players (kept 90 days): who hit us, did a named enemy '
+                       'hit us, who hit one of our members. Counts are ready-made.',
+        'parameters': {'type': 'object', 'properties': {
+            'question': {'type': 'string', 'description': 'The question in the person\'s words, e.g. '
+                                                          '"did stepbro hit us" or "who hit us this week"'},
+            'member': {'type': 'string', 'description': 'Our member who was hit, or "" for everyone'}},
+            'required': ['question']}}},
     {'type': 'function', 'function': {
         'name': 'torn_events',
         'description': "Torn's official event calendar (dates in TCT, length, and the effect in Torn's own words, "
@@ -1602,6 +1695,11 @@ def near_names(question, facts):
         for hit in difflib.get_close_matches(w, list(names), n=3, cutoff=0.75 if len(w) >= 5 else 0.86):
             if names[hit] not in found:
                 found.append(names[hit])
+    if getattr(facts, 'management', True) is False:
+        # A member is only ever offered their own name: "is spredjam in an
+        # oc?" got "Did you mean spreadjam?", a lookup they can't have.
+        asker = getattr(facts, 'asker', None)
+        found = [n for n in found if asker and n.lower() == asker[1].lower()]
     return found[:4]
 
 
@@ -1663,7 +1761,9 @@ MECH_RX = re.compile(r"\bhow (?:does|do|is|are)\b[^?\n]*\bwork|\bhow (?:do|does|
 # "last" only as in "last war": "how long can a ranked war LAST?" is a game question.
 RECORDS_RX = re.compile(r"\b(?:our|ours|we|us|they|them|their|latest|current(?:ly)?|now|right now|today|"
                         r"tonight|yesterday|this week|did|was|were|who|score|status|report|left|going|"
-                        r"next|upcoming|coming|happening|soon|events?|leaderboard|most|least|top)\b|\bat\s*\??\s*$|"
+                        r"next|upcoming|coming|happening|soon|events?|leaderboard|most|least|top|"
+                        # "what's on the target BOARD?" got the ranked war target-score page (22/11/2026)
+                        r"board|watchlist|poll)\b|\bat\s*\??\s*$|"
                         r"\blast (?:wars?|chains?|ocs?|week|night|time|one|month|days?|few|\d+)\b", re.I)
 # Torn topics with no saved page yet: the link beats an AI guess
 # ("travel becomes available once you reach the required level", wrong).
@@ -1938,7 +2038,71 @@ JUDGE_RX = re.compile(
     r"|\bwho (?:has ?n[o']?t|hasn'?t|didn'?t|did not|isn'?t|is not|never)\b", re.I)
 MEMBER_REFUSAL = ("That one's for management only, sorry 🔒 I can tell you about wars, chains, events and the "
                   "rules though.")
-MEMBER_BLOCKED_TOOLS = {'faction_table', 'strikes_overview'}
+# Announcement drafts are management only too: a member's draft could be posted as the bot.
+MEMBER_BLOCKED_TOOLS = {'faction_table', 'strikes_overview', 'announce_ask', 'announce_draft'}
+
+# Members (Pat, 22/11/2026): their OWN records, never anyone else's.
+OTHERS_REFUSAL = ("Only management can look up other members 🔒 Ask me about your own records, the war, "
+                  "chains, the rules or how Torn works.")
+LINK_FIRST = ("I don't know who you are in Torn yet 🤔 Link your account with `/register` first, then ask "
+              "about your own records.")
+# A member asking about THEMSELVES: only ranking words are refused ("am I
+# the top hitter?"), not activ*/strikes, which are their own records.
+# "ranked war" is the game, not a ranking, hence no bare "ranked".
+RANK_RX = re.compile(r'\b(?:least|most|worst|best|lowest|highest|top|bottom|fewest|laziest|weakest|mvp|'
+                     r'rank|ranks|ranking|rankings|compare\w*|comparison|vs|versus|leaderboard)\b', re.I)
+# A judging word with nobody named is only refused when it is about OTHER
+# people ("who is inactive?", "list everyone with strikes"). "What gets you
+# a strike?" is a rules question and goes through.
+_PEOPLE_RX = re.compile(r"\b(?:who|whos|who's|any ?one|any ?body|every ?one|every ?body|members?|people|"
+                        r"players?|list|names?)\b", re.I)
+
+# Everyone's records at once ("show me the faction table", "everyone's
+# strikes"): management only. "I'm management" changes nothing.
+ALL_MEMBERS_RX = re.compile(r"\bfaction table\b|\broster\b|\bevery ?(?:one|body)'?s\b|\ball (?:the )?members\b|"
+                            r"\beach member\b|\bper member\b", re.I)
+
+# "my hits", "am I in an OC", "did I post a notice", "who hit me": the asker
+# about themselves. Rules and game questions with "I" ("can I travel during
+# an OC?", "what happens if I miss one?", "how do I join a chain?") are left
+# alone: there "I" means anyone.
+FIRST_RX = re.compile(r"\b(?:my|mine|myself)\b|\b(?:am|did|have|was|were|do|does|will|has) i\b|"
+                      r"\bi(?:'m| am|'ve| have| was| made| got| hit| did| get| been| posted| missed| had)\b|"
+                      r"\b(?:hit|hits|hitting|attacked|attack\w*|hosp\w*|mugged|beat|farmed|about|on|for|with) me\b",
+                      re.I)
+FIRST_SKIP_RX = re.compile(r"\bcan i\b|\bcould i\b|\bshould i\b|\bmay i\b|\bhappens if\b|\bwhat if\b|"
+                           r"\ballowed\b|\brules?\b|\bdo i (?:need|have) to\b|\bhow (?:do|can|should|would) i\b|"
+                           r"\bif i\b|\bwill i get\b|\bam i supposed\b", re.I)
+
+
+def _own_followup(history, facts, asker):
+    """True when the member's previous question was about themselves, so
+    "and the war before that?" still means their own record. Live
+    22/11/2026 that follow-up got "I have no records of your hits"."""
+    last = next((t.get('content', '') for t in reversed(list(history or [])) if t.get('role') == 'user'), '')
+    if not last:
+        return False
+    named = [n.lower() for n in names_in(last, facts)]
+    return named == [asker[1].lower()] or (not named and bool(FIRST_RX.search(last))
+                                           and not FIRST_SKIP_RX.search(last))
+
+
+def first_person(question, name):
+    """"how many hits did I make?" -> "how many hits did Ikaros22 make?".
+    The rest of the pipeline (names_in, notices, OCs, the AI) then sees a
+    normal question about a named member. "tell me" / "show me" stay: only
+    "me" after a hit word or "about/on/for/with" is the asker as a subject."""
+    # Questions first ("do I have" -> "does X have"), then statements.
+    subs = [(r"\bam I\b", f'is {name}'), (r"\bdo I\b", f'does {name}'), (r"\bhave I\b", f'has {name}'),
+            (r"\bwere I\b", f'was {name}'), (r"\bI'm\b", f'{name} is'), (r"\bI am\b", f'{name} is'),
+            (r"\bI've\b", f'{name} has'), (r"\bI have\b", f'{name} has'),
+            (r"\b(?:my|mine)\b", f"{name}'s"), (r"\bmyself\b", name),
+            (r"\b(hit|hits|hitting|attacked|attack\w*|hosp\w*|mugged|beat|farmed|about|on|for|with) me\b",
+             lambda m: f'{m.group(1)} {name}'),
+            (r"\bI\b", name)]
+    for rx, to in subs:
+        question = re.sub(rx, to if callable(to) else (lambda m, t=to: t), question, flags=re.I)
+    return question
 
 
 # Asked ONLY about something the bot never keeps. The AI used to word these,
@@ -2061,7 +2225,8 @@ CLAIMS_DONE = re.compile(
     r"done|sorted|handled|on it)\b", re.I)
 
 
-HELP_WORDS = re.compile(r'^\s*(help|commands?|what can you do\??|how do i use you\??|\?)\s*$', re.I)
+HELP_WORDS = re.compile(r'^\s*(help|commands?|what can you do|what can i ask(?: you)?|what do you do|'
+                        r'how do i use you|\?)\s*[?!.]*\s*$', re.I)
 
 
 async def answer_question(session, question, facts, history=None, earlier_facts='', providers=None,
@@ -2076,21 +2241,73 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
       - the raw records, when the AI kept using numbers that aren't in them.
     """
     providers = providers or PROVIDERS
+    facts.management = management
+    # Everyone: strikes by chat, kicks, payouts, battle stats, Xanax. Before
+    # anything else, so no rewrite or lookup can route around them.
+    fixed = guard_question(question, True)
+    if fixed:
+        # 'none' = not remembered as a conversation.
+        return Answer(fixed, 'none', '', True, 0, kind='ask')
+    # "my hits" -> "Ikaros22's hits": the asker about themselves.
+    asker = getattr(facts, 'asker', None)
+    if FIRST_RX.search(question or '') and not FIRST_SKIP_RX.search(question or ''):
+        if asker:
+            question = first_person(question, asker[1])
+        elif not management and getattr(facts, 'asker_known', False):
+            return Answer(LINK_FIRST, 'none', '', True, 0, kind='ask')
+    # "Who hit us?", "did stepbro hit us?", "who hit Ikaros22?": the bot's own
+    # log of hits on us, counted in Python, no AI. Open to members too: it is
+    # enemy information, worded neutrally.
+    from features.incoming_attacks import is_incoming_question, incoming_answer, WHO_HIT_RX
+    known = facts._known_names()
+    lower_names = {n.lower() for n in known.values()}
+    if is_incoming_question(question, lower_names):
+        target = None
+        m = WHO_HIT_RX.search(question)
+        if m and m.group(1).lower() in lower_names:
+            tid, real, _ = facts.resolve(m.group(1))
+            target = (tid, real) if tid else None
+        text = incoming_answer(question, facts.incoming_store(), target, now=facts.now)
+        return Answer(text, 'bot', text, True, 0)
+    if not management:
+        # Members: their own records only (Pat, 22/11/2026).
+        named = names_in(question, facts)
+        own = asker[1].lower() if asker else None
+        others = [n for n in named if n.lower() != own]
+        if not others and not named:
+            who = pronoun_target(question, history, facts)
+            if who and (not asker or who.split(' [')[0].lower() != own):
+                others = [who]
+        if others:
+            return Answer(OTHERS_REFUSAL, 'none', '', True, 0, kind='ask')
+        if ALL_MEMBERS_RX.search(question) and not RULES_CUE.search(question) \
+                and not re.search(r'\b(?:need|have|has|got) to\b|\bmust\b|\bshould\b|\bsupposed\b', question, re.I):
+            return Answer(MEMBER_REFUSAL, 'none', '', True, 0, kind='ask')
+        if ANNOUNCE_RX.search(question) and re.search(r'\b(?:make|write|post|draft|send|create|do|put up)\b',
+                                                     question, re.I):
+            return Answer(MEMBER_REFUSAL, 'none', '', True, 0, kind='ask')
     game = not management and not names_in(question, facts) and not _records_cue(question or '') \
         and bool(MECH_RX.search(question or '')) \
         and bool(GAME_TOPIC.search(question or '') or mechanics_sections(question, facts, rules_ok=True))
-    fixed = guard_question(question, management, game=game)
-    if fixed:
-        # Fixed reply, no AI (strikes, kicks, payouts; judging for members).
-        # 'none' = not remembered as a conversation.
-        return Answer(fixed, 'none', '', True, 0, kind='ask')
-    facts.management = management
+    if not management and not game:
+        # Judging and rankings stay management only. About themselves, only
+        # ranking words count; with nobody named, a judging word only counts
+        # when it is about other people ("who is inactive?").
+        mine = bool(asker) and asker[1].lower() in [n.lower() for n in names_in(question, facts)]
+        if RANK_RX.search(question) or (not mine and JUDGE_RX.search(question) and _PEOPLE_RX.search(question)):
+            return Answer(MEMBER_REFUSAL, 'none', '', True, 0, kind='ask')
     # Leave notices: looked up and quoted by the bot itself, no AI at all.
     # The AI sometimes skipped the lookup and said "no records of leave
     # notices for that member" (re-audit 08/11/2026), which reads as "they
     # never posted", exactly the wrong thing before a strike.
     # "What's the rule about leave notices?" is a rules question, not a
     # lookup: it went to the notice list (re-audit 08/11/2026).
+    if NOTICE_RX.search(question) and not NOTICE_RULE_RX.search(question) and not management:
+        # A member sees their own notices only: "any notices?" is everyone's.
+        mine = [n for n in names_in(question, facts) if asker and n.lower() == asker[1].lower()]
+        if not mine:
+            return Answer(LINK_FIRST if not asker and getattr(facts, 'asker_known', False) else OTHERS_REFUSAL,
+                          'none', '', True, 0, kind='ask')
     if NOTICE_RX.search(question) and not NOTICE_RULE_RX.search(question) \
             and getattr(facts, 'live_tools', None) is not None:
         named = names_in(question, facts)
@@ -2135,7 +2352,7 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
                        f"you be the judge:\n\n{body}"
         return ans
     convo =' '.join([question] + [t.get('content', '') for t in history or [] if t.get('role') == 'user'])
-    announcing = bool(ANNOUNCE_RX.search(convo))
+    announcing = bool(ANNOUNCE_RX.search(convo)) and management
     # The action tools (features/ask_actions.py) are only shown when the
     # message asks to DO something: every tool costs prompt tokens, and Groq's
     # free plan has 200,000 a day. An announcement about a chain event is an
@@ -2152,7 +2369,10 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
     # "Can I travel during an OC?", "what happens if the chain breaks?" sound
     # like rules but are often the game: both the wiki and the rulebook are
     # offered, the AI picks, and nothing is forced.
-    mixed = [] if mech or acting or announcing else mechanics_sections(question, facts, rules_ok=True)
+    # A question saying "rule" is about OUR rulebook: live 22/11/2026 "what's
+    # the rule on OCs?" got a long Torn wiki answer first.
+    mixed = [] if mech or acting or announcing or re.search(r'\brules?\b', question, re.I) \
+        else mechanics_sections(question, facts, rules_ok=True)
     facts.mech_question = question if mech or mixed else None
     if mech:
         facts.tool_specs = [t for t in facts.tool_specs if t['function']['name'] == 'torn_lookup']
@@ -2163,6 +2383,14 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
     sys_txt = system_prompt(announce=announcing, acting=acting)
     sys_static = re.sub(r'It is now [^\n]*', '', sys_txt)
     base = [{'role': 'system', 'content': sys_txt}]
+    if asker:
+        base.append({'role': 'system', 'content': f'The person asking is {asker[1]} [{asker[0]}]. "I", "me" '
+                     f'and "my" in their messages mean {asker[1]}.'})
+    if not management:
+        base.append({'role': 'system', 'content': 'This person is an ordinary faction member, not management. '
+                     'They may see their OWN records, faction totals, live war/chain status, enemies, the rules '
+                     'and how Torn works, never another member\'s records, rankings or judgements. If asked for '
+                     'someone else\'s records, say only management can look up other members.'})
     if earlier_facts:
         base.append({'role': 'system', 'content': 'Data from earlier in this conversation:\n' + earlier_facts})
     # Wiki questions: the bot looks everything up itself, so the AI can't
@@ -2184,13 +2412,23 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
                 lookup_facts += '\n\nOUR FACTION RULEBOOK:\n' + rules_txt
         base.append({'role': 'system', 'content': 'Looked up for the next question (already done, no need '
                      'to call a tool):\n' + lookup_facts})
+    elif asker and not acting and not announcing and (
+            [n.lower() for n in names_in(question, facts)] == [asker[1].lower()]
+            or (not management and not names_in(question, facts) and _own_followup(history, facts, asker))):
+        # "Do I have any strikes?", "how active am I?": the asker's own record
+        # is looked up by the bot and handed over. Live 22/11/2026 the backup
+        # AI skipped the lookup, so nothing was found and the member got the
+        # "I don't trash-talk the crew" line about themselves.
+        lookup_facts = 'RECORDS OF THE PERSON ASKING:\n' + facts.member_report(asker[1])
+        base.append({'role': 'system', 'content': 'Looked up for the next question (already done; call a tool '
+                     'only for live status, war details or notices):\n' + lookup_facts})
     # Announcements: the bot itself looks up every event the conversation
     # mentions and hands the facts over, so the draft can carry the useful
     # details (how long, what it does) without the AI guessing them. Pat
     # wanted "the details and stuffs" in, and guessed details out.
     event_facts, event_names = '', []
     cal_path = os.path.join(getattr(facts, 'data_dir', 'data'), 'torn_calendar.json')
-    if ANNOUNCE_RX.search(convo):
+    if announcing:
         from features.torn_events import detect_events, facts_for
         event_names = detect_events(convo, path=cal_path)
         event_facts = facts_for(event_names, path=cal_path, now=facts.now)
@@ -2217,7 +2455,7 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
     base += list(history or []) + [{'role': 'user', 'content': question}]
 
     t0, problems = time.monotonic(), []
-    if providers is PROVIDERS and ANNOUNCE_RX.search(convo):
+    if providers is PROVIDERS and announcing:
         # Drafts aren't urgent and the small model was measured sloppier on them
         # ("1:00" for 1pm, "enlistments happen on Tuesdays"): wait for the big one.
         async def big_patient(session, messages, f, used):
@@ -2279,7 +2517,7 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
         #     that" three times, despite the prompt). One push to draft.
         # Also when it wrote the announcement as a plain message: that skips the
         # draft card and its Post button entirely (seen live).
-        if facts.final_kind != 'draft' and ANNOUNCE_RX.search(convo) and PING_RX.search(convo) \
+        if facts.final_kind != 'draft' and announcing and PING_RX.search(convo) \
                 and not facts.draft:
             push = msgs + [{'role': 'user', 'content':
                             'You already have enough: what it is about and who to ping. Do not ask anything. '
@@ -2436,6 +2674,13 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
             written = item_answer(_facts_text(used), question)
             if written:
                 return Answer(written, pname, _facts_text(used), True, took())
+        # The live chain is posted as the bot's own lines. "Is the chain gonna
+        # drop?" got "just 3 hits left before it times out" (22/11/2026) for
+        # a chain that breaks in 3 MINUTES: right number, wrong unit.
+        if used and all(n == 'live_status' and str((a or {}).get('what')) == 'chain' for n, a, _ in used) \
+                and all(str(r).startswith(('CHAIN RIGHT NOW', 'No chain is running')) for _, _, r in used):
+            body = '\n'.join(r for _, _, r in used).replace('CHAIN RIGHT NOW (same as /chain):\n', '')
+            return Answer('Checked Torn just now 👀\n\n' + body, pname, _facts_text(used), True, took())
         if tools == {'torn_events'}:
             displays = [l.split('DISPLAY: ', 1)[1] for l in _facts_text(used).split('\n') if 'DISPLAY: ' in l]
             if displays:
@@ -2489,7 +2734,10 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
         # The tool's own label leaked into answers as "WIKI SEARCH LINK: ...".
         text = re.sub(r'\*{0,2}WIKI SEARCH LINK\*{0,2}(?: \(always give this to the person\))?:\*{0,2}',
                       'More on the Torn wiki:', text)
-        if (lookup_facts or any(n == 'torn_lookup' for n, _, _ in used)) and 'wiki.torn.com' not in text:
+        # Not for the asker's own record handed over (that is lookup_facts
+        # too): "do I have any strikes?" got a wiki search link for
+        # "ikaros22 have strikes" (live 22/11/2026).
+        if (mech or mixed or any(n == 'torn_lookup' for n, _, _ in used)) and 'wiki.torn.com' not in text:
             from features.torn_wiki import search_link
             text += f'\n-# More on the Torn wiki: <{search_link(question)}>'
         return Answer(text, pname, _facts_text(used) or lookup_facts, True, took())
@@ -2538,18 +2786,56 @@ def describe_mentions(content, bot_id, mentions, facts, bot_roles=(), role_menti
     return content.strip()
 
 
+# Short on purpose (Pat, 22/11/2026): the old help was the whole capability
+# list, a wall of text. CAPABILITIES stays in the AI prompt; the full guide
+# is a post in #commands-the-punk (features/ask_help_post.py), and these are
+# only the fallback when that post can't be linked.
 HELP_TEXT = (
-    "Yo, ApexPunk here 🤘 Ask me stuff in plain English, like:\n"
-    '- `@ApexPunk how active was BunnyBull?`\n'
-    '- `@ApexPunk who has been offline longest?`\n'
-    '- `@ApexPunk who got farmed most last war?`\n'
-    '- `@ApexPunk what\'s the OC rule?`\n'
-    '- `@ApexPunk make an announcement about Friday\'s war` (I\'ll ask what I need, then show a draft)\n'
-    '- `@ApexPunk what\'s the war score?` / `who is short in the chain event?` / `did BunnyBull post a notice?`\n'
-    '- `@ApexPunk start a chain event now, 24 hours, min 10` (I show a card, nothing happens until you press ✅)\n'
-    'Reply to my answer to ask a follow-up, or just chat. Every number I give is checked against the '
-    'records, and if I\'m not sure who you mean, I\'ll ask.\n\n' + CAPABILITIES
+    "Yo, ApexPunk here 🤘 @mention me with a question in plain English:\n"
+    '**📊 Records** `@ApexPunk how active is BunnyBull?`\n'
+    '**⚔️ War & chain live** `@ApexPunk what\'s the war score?`\n'
+    '**📜 Rules & Torn game** `@ApexPunk what\'s the OC rule?`\n'
+    '**🎯 Enemies** `@ApexPunk who hit us this week?`\n'
+    '**🛠️ Actions (✅ card)** `@ApexPunk start a chain event now, 24 hours, min 10`\n'
+    '**📣 Announcements** `@ApexPunk make an announcement about Friday\'s war`\n'
+    'Reply to keep chatting. I check every number, and ask if unsure.\n'
+    '-# No money, items, payouts, Xanax or battle stats; strikes via /strikes'
 )
+MEMBER_HELP_TEXT = (
+    "Yo, ApexPunk here 🤘 @mention me with a question in plain English:\n"
+    '**📊 Your records** `@ApexPunk how many hits did I make last war?`\n'
+    '**⚔️ War & chain live** `@ApexPunk what\'s the chain at?`\n'
+    '**📜 Rules & Torn game** `@ApexPunk how does a ranked war work?`\n'
+    '**🎯 Enemies** `@ApexPunk did anyone hit us today?`\n'
+    'Reply to keep chatting. I check every number, and ask if unsure.\n'
+    '⏱️ One question every 2 minutes each.\n'
+    '-# Only your own records. No money, items, payouts, Xanax or battle stats; strikes via /strikes'
+)
+
+
+def help_reply(jump_url, management=True):
+    """One short line linking to the posted guide, or the short help text
+    when the guide isn't up (channel missing, post failed)."""
+    if jump_url:
+        return f'Everything you can ask me is here 👉 {jump_url}'
+    return HELP_TEXT if management else MEMBER_HELP_TEXT
+
+
+def cooldown_text(seconds_left):
+    """"Easy tiger, ask again in 1m 20s" (Pat's tone pick)."""
+    s = max(1, int(round(seconds_left)))
+    left = f'{s // 60}m {s % 60:02d}s' if s >= 60 else f'{s}s'
+    return f'Easy tiger 🐯 ask again in {left}.'
+
+
+def has_member_role(author, role_id=None, role_name=None):
+    """True when the author holds the Ascended Punks role (by id, else name)."""
+    for r in getattr(author, 'roles', []) or []:
+        if role_id and r.id == role_id:
+            return True
+        if not role_id and role_name and r.name.lower() == role_name.lower():
+            return True
+    return False
 
 
 FACTS_KEPT = 200   # answers whose 📎 data can still be opened (lost on restart)
@@ -2659,6 +2945,28 @@ class AskAI:
         # they're unavailable instead of failing.
         self.live = None
         self._session = None
+        # Members (features: ASK_AI_MEMBERS switch). Set by bot.py: the
+        # verification system holds the Ascended Punks role id.
+        self.verification_system = None
+        self.help_post = None          # features/ask_help_post.HelpPost, for "@ApexPunk help"
+        self.last_answered = {}        # discord user id -> when a member last got an answer
+
+    def is_member(self, author):
+        """Holder of the Ascended Punks role (verified_role_id, else its name)."""
+        from config import VERIFIED_ROLE_NAME
+        vs = self.verification_system
+        rid = (getattr(vs, 'config', None) or {}).get('verified_role_id') if vs is not None else None
+        return has_member_role(author, int(rid) if rid else None, VERIFIED_ROLE_NAME)
+
+    def cooldown_left(self, user_id, now=None):
+        from config import ASK_AI_MEMBER_COOLDOWN_S
+        last = self.last_answered.get(user_id)
+        if last is None:
+            return 0
+        return max(0, ASK_AI_MEMBER_COOLDOWN_S - ((now or time.time()) - last))
+
+    def _jump_url(self):
+        return getattr(self.help_post, 'jump_url', None) if self.help_post is not None else None
 
     async def session(self):
         if self._session is None or self._session.closed:
@@ -2687,8 +2995,19 @@ class AskAI:
         if not explicit and not drafting:
             return
 
-        if not member_is_management(message.author):
-            # Any channel works, but only management gets answers (Pat's call,
+        from config import ASK_AI_MEMBERS
+        management = member_is_management(message.author)
+        member_ok = not management and ASK_AI_MEMBERS and self.is_member(message.author)
+        if not management and ASK_AI_MEMBERS and not member_ok:
+            # Switch on, but not an Ascended Punk (a guest, not verified yet).
+            last = self.refused_at.get(message.author.id, 0)
+            if time.time() - last >= REFUSE_EVERY_S:
+                self.refused_at[message.author.id] = time.time()
+                await message.reply("Asking me is for faction members only 🔒 Get verified first and "
+                                    "you're in.", mention_author=False, delete_after=30)
+            return
+        if not management and not member_ok:
+            # Switch off: only management gets answers (Pat's call,
             # 07/11/2026). Told once per person per 10 minutes, so a member who
             # mentions the bot in passing ("thanks @ApexPunk") isn't nagged.
             last = self.refused_at.get(message.author.id, 0)
@@ -2713,6 +3032,16 @@ class AskAI:
                     'or @mention me.')
             await message.reply(hint + ' 🙂', mention_author=False, delete_after=60)
             return
+
+        if member_ok:
+            # 2 minutes between a member's answered questions (Pat,
+            # 22/11/2026). Help never waits. A mention reply can't be private,
+            # so the nudge deletes itself after 10 seconds.
+            bare = describe_mentions(message.content, self.bot.user.id, [], None, roles, message.role_mentions)
+            left = self.cooldown_left(message.author.id)
+            if left and not (not bare or HELP_WORDS.match(bare)):
+                await message.reply(cooldown_text(left), mention_author=False, delete_after=10)
+                return
 
         history, earlier = [], ''
         if is_followup:
@@ -2740,13 +3069,21 @@ class AskAI:
                 facts.live_tools = LiveTools(facts, self.live, message.guild, self.data_dir)
                 question = describe_mentions(message.content, self.bot.user.id, message.mentions, facts, roles,
                                              message.role_mentions)
+                management = member_is_management(message.author)
                 if not question or HELP_WORDS.match(question):
-                    await message.reply(HELP_TEXT, mention_author=False)
+                    # One line linking to the posted guide (Pat, 22/11/2026);
+                    # the short text only when the guide isn't up.
+                    await message.reply(help_reply(self._jump_url(), management), mention_author=False,
+                                        allowed_mentions=discord.AllowedMentions.none())
                     return
-                # Always True today (only management reaches here, see on_message);
-                # passed so letting members in later can't leak judging answers.
+                facts.set_asker(message.author.id)
+                # management=False limits members to their own records, both
+                # before the AI and inside every tool (FactBook.run).
                 ans = await answer_question(await self.session(), question, facts, history, earlier,
-                                            management=member_is_management(message.author))
+                                            management=management)
+        if not management and ans.provider != 'none':
+            # Only an answered question starts the cooldown, not a refusal.
+            self.last_answered[message.author.id] = time.time()
 
         logger.info(f'ask_ai: {message.author} asked {question[:80]!r} -> {ans.provider}, '
                     f'{ans.seconds:.0f}s, kind={ans.kind}, fallback={ans.fallback}')
@@ -2773,7 +3110,8 @@ class AskAI:
         text = ans.text if len(ans.text) <= ANSWER_LIMIT else ans.text[:ANSWER_LIMIT - 3] + '...'
         # The records go behind a button instead of under every answer: they
         # are long, and most of the time nobody reads them (Pat, 07/11/2026).
-        view = ShowDataView(self) if ans.facts_text else None
+        # The 📎 button is management only, so members don't get one.
+        view = ShowDataView(self) if ans.facts_text and management else None
         sent = await message.reply(text, view=view, mention_author=False,
                                    allowed_mentions=discord.AllowedMentions.none())
         if ans.facts_text:

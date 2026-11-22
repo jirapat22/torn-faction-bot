@@ -107,6 +107,14 @@ GUIDES_HUB_CHANNEL_ID = int(os.getenv("GUIDES_HUB_CHANNEL_ID", "1465646171069349
 # channel only ever holds the current one.
 MEMBER_COMMANDS_CHANNEL_ID = int(os.getenv("MEMBER_COMMANDS_CHANNEL_ID", "0"))
 
+# "@ApexPunk" questions from MEMBERS (holders of the Ascended Punks role).
+# OFF by default: Pat turns it on himself in env/apexpunk.env after reading
+# the test report. Management is never affected by this switch.
+ASK_AI_MEMBERS = os.getenv("ASK_AI_MEMBERS", "0").strip().lower() in ("1", "true", "yes", "on")
+# Seconds a member waits between answered questions (management: no limit).
+# Groq's free plan has 200,000 tokens a day; one question costs 3-7k.
+ASK_AI_MEMBER_COOLDOWN_S = int(os.getenv("ASK_AI_MEMBER_COOLDOWN_S", "120"))
+
 # Where the bot reports its own operational problems (#management). A config
 # id pointing at a deleted channel otherwise fails in total silence, because
 # every posting feature guards itself and logs a warning nobody reads.

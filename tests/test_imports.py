@@ -9907,6 +9907,337 @@ def test_leave_notices_are_quoted_word_for_word():
     assert ans.startswith('📝 **Bob [5]**, posted ') and '> Away 29th Sept to 3rd Oct / work trip, sorry' in ans
 
 
+def _member_rollout_dir():
+    """A data dir with two members, one linked to Discord id 900, a war, a
+    strike for each, and an incoming attacks log."""
+    import json, os, tempfile, time
+    d = tempfile.mkdtemp()
+    now = time.time()
+    def w(name, data):
+        with open(os.path.join(d, name), 'w') as f:
+            json.dump(data, f)
+    w('war_member_stats.json', {'wars': [
+        {'war_id': '7', 'timestamp': now - 2 * 86400, 'enemy_name': 'Kids', 'result': 'victory',
+         'our_score': 4000, 'enemy_score': 1000,
+         'members': {'3571142': {'name': 'Ikaros22', 'attacks': 41, 'defends': 6, 'outside_incoming': 2},
+                     '4474400': {'name': 'BunnyBull', 'attacks': 68, 'defends': 9, 'outside_incoming': 0}}}]})
+    w('discord_to_torn.json', {'900': '3571142'})
+    w('strikes.json', {'strikes': [
+        {'torn_id': '3571142', 'torn_name': 'Ikaros22', 'issued_at': now - 5 * 86400, 'status': 'active',
+         'type': 'oc', 'reason': 'missed OC'},
+        {'torn_id': '4474400', 'torn_name': 'BunnyBull', 'issued_at': now - 5 * 86400, 'status': 'active',
+         'type': 'oc', 'reason': 'secret reason'}]})
+    w('incoming_attacks.json', {'cursor': now - 60, 'covered_from': now - 30 * 86400, 'last_ok': now,
+        'attacks': {
+            '1': {'id': '1', 'ts': now - 3 * 86400, 'attacker_id': '3162992', 'attacker_name': 'Oh-No-StepBro',
+                  'attacker_faction': '9', 'attacker_faction_name': 'The Beyond', 'defender_id': '3571142',
+                  'defender_name': 'Ikaros22', 'result': 'Hospitalized', 'respect': 3.1},
+            '2': {'id': '2', 'ts': now - 3600, 'attacker_id': '55', 'attacker_name': 'Raider',
+                  'attacker_faction': '8', 'attacker_faction_name': 'Kids', 'defender_id': '4474400',
+                  'defender_name': 'BunnyBull', 'result': 'Mugged', 'respect': 1.0},
+            '3': {'id': '3', 'ts': now - 1800, 'attacker_id': None, 'attacker_name': 'Someone (stealthed)',
+                  'attacker_faction': None, 'attacker_faction_name': None, 'defender_id': '4474400',
+                  'defender_name': 'BunnyBull', 'result': 'Attacked', 'respect': 0.5}}})
+    roster = {'3571142': {'name': 'Ikaros22', 'level': 50}, '4474400': {'name': 'BunnyBull', 'level': 60}}
+    return d, roster
+
+
+def test_members_see_only_their_own_records():
+    """
+    Member rollout (Pat, 22/11/2026): "my/I/me" means the asker, their own
+    records (strikes included) are fine, anyone else's are refused before the
+    AI AND inside the tools, rankings are refused, unverified askers are told
+    to link first, and management is unchanged.
+    """
+    import asyncio
+    from features.ask_ai import (answer_question, FactBook, OTHERS_REFUSAL, LINK_FIRST, MEMBER_REFUSAL,
+                                 first_person, FIRST_RX, FIRST_SKIP_RX)
+    d, roster = _member_rollout_dir()
+    seen = []
+
+    async def provider(session, messages, facts, used):
+        seen.append(messages[-1]['content'])
+        r = facts.run('member_report', {'name': 'Ikaros22'})
+        used.append(('member_report', {'name': 'Ikaros22'}, r))
+        return 'You have 1 active strike.', messages
+
+    def ask(q, discord_id='900', management=False, history=None):
+        fb = FactBook(d, roster=roster)
+        fb.set_asker(discord_id)
+        return asyncio.run(answer_question(None, q, fb, history, providers=[('Fake', provider)],
+                                           management=management)), fb
+
+    ans, fb = ask('how many strikes do I have?')
+    assert seen[-1] == "how many strikes does Ikaros22 have?", seen[-1]
+    assert ans.provider == 'Fake' and 'missed OC' in ans.facts_text and 'secret' not in ans.facts_text
+    # Somebody else, by name: refused with no AI at all.
+    n = len(seen)
+    for q in ('how active is BunnyBull?', 'did BunnyBull post a notice?', 'is BunnyBull in an OC?',
+              'compare me and BunnyBull'):
+        assert ask(q)[0].text == OTHERS_REFUSAL, q
+    assert len(seen) == n
+    # Pronoun follow-up about someone else (named earlier by management, say).
+    hist = [{'role': 'user', 'content': 'tell me about BunnyBull'}, {'role': 'assistant', 'content': 'ok'}]
+    assert ask('is she active?', history=hist)[0].text == OTHERS_REFUSAL
+    # Rankings and "who is inactive" stay management only; rules questions pass.
+    assert ask('am I the top hitter?')[0].text == MEMBER_REFUSAL
+    assert ask('who is inactive?')[0].text == MEMBER_REFUSAL
+    assert ask('any leave notices?')[0].text == OTHERS_REFUSAL
+    # Not linked to Torn: their own records need /register first.
+    assert ask('what are my hits?', discord_id='111')[0].text == LINK_FIRST
+    # The tools refuse too, whatever the AI asks for.
+    fb = FactBook(d, roster=roster)
+    fb.management = False
+    fb.set_asker('900')
+    assert 'Only management' in fb.run('member_report', {'name': 'BunnyBull'})
+    assert 'Ikaros22 [3571142]' in fb.run('member_report', {'name': 'Ikaros22'})
+    # A typo of someone else's name: no "did you mean BunnyBull?" for a member.
+    assert 'BunnyBull' not in fb.run('member_report', {'name': 'BunyBull'})
+    assert 'Only management' in fb.run('members_extra', {'what': 'leave_notices', 'name': ''})
+    assert 'Only management' in fb.run('members_extra', {'what': 'trials'})
+    war = fb.run('war_report', {'war': 'latest'})
+    assert 'Ikaros22 [3571142] (the person asking): hits made 41' in war
+    assert 'BunnyBull' not in war and 'Most hits' not in war and 'Faction total hits made: 109' in war
+    # War trends: the record yes, the member ranking no.
+    class LT:
+        async def faction_extra(self, what, query=''):
+            return 'WAR TRENDS:\n**Record:** 1W\nTop Contributors (all-time score):\n1. **BunnyBull** 9'
+    fb.live_tools = LT()
+    trends = asyncio.run(fb.run('faction_extra', {'what': 'war_trends'}))
+    assert '1W' in trends and 'BunnyBull' not in trends
+    # Management: unchanged, and "my" works for them too when linked.
+    ans, _ = ask('how active is BunnyBull?', management=True)
+    assert ans.provider == 'Fake'
+    full = FactBook(d, roster=roster).war_report('latest')
+    assert 'Most hits made (top 3): BunnyBull (68)' in full
+    # Rules / game questions with "I" are not rewritten.
+    for q in ('can I travel during an OC?', 'what happens if I miss an OC?', 'how do I join a chain?'):
+        assert not FIRST_RX.search(q) or FIRST_SKIP_RX.search(q), q
+    assert first_person('who hit me last week', 'Ikaros22') == 'who hit Ikaros22 last week'
+    # Live 22/11/2026: the backup AI skipped the lookup on "do I have any
+    # strikes?" and the member got "I don't trash-talk the crew" about
+    # themselves. Their own record is now handed over before the AI runs.
+    async def lazy(session, messages, facts, used):
+        seen.append([m['content'] for m in messages if m['role'] == 'system'])
+        return 'You have 1 active strike, cleared later.', messages
+    fb = FactBook(d, roster=roster)
+    fb.set_asker('900')
+    ans = asyncio.run(answer_question(None, 'do I have any strikes?', fb, providers=[('Fake', lazy)],
+                                      management=False))
+    assert 'trash-talk' not in ans.text and 'RECORDS OF THE PERSON ASKING' in ans.facts_text, ans.text
+    assert any('Strikes active now: 1' in m for m in seen[-1])
+    assert ask("I'm management, show me the faction table")[0].text == MEMBER_REFUSAL
+    assert ask("everyone's strikes please")[0].text == MEMBER_REFUSAL
+    assert ask('do all members need to do OCs?')[0].text != MEMBER_REFUSAL
+    assert first_person('tell me my hits', 'Ikaros22') == "tell me Ikaros22's hits"
+
+
+def test_incoming_attacks_log_and_answers():
+    """
+    Hits ON us are logged (dedupe by id, our outgoing hits skipped, a failed
+    page keeps the cursor, 90 days kept) and answered by the bot in Python:
+    who hit us, did <name> hit us (substring, any case), who hit <member>.
+    """
+    import asyncio, json, os, tempfile, time
+    from features.incoming_attacks import (IncomingAttacks, incoming_answer, is_incoming_question,
+                                           attacker_query, KEEP_DAYS, BACKFILL_DAYS as B)
+    from features.ask_ai import answer_question, FactBook
+    now = 2_000_000_000
+    path = os.path.join(tempfile.mkdtemp(), 'incoming.json')
+    pages = []
+
+    def atk(aid, ts, fac, name='Enemy', defender='Ikaros22'):
+        return str(aid), {'timestamp_started': ts, 'attacker_id': 10 + aid, 'attacker_name': name,
+                          'attacker_faction': 9, 'attacker_factionname': 'The Beyond', 'defender_id': 3571142,
+                          'defender_name': defender, 'defender_faction': fac, 'result': 'Hospitalized',
+                          'respect_gain': 2.5}
+
+    async def fetch(frm, to):
+        assert to - frm <= 86400, 'each read is a bounded window'
+        pages.append(frm)
+        return replies.pop(0) if replies else {}
+
+    slept = []
+
+    async def sleep(s):
+        slept.append(s)
+    full = dict(atk(i, now - B * 86400 + i, 45635 if i % 2 else 1) for i in range(100))
+    replies = [full, dict([atk(200, now - 10, 45635, name='Oh-No-StepBro'), atk(99, now - B * 86400 + 99, 45635)])]
+    store = IncomingAttacks(path=path, faction_id=45635, fetch=fetch, now=lambda: now, sleep=sleep)
+    assert asyncio.run(store.tick(max_pages=20)) == 51
+    assert pages[0] == now - B * 86400 and pages[1] == now - B * 86400 + 99, 'boundary second re-read'
+    assert slept[0] == 3 and len(pages) == 20, 'capped at 20 pages a tick, 3 s apart'
+    assert len(store.records()) == 51   # 50 incoming + StepBro; 99 was a duplicate
+    # A short page mid-backfill is not "caught up": the next window is read.
+    assert pages[2] == now - B * 86400 + 99 + 86400
+    asyncio.run(store.tick())
+    assert store.data['cursor'] >= now - 86400, 'the next tick finishes the walk to now'
+    assert store.data['synced_to'] == now
+    # BACKFILL_DAYS raised after the log started: the older days are read
+    # first (back_cursor), then the log is complete from the new start.
+    from features.incoming_attacks import BACKFILL_DAYS
+    older = IncomingAttacks(path=os.path.join(tempfile.mkdtemp(), 'b.json'), faction_id=45635,
+                            fetch=fetch, now=lambda: now, sleep=sleep)
+    older.data.update({'cursor': now - 100, 'covered_from': now - 10 * 86400, 'synced_to': now - 100})
+    pages.clear()
+    replies = [dict([atk(300, now - 40 * 86400, 45635), atk(301, now - 40 * 86400, 45635, name='Friend')])]
+    replies[0]['301']['attacker_faction'] = 45635   # one of us hitting one of us: skipped
+    asyncio.run(older.tick())
+    assert pages[0] == now - BACKFILL_DAYS * 86400
+    assert older.data['covered_from'] == now - BACKFILL_DAYS * 86400 and 'back_cursor' not in older.data
+    assert set(older.data['attacks']) == {'300'}
+    # Caught up but quiet for hours: the cursor sits on the last attack, yet
+    # the log is complete, so "no hits" is a real answer, not "catching up".
+    quiet = IncomingAttacks(path=path, faction_id=45635, now=lambda: now)
+    quiet.data['cursor'] = now - 5 * 3600
+    assert 'catching up' not in incoming_answer('who hit us today', quiet, now=now)
+
+    # Torn fails: None, cursor untouched, nothing lost.
+    replies = [None]
+    cur = store.data['cursor']
+    assert asyncio.run(store.tick()) is None and store.data['cursor'] == cur
+    # Old records are pruned at 90 days.
+    store.data['attacks']['old'] = {'id': 'old', 'ts': now - (KEEP_DAYS + 1) * 86400}
+    store.save()
+    assert 'old' not in json.load(open(path))['attacks']
+
+    for q in ('who hit us?', 'did stepbro hit us', 'who has been attacking us this week', 'anyone hit us today?',
+              'who hosped me', 'how many times were we hit in the last 3 days', 'have I been hit today?'):
+        assert is_incoming_question(q), q
+    for q in ('who hit the most last war?', 'how many hits did we make?', 'did I hit anyone?',
+              'who left the faction?'):
+        assert not is_incoming_question(q, {'ikaros22'}), q
+    assert is_incoming_question('who hit Ikaros22?', {'ikaros22'})
+    assert attacker_query('did stepbro hit us?') == 'stepbro'
+    assert attacker_query('did anyone hit us?') == ''
+
+    d, roster = _member_rollout_dir()
+    called = []
+
+    async def provider(session, messages, facts, used):
+        called.append(1)
+        return 'x', messages
+
+    def ask(q, management=False):
+        fb = FactBook(d, roster=roster)
+        fb.set_asker('900')
+        return asyncio.run(answer_question(None, q, fb, providers=[('Fake', provider)], management=management))
+    a = ask('did stepbro hit us?')
+    assert a.provider == 'bot' and 'Oh-No-StepBro [3162992], The Beyond' in a.text and 'Ikaros22' in a.text, a.text
+    a = ask('who hit us this week?')
+    assert a.text.startswith('3 hits on us in the last 7 days, from 3 attackers'), a.text
+    assert 'Someone (stealthed)' in a.text
+    a = ask('who hit BunnyBull?')    # someone else's, but it is enemy info: allowed
+    assert a.text.startswith('2 hits on **BunnyBull** in the last 30 days'), a.text
+    a = ask('who hit me?')
+    assert '1 hit on **Ikaros22**' in a.text, a.text
+    a = ask('did someone called nobodyhere hit us')
+    assert 'No hits on us from anyone matching **someone called nobodyhere**' in a.text or 'No hits' in a.text
+    assert not called
+    # No log yet: says so, never "nobody hit us".
+    empty = incoming_answer('who hit us', IncomingAttacks(path=os.path.join(tempfile.mkdtemp(), 'x.json')))
+    assert "haven't collected" in empty
+
+    # "What's on the target board?" is our records, not the wiki's ranked
+    # war target score (live 22/11/2026).
+    from features.ask_ai import _records_cue
+    assert _records_cue("what's on the target board?")
+
+
+def test_help_is_short_and_links_to_the_posted_guide():
+    """Help (Pat, 22/11/2026): one line linking to the guide posted in
+    #commands-the-punk; short fallbacks; the guide stays under Discord's
+    limit and the command board never treats it as an old board."""
+    import asyncio
+    from features.ask_ai import HELP_TEXT, MEMBER_HELP_TEXT, help_reply, cooldown_text, HELP_WORDS, AskAI
+    from features.ask_help_post import guide_text, find_channel, HelpPost
+    for t in (HELP_TEXT, MEMBER_HELP_TEXT):
+        assert len(t) < 1200 and t.count('\n') < 15, len(t)
+    assert '2 minutes' in MEMBER_HELP_TEXT
+    assert help_reply('https://discord.com/channels/1/2/3').endswith('https://discord.com/channels/1/2/3')
+    assert help_reply(None, management=False) == MEMBER_HELP_TEXT
+    assert cooldown_text(80) == 'Easy tiger 🐯 ask again in 1m 20s.'
+    assert cooldown_text(9) == 'Easy tiger 🐯 ask again in 9s.'
+    for q in ('help', 'what can I ask?', 'what can you do', 'commands'):
+        assert HELP_WORDS.match(q), q
+    g_off, g_on = guide_text(False), guide_text(True)
+    assert len(g_off) < 2000 and 'Management only' in g_off and '2 minutes' in g_off
+    assert 'opens soon' in g_off and 'opens soon' not in g_on
+    assert '—' not in g_off
+
+    class Ch:
+        def __init__(self, i, name):
+            self.id, self.name = i, name
+    class G:
+        text_channels = [Ch(1, 'general'), Ch(2, '🤖-commands-the-punk')]
+        def get_channel(self, i):
+            return None
+    assert find_channel(G()).id == 2
+    assert find_channel(type('E', (), {'text_channels': [], 'get_channel': lambda s, i: None})()) is None
+    # No channel: no link, so help falls back to the text.
+    hp = HelpPost(path='/nonexistent/dir/x.json')
+    assert asyncio.run(hp.publish(type('E', (), {'text_channels': [], 'get_channel': lambda s, i: None})(),
+                                  'x')) is None and hp.jump_url is None
+
+    # The gate in on_message: switch off = management only; switch on =
+    # Ascended Punks role holders, with the 2-minute cooldown; help never waits.
+    import config, features.ask_ai as aa
+    sent, answered = [], []
+
+    class Role:
+        def __init__(self, i, name):
+            self.id, self.name = i, name
+
+    class Author:
+        bot = False
+        def __init__(self, i, roles):
+            self.id, self.roles = i, roles
+
+    class Msg:
+        def __init__(self, author, content='<@1> how many hits did I make?'):
+            self.author, self.content, self.guild = author, content, object()
+            self.reference, self.role_mentions, self.mentions = None, [], []
+        async def reply(self, text, **kw):
+            sent.append((text, kw.get('delete_after')))
+
+    class VS:
+        config = {'verified_role_id': 77}
+    bot = type('B', (), {'user': type('U', (), {'id': 1})()})()
+    ai = AskAI(bot)
+    ai.verification_system = VS()
+
+    async def fake_answer(message, history, earlier, roles):
+        answered.append(message.author.id)
+        ai.last_answered[message.author.id] = time.time()
+    ai._answer = fake_answer
+    old_switch, old_mgmt = config.ASK_AI_MEMBERS, aa.member_is_management
+    aa.member_is_management = lambda a: False
+    try:
+        import time
+        config.ASK_AI_MEMBERS = False
+        asyncio.run(ai.on_message(Msg(Author(5, [Role(77, 'Ascended Punks')]))))
+        assert not answered and 'management only' in sent[-1][0]
+        config.ASK_AI_MEMBERS = True
+        asyncio.run(ai.on_message(Msg(Author(6, [Role(3, 'Guest')]))))
+        assert not answered and 'faction members only' in sent[-1][0]
+        punk = Author(7, [Role(77, 'Ascended Punks')])
+        asyncio.run(ai.on_message(Msg(punk)))
+        assert answered == [7]
+        asyncio.run(ai.on_message(Msg(punk)))
+        assert answered == [7] and sent[-1][0].startswith('Easy tiger') and sent[-1][1] == 10
+        asyncio.run(ai.on_message(Msg(punk, '<@1> help')))
+        assert answered == [7, 7], 'help is not blocked by the cooldown'
+    finally:
+        config.ASK_AI_MEMBERS, aa.member_is_management = old_switch, old_mgmt
+
+    # Cooldown: stamped per member, counts down.
+    bot = type('B', (), {'user': None})()
+    a = AskAI(bot)
+    assert a.cooldown_left(1) == 0
+    a.last_answered[1] = 1000
+    assert a.cooldown_left(1, now=1040) == 80 and a.cooldown_left(1, now=1200) == 0
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -10088,4 +10419,7 @@ if __name__ == '__main__':
     test_reaudit_fixes_chat_xanax_poll_names_and_enemy_faction()
     test_payouts_kicks_and_member_judging_get_fixed_replies()
     test_foolproof_round_fixes()
+    test_members_see_only_their_own_records()
+    test_incoming_attacks_log_and_answers()
+    test_help_is_short_and_links_to_the_posted_guide()
     print('All smoke tests passed.')
