@@ -158,7 +158,9 @@ BAND_LABELS = {
 # Flags make the destination readable at a glance in a long feed.
 COUNTRY_FLAGS = {
     'Mexico': '\U0001f1f2\U0001f1fd', 'Cayman Islands': '\U0001f1f0\U0001f1fe',
-    'Canada': '\U0001f1e8\U0001f1e6', 'Hawaii': '\U0001f1fa\U0001f1f8',
+    # Hawaii has no flag emoji of its own, and the US flag read as "USA" (Pat,
+    # 22/11/2026), so it gets a hibiscus, Hawaii's state flower.
+    'Canada': '\U0001f1e8\U0001f1e6', 'Hawaii': '\U0001f33a',
     'United Kingdom': '\U0001f1ec\U0001f1e7', 'Argentina': '\U0001f1e6\U0001f1f7',
     'Switzerland': '\U0001f1e8\U0001f1ed', 'Japan': '\U0001f1ef\U0001f1f5',
     'China': '\U0001f1e8\U0001f1f3', 'UAE': '\U0001f1e6\U0001f1ea',
