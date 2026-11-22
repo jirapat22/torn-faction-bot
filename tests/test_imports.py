@@ -9596,7 +9596,8 @@ def test_saved_wiki_pages_answer_the_right_section():
     import asyncio
     from features.ask_ai import FactBook, answer_question, mechanics_sections
     fb = FactBook('data', roster={})
-    for q in ['how does chaining work?', 'how long can a ranked war last?', 'what is early discharge?']:
+    for q in ['how does chaining work?', 'how long can a ranked war last?', 'what is early discharge?',
+              'how do i get out of hosp fast?']:
         assert mechanics_sections(q, fb), q
     for q in ["what's the chain at?", 'what is our war score?', 'how did the last war go?', 'what is the next war?',
               "what's coming up?", 'what are the chain rules?', 'start a chain event']:
@@ -9611,6 +9612,25 @@ def test_saved_wiki_pages_answer_the_right_section():
                                       providers=[('fake', guesser)]))
     assert ans.text.startswith("Here's what the Torn wiki says (Ranked War, Target score"), ans.text
     assert '123 hours' in ans.text and 'no fixed' not in ans.text and 'wiki.torn.com' in ans.text
+
+    # The lookup searches the person's words, not the AI's rewording, and the
+    # tool's raw link label is tidied.
+    async def rewords(session, messages, f, used):
+        r = await f._run_live('torn_lookup', {'query': 'ranked war duration'})
+        used.append(('torn_lookup', {'query': 'ranked war duration'}, r))
+        assert '123 hours' in r
+        return 'A ranked war can last 123 hours at most. WIKI SEARCH LINK: https://wiki.torn.com/x', list(messages)
+    import tempfile, time as _time
+    from utils.helpers import save_json
+    tmp = tempfile.mkdtemp()
+    # A fresh saved item list, so the lookup never calls Torn from a test.
+    save_json(os.path.join(tmp, 'torn_items.json'),
+              {'fetched': _time.time(), 'items': {'1': {'name': 'Lollipop', 'type': 'Candy'}}})
+    fb = FactBook('data', roster={})
+    from features.ask_live import LiveTools
+    fb.live_tools = LiveTools(fb, None, None, tmp)
+    ans = asyncio.run(answer_question(None, 'how long can a ranked war last?', fb, providers=[('fake', rewords)]))
+    assert 'More on the Torn wiki: https://wiki.torn.com/x' in ans.text and 'SEARCH LINK' not in ans.text, ans.text
 
     # A Torn topic with nothing saved: the link, not the AI's chat guess.
     async def chatter(session, messages, f, used):

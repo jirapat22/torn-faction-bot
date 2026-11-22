@@ -900,7 +900,10 @@ class FactBook:
             if name == 'members_extra':
                 return await lt.members_extra(args.get('what', ''), str(args.get('name') or ''))
             if name == 'torn_lookup':
-                return await lt.torn_lookup(str(args.get('query') or ''))
+                # On a wiki question the person's own words are searched, not
+                # the AI's rewording: "ranked war duration" missed the section
+                # "how long can a ranked war last?" finds (live 22/11/2026).
+                return await lt.torn_lookup(getattr(self, 'mech_question', None) or str(args.get('query') or ''))
             return await lt.faction_extra(args.get('what', ''), str(args.get('query') or ''))
         except Exception as e:
             logger.exception(f'ask_ai: tool {name} failed')
@@ -1648,7 +1651,7 @@ def game_question(question, facts):
 # see these, because chain/war/OC/hosp are also records words (live test
 # 22/11/2026: the AI skipped the lookup and said a ranked war has "no fixed
 # time limit", the page says 123 hours at most).
-MECH_RX = re.compile(r"\bhow (?:does|do|is|are)\b[^?\n]*\bwork|\bhow (?:long|much|many)\b[^?\n]*\b(?:can|does|do)\b|"
+MECH_RX = re.compile(r"\bhow (?:does|do|is|are)\b[^?\n]*\bwork|\bhow (?:do|does|can|could) (?:i|you|a|an|one|people|players?|someone)\b|\bhow (?:long|much|many)\b[^?\n]*\b(?:can|does|do)\b|"
                      r"\bwhat (?:is|are|does|do)\b|\bwhat'?s\b|\bexplain\b|\btell me about\b|\bhow to\b|"
                      r"\bwhat (?:items?|tools?|roles?) (?:do|does|are)\b", re.I)
 # Anything pointing at OUR faction, a moment in time, or a result is a
@@ -2122,6 +2125,7 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
     # only tool on offer, and if the AI still skips it the bot quotes the
     # page itself (see the check after each provider below).
     mech = mechanics_sections(question, facts) if not acting and not announcing else []
+    facts.mech_question = question if mech else None
     if mech:
         facts.tool_specs = [t for t in facts.tool_specs if t['function']['name'] == 'torn_lookup']
     user_said = '\n'.join([question] + [t.get('content', '') for t in history or [] if t.get('role') == 'user'])
@@ -2408,6 +2412,9 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
         text = tidy_answer(text, facts.notices, '' if mech else question)
         # The wiki search link always reaches the person when a Torn game
         # question was looked up, even if the AI left it out (c, 22/11/2026).
+        # The tool's own label leaked into answers as "WIKI SEARCH LINK: ...".
+        text = re.sub(r'\*{0,2}WIKI SEARCH LINK\*{0,2}(?: \(always give this to the person\))?:\*{0,2}',
+                      'More on the Torn wiki:', text)
         if any(n == 'torn_lookup' for n, _, _ in used) and 'wiki.torn.com' not in text:
             from features.torn_wiki import search_link
             text += f'\n-# More on the Torn wiki: <{search_link(question)}>'
