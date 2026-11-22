@@ -10163,7 +10163,7 @@ def test_help_is_short_and_links_to_the_posted_guide():
     g_off, g_on = guide_text(False), guide_text(True)
     assert len(g_off) < 2000 and 'Management only' in g_off and '2 minutes' in g_off
     assert 'opens soon' in g_off and 'opens soon' not in g_on
-    assert '—' not in g_off
+    assert '\u2014' not in g_off   # no em dashes (Pat's rule)
 
     class Ch:
         def __init__(self, i, name):
