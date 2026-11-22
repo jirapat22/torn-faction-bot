@@ -12,8 +12,8 @@ An Organized Crime (OC, the 2.0 system) is a group activity for faction members 
 - When every role has finished planning, the OC moves to execution. If it's not full and nobody is next, it pauses.
 - A member with no progress yet can be removed or replaced with no effect. If someone with progress leaves, it is lost, or (only when moved to a new role in the same OC) partly or fully passed on, depending on timing. Example: Bob joins at 10:00, Tom at 12:00, Bob leaves at 16:00: only 4 of Bob's 6 hours pass to Tom.
 
-## Execution phase (INITIATING)
-A short phase (under a minute) once everyone finishes planning; the OC shows "INITIATING". Everything must still be in place: all members healthy (not in hospital), in Torn (not travelling), and all tools and materials available. Then it moves to the "completed" tab whatever the outcome. Leaders can send a newsletter to members who haven't joined an OC.
+## Execution phase (INITIATING): no travelling or hospital when it starts
+A short phase (under a minute) once everyone finishes planning; the OC shows "INITIATING". Everything must still be in place: all members healthy (not in hospital), in Torn (not travelling), and all tools and materials available. So a member who is travelling or in hospital at that moment stops the OC from initiating. Then it moves to the "completed" tab whatever the outcome. Leaders can send a newsletter to members who haven't joined an OC.
 
 ## Tools and materials
 Tools are needed but not used up; materials are used up. In item effects, "Required..." means a reusable tool (e.g. Billfold) and "Used..." means a material (e.g. ATM Key). Some items count differently in OCs than their item type says (ATM Key and Firewalk Virus are materials here; Billfold is a tool). Equipped items like Construction Helmet and Cassock work too, but unequipped or loaned items are used first.
