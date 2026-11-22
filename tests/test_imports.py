@@ -9591,6 +9591,34 @@ def test_saved_wiki_pages_answer_the_right_section():
     assert 'Matchmaking' in first('what is a sacrifice match?')        # body-only match
     assert first('how does travel work in torn?') is None               # not saved: link only
 
+    # Routing: game questions reach the wiki even with records words in them
+    # (chain, war); anything about OUR faction or a moment in time does not.
+    import asyncio
+    from features.ask_ai import FactBook, answer_question, mechanics_sections
+    fb = FactBook('data', roster={})
+    for q in ['how does chaining work?', 'how long can a ranked war last?', 'what is early discharge?']:
+        assert mechanics_sections(q, fb), q
+    for q in ["what's the chain at?", 'what is our war score?', 'how did the last war go?', 'what is the next war?',
+              "what's coming up?", 'what are the chain rules?', 'start a chain event']:
+        assert not mechanics_sections(q, fb), q
+
+    # The AI answered "no fixed time limit" without looking (live 22/11/2026):
+    # with no lookup made, the bot quotes the saved page itself.
+    async def guesser(session, messages, f, used):
+        assert [t['function']['name'] for t in f.tool_specs] == ['torn_lookup']
+        return 'There is no fixed time limit, wars go on for hours.', list(messages)
+    ans = asyncio.run(answer_question(None, 'how long can a ranked war last?', FactBook('data', roster={}),
+                                      providers=[('fake', guesser)]))
+    assert ans.text.startswith("Here's what the Torn wiki says (Ranked War, Target score"), ans.text
+    assert '123 hours' in ans.text and 'no fixed' not in ans.text and 'wiki.torn.com' in ans.text
+
+    # A Torn topic with nothing saved: the link, not the AI's chat guess.
+    async def chatter(session, messages, f, used):
+        return 'Travel unlocks once you reach the required level!', list(messages)
+    ans = asyncio.run(answer_question(None, 'how does travel work in torn?', FactBook('data', roster={}),
+                                      providers=[('fake', chatter)]))
+    assert 'wiki.torn.com' in ans.text and 'required level' not in ans.text, ans.text
+
 
 def test_torn_lookup_items_wiki_pages_and_link():
     """

@@ -39,7 +39,7 @@ WIKI_LIMIT = 2500     # characters of saved wiki text handed to the AI per quest
 STOP = set('''a an the is are was were be do does did how what whats what's which who why when where can could
 should would will i me my we our you your it its this that these those of in on at to for from with and or
 about tell explain work works working use used using get got make mean means torn wiki apexpunk please
-pls hey yo any some much many there here thing stuff out get getting go going'''.split())
+pls hey yo any some much many there here thing stuff out get getting go going up down come coming soon'''.split())
 
 
 def words(text):

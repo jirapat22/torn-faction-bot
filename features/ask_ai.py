@@ -1643,6 +1643,55 @@ def game_question(question, facts):
         and not DATA_WORDS.search(question or '') and not RULES_CUE.search(question or '')
 
 
+# "How does chaining work?", "how long can a ranked war last?": a question
+# about the GAME, which the saved wiki pages answer. game_question() can't
+# see these, because chain/war/OC/hosp are also records words (live test
+# 22/11/2026: the AI skipped the lookup and said a ranked war has "no fixed
+# time limit", the page says 123 hours at most).
+MECH_RX = re.compile(r"\bhow (?:does|do|is|are)\b[^?\n]*\bwork|\bhow (?:long|much|many)\b[^?\n]*\b(?:can|does|do)\b|"
+                     r"\bwhat (?:is|are|does|do)\b|\bwhat'?s\b|\bexplain\b|\btell me about\b|\bhow to\b|"
+                     r"\bwhat (?:items?|tools?|roles?) (?:do|does|are)\b", re.I)
+# Anything pointing at OUR faction, a moment in time, or a result is a
+# records question, never a wiki one ("what's the chain at?", "what is our
+# war score?").
+# "last" only as in "last war": "how long can a ranked war LAST?" is a game question.
+RECORDS_RX = re.compile(r"\b(?:our|ours|we|us|they|them|their|latest|current(?:ly)?|now|right now|today|"
+                        r"tonight|yesterday|this week|did|was|were|who|score|status|report|left|going|"
+                        r"next|upcoming|coming|happening|soon|events?|leaderboard|most|least|top)\b|\bat\s*\??\s*$|"
+                        r"\blast (?:wars?|chains?|ocs?|week|night|time|one|month|days?|few|\d+)\b", re.I)
+# Torn topics with no saved page yet: the link beats an AI guess
+# ("travel becomes available once you reach the required level", wrong).
+GAME_TOPIC = re.compile(r"\btorn\b|\btravel\w*|\bfl(?:y|ights?)\b|\bgym\b|\bcrimes?\b|\bitems?\b|\bjobs?\b|"
+                        r"\bcompan(?:y|ies)\b|\bstocks?\b|\bdrugs?\b|\beducation\b|\bpropert(?:y|ies)\b|"
+                        r"\bcasino\b|\bmissions?\b|\bbazaar\b|\bnerve\b|\benergy\b|\bhappy\b|\bmerits?\b|"
+                        r"\bawards?\b|\bhonou?rs?\b|\bracing\b|\bhunting\b|\bupgrades?\b", re.I)
+
+
+def mechanics_sections(question, facts):
+    """The saved wiki sections for a how-Torn-works question, or [] when it
+    is not one (a member named, our records, the rules, an action)."""
+    q = question or ''
+    if not MECH_RX.search(q) or RECORDS_RX.search(q) or RULES_CUE.search(q) or ANNOUNCE_RX.search(q):
+        return []
+    if names_in(q, facts):
+        return []
+    from features.ask_actions import ACTION_RX
+    if ACTION_RX.search(q):
+        return []
+    from features.torn_wiki import find_wiki, load_pages
+    return find_wiki(q, load_pages())
+
+
+def wiki_quote(question, sections):
+    """The bot's own answer from the best saved section, used when the AI
+    would not look it up."""
+    from features.torn_wiki import search_link
+    head, _, body = sections[0].partition(':\n')
+    where = head[len('WIKI ('):].split(';')[0]
+    return (f"Here's what the Torn wiki says ({where}):\n{body[:1500]}\n"
+            f"-# From a saved copy of the wiki. More: <{search_link(question)}>")
+
+
 def wiki_fallback(question):
     from features.torn_wiki import search_link
     return (f"I don't have that one saved, boss 🤷 Try the Torn wiki: <{search_link(question)}>\n"
@@ -2069,6 +2118,12 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
     acting = bool(ACTION_RX.search(convo)) and not announcing and management
     facts.tool_specs = [t for t in TOOL_SPECS + LIVE_SPECS + (ACTION_SPECS if acting else [])
                         if management or t['function']['name'] not in MEMBER_BLOCKED_TOOLS]
+    # A how-Torn-works question with a saved wiki page: the lookup is the
+    # only tool on offer, and if the AI still skips it the bot quotes the
+    # page itself (see the check after each provider below).
+    mech = mechanics_sections(question, facts) if not acting and not announcing else []
+    if mech:
+        facts.tool_specs = [t for t in facts.tool_specs if t['function']['name'] == 'torn_lookup']
     user_said = '\n'.join([question] + [t.get('content', '') for t in history or [] if t.get('role') == 'user'])
     facts.said = user_said + ' ' + clock_variants(user_said)
     sys_txt = system_prompt(announce=announcing, acting=acting)
@@ -2095,6 +2150,10 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
     if who:
         base.append({'role': 'system', 'content': f'In the next question, he/she/they/him/her/them/his/their '
                      f'means {who}, the member from earlier in this conversation. Look them up by that name.'})
+    if mech:
+        base.append({'role': 'system', 'content': 'The next question is about how Torn works. Call torn_lookup '
+                     'with it first, then answer only from what it returns, numbers exactly as written, and '
+                     'include the wiki search link.'})
     base += list(history or []) + [{'role': 'user', 'content': question}]
 
     t0, problems = time.monotonic(), []
@@ -2124,6 +2183,8 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
         # it happened to be became an "allowed" number (at 01:16, an invented
         # "16 hits" passed the check).
         sources = lambda: (_facts_text(used), earlier_facts, question, sys_static)
+        if mech and not any(n == 'torn_lookup' for n, _, _ in used):
+            return Answer(wiki_quote(question, mech), pname, '\n\n'.join(mech), True, took())
 
         # Actions: Python already checked every detail (plan_action). Either
         # the confirm card goes out, or the bot's own question about what is
@@ -2222,6 +2283,10 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
             last_bot = next((t.get('content', '') for t in reversed(history or []) if t.get('role') == 'assistant'), '')
             if acting and last_bot.startswith('Before I do that I need'):
                 return Answer(last_bot, pname, '', True, took(), kind='action_ask')
+            # A Torn game question with nothing saved gets the wiki link, not
+            # chat: the AI "explained" travel with a made-up level requirement.
+            if game_question(question, facts) and GAME_TOPIC.search(question) and MECH_RX.search(question):
+                return Answer(wiki_fallback(question), pname, '', True, took(), kind='ask')
             # ...unless it was just chit-chat, which needs no records at all.
             if is_small_talk(question, text, facts):
                 chat = tidy_answer(text, [], '')
@@ -2338,7 +2403,9 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
             return Answer('\n\n'.join(facts.notices), pname, '', True, took(), kind='ask')
         # 5. Part of the question couldn't be answered (e.g. one of two names
         #    was wrong): say so under the answer, in the bot's words.
-        text = tidy_answer(text, facts.notices, question)
+        # A wiki answer skips the "I don't keep money" note: "Break the BANK"
+        # is an OC name, not a records question (live test 22/11/2026).
+        text = tidy_answer(text, facts.notices, '' if mech else question)
         # The wiki search link always reaches the person when a Torn game
         # question was looked up, even if the AI left it out (c, 22/11/2026).
         if any(n == 'torn_lookup' for n, _, _ in used) and 'wiki.torn.com' not in text:
