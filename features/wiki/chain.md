@@ -1,8 +1,9 @@
 # Chain
 Source: https://wiki.torn.com/wiki/Chain
 Saved: 22/11/2026
+Keywords: chaining, bonus hit, retal, retals, retaliation, respect, fair fight, ff, mug, group attack, overseas, warlord, chain timer, recruit, recruits
 
-## How chaining works
+## How chaining works (the 5 minute timer between hits)
 A chain is a faction warring tool. It starts with a five minute "warm up" in which ten successful attacks must be made. Once a chain reaches ten, each next hit must land within a five minute timer: a successful hit resets the timer, adds one to the chain and keeps it going.
 
 A successful attack can be made on anyone in Torn not in your own faction. After winning, any result counts (leave, mug, hospitalise). Only full members count towards a chain: someone who joins after the chain starts must wait out the 72 hour Recruit status.

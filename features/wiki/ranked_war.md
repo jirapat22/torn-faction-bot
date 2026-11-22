@@ -1,6 +1,7 @@
 # Ranked War
 Source: https://wiki.torn.com/wiki/Ranked_War
 Saved: 22/11/2026
+Keywords: rw, ranked, matchmaking, enlist, enlisting, rank, ranks, division, diamond, platinum, gold, silver, bronze, target score, target, war score, rewards, caches, template, templates, sacrifice, forfeit, roster lock, recruit, recruits
 
 ## What a ranked war is
 Ranked warring is a warring mode where factions fight one another 1v1 to move up through ranked tiers and earn rewards. It is a "tug of war": each side attacks members of the other to gain score, and the first to cross the target net score wins.
@@ -33,7 +34,7 @@ Five ranks, each with four divisions: Bronze (about 30% of ranked factions), Sil
 
 Rank decay: a faction that doesn't fight a ranked war for about six weeks is unranked outright, with a warning a week before. Staying enlisted prevents this. Re-enlisting gives a new rank at matchmaking.
 
-## During the war
+## During the war (how score is gained)
 - Score = the respect earned by each hit on the opponent, so mugs give 75% of a leave or hosp, and chain bonus hits give a lot.
 - Any active chain is forced into cooldown 5 seconds before the war starts.
 - Early Discharge is available from the start for all incoming outside hits.

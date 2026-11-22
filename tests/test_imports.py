@@ -9569,7 +9569,7 @@ def test_saved_wiki_pages_answer_the_right_section():
     from features import torn_wiki as t
     pages = t.load_pages()
     assert {p[0] for p in pages} >= {'Chain', 'Hospital (hosp)', 'Organized Crime (OC)', 'Ranked War', 'Revive'}
-    for _, _, sections in pages:
+    for _, _, sections, _ in pages:
         for head, body in sections:
             assert '$' not in body and 'xanax' not in body.lower(), head
             assert not body.startswith('Saved:'), head
@@ -9580,6 +9580,16 @@ def test_saved_wiki_pages_answer_the_right_section():
 
     assert t.stem('chaining') == t.stem('chains') == t.stem('chain')
     assert t.stem('bonus') == 'bonus'
+    assert t.stem('mugging') == t.stem('mug') and t.stem('reviver') == t.stem('revive')
+    # Topic gate: one stray word never opens a page.
+    assert first('how do i make money in torn?') is None       # "money" sits in a hospital section
+    assert first("what's the best gym?") is None                # "Best of the Lot" is an OC
+    assert first('how do i get more energy?') is None           # "Revive energy cost"
+    # Slang reaches the words the page uses.
+    assert 'Respect per hit' in first("what's a retal?") and 'Respect per hit' in first('what does ff mean?')
+    assert 'Morphine' in first('what does morphine do?')
+    assert 'how score is gained' in first('how is ranked war score calculated?')
+    assert 'How to revive someone' in first('how do i revive someone?')
     assert 'How chaining works' in first('how does chaining work?')
     assert 'Respect per hit' in first('how is respect calculated in a chain?')
     assert 'Break the Bank' in first('what items do I need for break the bank?')
@@ -9597,8 +9607,12 @@ def test_saved_wiki_pages_answer_the_right_section():
     from features.ask_ai import FactBook, answer_question, mechanics_sections
     fb = FactBook('data', roster={})
     for q in ['how does chaining work?', 'how long can a ranked war last?', 'what is early discharge?',
-              'how do i get out of hosp fast?']:
+              'how do i get out of hosp fast?', 'why did my revive fail?', 'which ocs need a hand drill?',
+              'how is ranked war score calculated?', 'when does matchmaking happen?']:
         assert mechanics_sections(q, fb), q
+    # Rules-sounding game questions: offered both the wiki and the rulebook.
+    for q in ['can i travel during an oc?', 'what happens if the chain breaks?']:
+        assert not mechanics_sections(q, fb) and mechanics_sections(q, fb, rules_ok=True), q
     for q in ["what's the chain at?", 'what is our war score?', 'how did the last war go?', 'what is the next war?',
               "what's coming up?", 'what are the chain rules?', 'start a chain event']:
         assert not mechanics_sections(q, fb), q

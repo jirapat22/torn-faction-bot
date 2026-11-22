@@ -130,7 +130,9 @@ def item_line(it):
 # ---------- b) saved wiki pages ----------
 
 def load_pages(wiki_dir=WIKI_DIR):
-    """[(title, source, [(heading, text)])] for every saved page."""
+    """[(title, source, sections, topic)] for every saved page.
+    sections: [(heading, text)]. topic: the phrases that say a question is
+    about this page at all (title, "Keywords:" line, every heading)."""
     pages = []
     for path in sorted(glob.glob(os.path.join(wiki_dir, '*.md'))):
         if os.path.basename(path).lower() == 'readme.md':
@@ -143,28 +145,38 @@ def load_pages(wiki_dir=WIKI_DIR):
         title = title.group(1).strip() if title else os.path.basename(path)[:-3]
         source = re.search(r'^Source:\s*(\S+)', text, re.M)
         source = source.group(1) if source else ''
+        keywords = re.search(r'^Keywords:\s*(.+)$', text, re.M)
+        keywords = [k.strip() for k in keywords.group(1).split(',')] if keywords else []
         sections, head, buf = [], title, []
         for line in text.split('\n'):
             if line.startswith('## '):
                 if ''.join(buf).strip():
                     sections.append((head, '\n'.join(buf).strip()))
                 head, buf = line[3:].strip(), []
-            elif not line.startswith(('# ', 'Source:', 'Saved:')):
+            elif not line.startswith(('# ', 'Source:', 'Saved:', 'Keywords:')):
                 buf.append(line)
         if ''.join(buf).strip():
             sections.append((head, '\n'.join(buf).strip()))
-        pages.append((title, source, sections))
+        # Title words count one by one ("chain", "hosp"); a keyword or heading
+        # counts only as a whole phrase, so "best gym" is not "Best of the Lot".
+        topic = [{w} for w in stems(title)] + [stems(k) for k in keywords] + \
+                [stems(re.sub(r'\(.*?\)', '', h)) for h, _ in sections if h != title]
+        pages.append((title, source, sections, [t for t in topic if t]))
     return pages
 
 
 def stem(word):
     """Crude word root, so "chaining", "chains" and "chain" all match the
-    Chain page and "revives" matches Revive. Only used for wiki matching."""
+    Chain page, "revives"/"reviver" match Revive and "mugging" matches mug.
+    Only used for wiki matching."""
     if word.endswith(('us', 'ss')):
         return word                      # bonus, class: not plurals
-    for suffix in ('ing', 'ed', 'es', 's', 'e'):
-        if word.endswith(suffix) and len(word) - len(suffix) >= 3:
-            return word[:-len(suffix)]
+    for suffix in ('ing', 'ed', 'er', 'es', 's', 'e'):
+        if word.endswith(suffix) and len(word) - len(suffix) >= (4 if suffix == 'er' else 3):
+            root = word[:-len(suffix)]
+            if suffix in ('ing', 'ed', 'er') and len(root) > 3 and root[-1] == root[-2]:
+                root = root[:-1]         # mugg-ing -> mug, plann-ing -> plan
+            return root
     return word
 
 
@@ -172,31 +184,48 @@ def stems(text):
     return {stem(w) for w in words(text)}
 
 
-def find_wiki(question, pages):
-    """Best saved sections for the question. A section needs a keyword in
-    its page title or heading, or ALL the keywords in its body, so a stray
-    word in an unrelated page doesn't pass as an answer."""
+# Torn slang -> the words the wiki pages use, so "what's a retal?" finds the
+# line that says "Retaliation".
+SLANG = {
+    'retal': 'retaliation', 'retals': 'retaliation', 'ff': 'fair fight', 'rw': 'ranked war',
+    'rws': 'ranked war', 'hosp': 'hospital', 'hosped': 'hospital', 'med': 'medical', 'meds': 'medical',
+    'oc': 'organized crime', 'ocs': 'organized crime', 'organised': 'organized', 'sfak': 'small first aid kit',
+    'fak': 'first aid kit', 'ed': 'early discharge', 'rev': 'revive', 'revs': 'revive',
+    'mugging': 'mug', 'bb': 'blood bag', 'cd': 'cooldown',
+}
+
+
+def question_stems(question):
     kw = stems(question)
+    for w in words(question):
+        if w in SLANG:
+            kw |= stems(SLANG[w])
+    return kw
+
+
+def find_wiki(question, pages):
+    """
+    Best saved sections for the question. Two steps:
+    1. The topic gate: a page is only searched when the question names its
+       topic (a title word, a keyword or a whole heading). One stray word
+       used to be enough: "make MONEY" found a hospital section, "best GYM"
+       the OC "Best of the Lot".
+    2. Inside a page, a heading word counts most, then words in the body.
+    """
+    kw = question_stems(question)
     if not kw:
         return []
     scored = []
-    for title, source, sections in pages:
+    for title, source, sections, topic in pages:
+        if not any(t <= kw for t in topic):
+            continue
         tw = stems(title)
         for order, (head, body) in enumerate(sections):
-            hs = stems(head)
+            hs = stems(head) - tw
             body_words = {stem(w) for w in words(body)}
-            if not kw & (hs | tw):
-                # Body-only match ("what is a sacrifice match?" lives inside
-                # Matchmaking): every keyword must be there, or a stray word
-                # would pass as an answer. Scored below any heading match.
-                if kw <= body_words:
-                    scored.append((1, -order, title, source, head, body))
-                continue
-            # A word in the section's own heading counts most. A title word
-            # ("chain") is all over that page, headings included, so it only
-            # gets the section in the door; the body counts only words found
-            # in neither ("how long can a ranked war LAST?").
-            score = 4 * len(kw & hs - tw) + 4 * len(kw & tw) + 2 * len(kw - tw - hs & body_words)
+            # +3 when the question names this page itself ("how do I revive
+            # someone?" belongs on Revive before Hospital's revive section).
+            score = 4 * len(kw & hs) + 2 * len(kw - tw - hs & body_words) + (3 if kw & tw else 0)
             scored.append((score, -order, title, source, head, body))
     # Ties go to the earlier section, which is the page's overview.
     scored.sort(key=lambda s: (-s[0], -s[1]))
@@ -204,7 +233,7 @@ def find_wiki(question, pages):
         # Drop the also-rans: "break the bank" must not drag in "When a
         # chain BREAKS" just because one word matched.
         best = scored[0][0]
-        scored = [s for s in scored if s[0] > best / 2]
+        scored = [s for s in scored if s[0] > best / 2] or scored[:1]
     out, size = [], 0
     for _, _, title, source, head, body in scored:
         block = f"WIKI ({title}{', ' + head if head != title else ''}; saved copy of {source or 'the Torn wiki'}):\n{body}"

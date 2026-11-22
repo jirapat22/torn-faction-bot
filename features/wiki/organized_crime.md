@@ -1,6 +1,7 @@
 # Organized Crime (OC)
 Source: https://wiki.torn.com/wiki/Organized_Crime_2.0
 Saved: 22/11/2026
+Keywords: oc, ocs, organised crime, organized crimes, scope, cpr, planning, scenario, scenarios, initiating, tools, materials, hand drill
 
 ## What an OC is
 An Organized Crime (OC, the 2.0 system) is a group activity for faction members that earns the faction respect and rewards, and gives the members Crime Experience if it succeeds. While planning, an OC icon shows in the sidebar with a countdown on hover. Everyone gets an event when planning finishes. The crime experience gained does not depend on how long you spent in planning.

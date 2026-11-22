@@ -1,6 +1,7 @@
 # Hospital (hosp)
 Source: https://wiki.torn.com/wiki/Hospital
 Saved: 22/11/2026
+Keywords: hospital, hosped, hospitalised, medical, med cooldown, medical cooldown, morphine, first aid kit, fak, sfak, blood bag, opium, neumune, radiation, early discharge, outside hit, outside hits
 
 ## How to get out of hospital fast (all the ways out)
 - Be revived by someone with the revive perk (see Getting out: revives).
@@ -25,7 +26,7 @@ Saved: 22/11/2026
 ## Getting out: revives
 Being revived removes you from hospital and restores a percentage of your life based on the reviver's revive skill. It costs the reviver 75 energy, 5 less for each upgrade their faction has in the "Reviver" branch of the Fortitude tree (minimum 25). Love Juice during Valentine's Day cuts another 15 (minimum 10). To revive, you must first reach Brain Surgeon rank in the Medical starter job.
 
-## Getting out: medical items and medical cooldown
+## Getting out: medical items (Morphine, First Aid Kits, Blood Bags) and medical cooldown
 Items that take time off hospital: Small First Aid Kit, First Aid Kit, Morphine, Blood Bags, Neumune Tablet, Opium.
 
 Every one except Opium adds to your medical cooldown, a timer that grows each time you use a medical item. Over 6 hours, you can't use more medical items until it drops back under 6 hours. A faction upgrade can raise the cap to 9 hours. Medical items can be made up to 50% more effective: Education (+20%) and faction special upgrades (+30%).

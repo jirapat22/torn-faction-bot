@@ -10,6 +10,7 @@ folder; this README is skipped).
 # Organized Crime
 Source: https://wiki.torn.com/wiki/Organized_Crime
 Saved: 22/11/2026
+Keywords: oc, ocs, scope, cpr, planning
 
 ## Roles
 ...text copied from the page...
@@ -20,6 +21,9 @@ Saved: 22/11/2026
 
 - `# Title` on the first line: the page name (it is matched against questions).
 - `Source:` line: the page URL, shown to the AI as where the copy came from.
+- `Keywords:` line (optional): comma-separated words or phrases that mean a question
+  is about this page (slang like `retal, ff`). A page is only searched when the
+  question has a title word, a whole keyword phrase or a whole heading in it.
 - `## Heading` sections: the bot quotes only the sections that match a
   question, so keep each topic under its own heading.
 - Copies do not update themselves. Re-paste a page when Torn changes it, and

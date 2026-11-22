@@ -1651,9 +1651,12 @@ def game_question(question, facts):
 # see these, because chain/war/OC/hosp are also records words (live test
 # 22/11/2026: the AI skipped the lookup and said a ranked war has "no fixed
 # time limit", the page says 123 hours at most).
-MECH_RX = re.compile(r"\bhow (?:does|do|is|are)\b[^?\n]*\bwork|\bhow (?:do|does|can|could) (?:i|you|a|an|one|people|players?|someone)\b|\bhow (?:long|much|many)\b[^?\n]*\b(?:can|does|do)\b|"
+MECH_RX = re.compile(r"\bhow (?:does|do|is|are)\b[^?\n]*\bwork|\bhow (?:do|does|can|could) (?:i|you|a|an|one|people|players?|someone)\b|"
+                     r"\bhow (?:long|much|many)\b|\bhow is\b[^?\n]*\b(?:calculated|worked out|decided|counted|made)\b|"
                      r"\bwhat (?:is|are|does|do)\b|\bwhat'?s\b|\bexplain\b|\btell me about\b|\bhow to\b|"
-                     r"\bwhat (?:items?|tools?|roles?) (?:do|does|are)\b", re.I)
+                     r"\bwhat (?:items?|tools?|roles?|level|happens)\b|\bwhich\b|\bwhen (?:does|do|is|are)\b|"
+                     r"\bdoes\b[^?\n]*\bcount\b|^\s*why\b|\bcan (?:i|you|a|an|people|someone)\b|\bis it\b|"
+                     r"\bmeaning of\b|\bstand for\b", re.I)
 # Anything pointing at OUR faction, a moment in time, or a result is a
 # records question, never a wiki one ("what's the chain at?", "what is our
 # war score?").
@@ -1670,11 +1673,23 @@ GAME_TOPIC = re.compile(r"\btorn\b|\btravel\w*|\bfl(?:y|ights?)\b|\bgym\b|\bcrim
                         r"\bawards?\b|\bhonou?rs?\b|\bracing\b|\bhunting\b|\bupgrades?\b", re.I)
 
 
-def mechanics_sections(question, facts):
+def _records_cue(q):
+    # "why did my revive fail?" is about the game; "did we win?" is records.
+    q = re.sub(r'^\s*why did\b', 'why', q, flags=re.I)
+    # "how is war score CALCULATED?" asks how scoring works, not what it is.
+    if re.search(r'\b(?:calculated|worked out|decided|counted|work|works|mean|means)\b', q, re.I):
+        q = re.sub(r'\bscore\b', '', q, flags=re.I)
+    return RECORDS_RX.search(q)
+
+
+def mechanics_sections(question, facts, rules_ok=False):
     """The saved wiki sections for a how-Torn-works question, or [] when it
-    is not one (a member named, our records, the rules, an action)."""
+    is not one (a member named, our records, an action, or with rules_ok
+    False a rules-sounding question)."""
     q = question or ''
-    if not MECH_RX.search(q) or RECORDS_RX.search(q) or RULES_CUE.search(q) or ANNOUNCE_RX.search(q):
+    if not MECH_RX.search(q) or _records_cue(q) or ANNOUNCE_RX.search(q):
+        return []
+    if RULES_CUE.search(q) and not rules_ok:
         return []
     if names_in(q, facts):
         return []
@@ -2125,9 +2140,15 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
     # only tool on offer, and if the AI still skips it the bot quotes the
     # page itself (see the check after each provider below).
     mech = mechanics_sections(question, facts) if not acting and not announcing else []
-    facts.mech_question = question if mech else None
+    # "Can I travel during an OC?", "what happens if the chain breaks?" sound
+    # like rules but are often the game: both the wiki and the rulebook are
+    # offered, the AI picks, and nothing is forced.
+    mixed = [] if mech or acting or announcing else mechanics_sections(question, facts, rules_ok=True)
+    facts.mech_question = question if mech or mixed else None
     if mech:
         facts.tool_specs = [t for t in facts.tool_specs if t['function']['name'] == 'torn_lookup']
+    elif mixed:
+        facts.tool_specs = [t for t in facts.tool_specs if t['function']['name'] in ('torn_lookup', 'faction_rules')]
     user_said = '\n'.join([question] + [t.get('content', '') for t in history or [] if t.get('role') == 'user'])
     facts.said = user_said + ' ' + clock_variants(user_said)
     sys_txt = system_prompt(announce=announcing, acting=acting)
@@ -2157,7 +2178,13 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
     if mech:
         base.append({'role': 'system', 'content': 'The next question is about how Torn works. Call torn_lookup '
                      'with it first, then answer only from what it returns, numbers exactly as written, and '
-                     'include the wiki search link.'})
+                     'include the wiki search link. Answer just what was asked, short, as bullet points; '
+                     'no tables (Discord shows them as a mess).'})
+    elif mixed:
+        base.append({'role': 'system', 'content': 'The next question may be about how Torn works (torn_lookup) '
+                     'or about our faction rules (faction_rules). Look up whichever fits, or both, and say '
+                     'which is which: "Torn:" for the game, "Our rules:" for the faction. Short bullets, no '
+                     'tables, numbers exactly as written.'})
     base += list(history or []) + [{'role': 'user', 'content': question}]
 
     t0, problems = time.monotonic(), []
@@ -2409,7 +2436,7 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
         #    was wrong): say so under the answer, in the bot's words.
         # A wiki answer skips the "I don't keep money" note: "Break the BANK"
         # is an OC name, not a records question (live test 22/11/2026).
-        text = tidy_answer(text, facts.notices, '' if mech else question)
+        text = tidy_answer(text, facts.notices, '' if mech or mixed else question)
         # The wiki search link always reaches the person when a Torn game
         # question was looked up, even if the AI left it out (c, 22/11/2026).
         # The tool's own label leaked into answers as "WIKI SEARCH LINK: ...".

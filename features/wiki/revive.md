@@ -1,6 +1,7 @@
 # Revive
 Source: https://wiki.torn.com/wiki/Revive
 Saved: 22/11/2026
+Keywords: revive, revives, reviver, reviving, revive skill, revive chance, healer, brain surgeon
 
 ## What a revive does
 Reviving allows a player to get another player out of the hospital, no matter how long they are in the hospital for, or what their Medical cooldown is. A player can't be revived from hospital if they have Radiation. A reviver who is in the hospital themselves cannot revive anyone.
@@ -9,7 +10,7 @@ Revives are commonly used in faction wars, for hospitalisations from failed crim
 
 Since 23/09/2025 (Patch #402), any player inactive for 400 days or more can be revived (NPCs are not affected).
 
-## Who can revive
+## How to revive someone (who can revive, becoming a reviver)
 You gain the ability to revive once you reach the rank of Brain Surgeon in the Medical Job. You keep this ability even if you leave the job, and it is listed as a Perk on your homepage.
 
 ## Revive success chance
