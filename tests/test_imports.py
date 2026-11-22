@@ -9563,6 +9563,35 @@ def test_revive_check_by_chat_is_info_only():
     assert "can't check" in down and 'nobody' not in down.lower()
 
 
+def test_saved_wiki_pages_answer_the_right_section():
+    """The five pasted wiki pages (22/11/2026): each question must land on
+    the section that answers it, with no money or Xanax in any page."""
+    from features import torn_wiki as t
+    pages = t.load_pages()
+    assert {p[0] for p in pages} >= {'Chain', 'Hospital (hosp)', 'Organized Crime (OC)', 'Ranked War', 'Revive'}
+    for _, _, sections in pages:
+        for head, body in sections:
+            assert '$' not in body and 'xanax' not in body.lower(), head
+            assert not body.startswith('Saved:'), head
+
+    def first(q):
+        found = t.find_wiki(q, pages)
+        return found[0].split(';')[0] if found else None
+
+    assert t.stem('chaining') == t.stem('chains') == t.stem('chain')
+    assert t.stem('bonus') == 'bonus'
+    assert 'How chaining works' in first('how does chaining work?')
+    assert 'Respect per hit' in first('how is respect calculated in a chain?')
+    assert 'Break the Bank' in first('what items do I need for break the bank?')
+    # One shared word ("break") must not drag in an unrelated section.
+    assert len(t.find_wiki('what items do I need for break the bank?', pages)) == 1
+    assert 'Planning phase' in first('how does OC planning work?')
+    assert 'how long a war lasts' in first('how long can a ranked war last?')
+    assert 'Revive energy cost' in first('how much energy does a revive cost?')
+    assert 'Matchmaking' in first('what is a sacrifice match?')        # body-only match
+    assert first('how does travel work in torn?') is None               # not saved: link only
+
+
 def test_torn_lookup_items_wiki_pages_and_link():
     """
     Pat, 22/11/2026: @ApexPunk answers how Torn works from (a) Torn's item
@@ -9960,6 +9989,7 @@ if __name__ == '__main__':
     test_flight_alerts_compact_with_flags()
     test_revive_check_by_chat_is_info_only()
     test_torn_lookup_items_wiki_pages_and_link()
+    test_saved_wiki_pages_answer_the_right_section()
     test_no_member_facing_s_plurals_left()
     test_ux_audit_wording_fixes()
     test_reaudit5_poll_weekdays_oc_member_roast_and_scores()

@@ -39,7 +39,7 @@ WIKI_LIMIT = 2500     # characters of saved wiki text handed to the AI per quest
 STOP = set('''a an the is are was were be do does did how what whats what's which who why when where can could
 should would will i me my we our you your it its this that these those of in on at to for from with and or
 about tell explain work works working use used using get got make mean means torn wiki apexpunk please
-pls hey yo any some much many there here thing stuff'''.split())
+pls hey yo any some much many there here thing stuff out get getting go going'''.split())
 
 
 def words(text):
@@ -149,7 +149,7 @@ def load_pages(wiki_dir=WIKI_DIR):
                 if ''.join(buf).strip():
                     sections.append((head, '\n'.join(buf).strip()))
                 head, buf = line[3:].strip(), []
-            elif not line.startswith('# ') and not line.startswith('Source:'):
+            elif not line.startswith(('# ', 'Source:', 'Saved:')):
                 buf.append(line)
         if ''.join(buf).strip():
             sections.append((head, '\n'.join(buf).strip()))
@@ -157,26 +157,56 @@ def load_pages(wiki_dir=WIKI_DIR):
     return pages
 
 
+def stem(word):
+    """Crude word root, so "chaining", "chains" and "chain" all match the
+    Chain page and "revives" matches Revive. Only used for wiki matching."""
+    if word.endswith(('us', 'ss')):
+        return word                      # bonus, class: not plurals
+    for suffix in ('ing', 'ed', 'es', 's', 'e'):
+        if word.endswith(suffix) and len(word) - len(suffix) >= 3:
+            return word[:-len(suffix)]
+    return word
+
+
+def stems(text):
+    return {stem(w) for w in words(text)}
+
+
 def find_wiki(question, pages):
-    """Best saved sections for the question. A section needs at least one
-    keyword in its page title or heading, so a stray word in the body of an
-    unrelated page doesn't pass as an answer."""
-    kw = set(words(question))
+    """Best saved sections for the question. A section needs a keyword in
+    its page title or heading, or ALL the keywords in its body, so a stray
+    word in an unrelated page doesn't pass as an answer."""
+    kw = stems(question)
     if not kw:
         return []
     scored = []
     for title, source, sections in pages:
-        tw = set(words(title))
-        for head, body in sections:
-            hw = set(words(head)) | tw
-            if not kw & hw:
+        tw = stems(title)
+        for order, (head, body) in enumerate(sections):
+            hs = stems(head)
+            body_words = {stem(w) for w in words(body)}
+            if not kw & (hs | tw):
+                # Body-only match ("what is a sacrifice match?" lives inside
+                # Matchmaking): every keyword must be there, or a stray word
+                # would pass as an answer. Scored below any heading match.
+                if kw <= body_words:
+                    scored.append((1, -order, title, source, head, body))
                 continue
-            bw = words(body)
-            score = 3 * len(kw & hw) + sum(1 for w in bw if w in kw) / max(1, len(bw)) * 50
-            scored.append((score, title, source, head, body))
-    scored.sort(key=lambda s: -s[0])
+            # A word in the section's own heading counts most. A title word
+            # ("chain") is all over that page, headings included, so it only
+            # gets the section in the door; the body counts only words found
+            # in neither ("how long can a ranked war LAST?").
+            score = 4 * len(kw & hs - tw) + 4 * len(kw & tw) + 2 * len(kw - tw - hs & body_words)
+            scored.append((score, -order, title, source, head, body))
+    # Ties go to the earlier section, which is the page's overview.
+    scored.sort(key=lambda s: (-s[0], -s[1]))
+    if scored:
+        # Drop the also-rans: "break the bank" must not drag in "When a
+        # chain BREAKS" just because one word matched.
+        best = scored[0][0]
+        scored = [s for s in scored if s[0] > best / 2]
     out, size = [], 0
-    for _, title, source, head, body in scored:
+    for _, _, title, source, head, body in scored:
         block = f"WIKI ({title}{', ' + head if head != title else ''}; saved copy of {source or 'the Torn wiki'}):\n{body}"
         if size + len(block) > WIKI_LIMIT and out:
             break
