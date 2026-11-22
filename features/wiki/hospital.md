@@ -2,6 +2,14 @@
 Source: https://wiki.torn.com/wiki/Hospital
 Saved: 22/11/2026
 
+## How to get out of hospital fast (all the ways out)
+- Be revived by someone with the revive perk (see Getting out: revives).
+- Use medical items: Small First Aid Kit, First Aid Kit, Morphine, Blood Bags. They take time off and add medical cooldown (max 6 hours, 9 with the faction upgrade).
+- Opium: removes all standard hospital time, adds drug cooldown instead of medical cooldown.
+- Neumune Tablet: the only item that works on hospital time from Radiation Poisoning.
+- Early Discharge: after an outside hit during a war, leave with no items and no cooldown.
+- Or wait it out.
+
 ## How you end up in hospital
 - You start a fight and lose it, or the fight times out after 5 minutes.
 - You are attacked and lose.
