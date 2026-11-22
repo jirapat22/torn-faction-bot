@@ -9621,11 +9621,34 @@ def test_saved_wiki_pages_answer_the_right_section():
     # with no lookup made, the bot quotes the saved page itself.
     async def guesser(session, messages, f, used):
         assert [t['function']['name'] for t in f.tool_specs] == ['torn_lookup']
+        # The bot already looked the page up and handed it over...
+        assert any('TORN WIKI' in m['content'] and '123 hours' in m['content'] for m in messages)
+        # ...and the AI ignores it anyway: no number on a "how long" question.
         return 'There is no fixed time limit, wars go on for hours.', list(messages)
     ans = asyncio.run(answer_question(None, 'how long can a ranked war last?', FactBook('data', roster={}),
                                       providers=[('fake', guesser)]))
     assert ans.text.startswith("Here's what the Torn wiki says (Ranked War, Target score"), ans.text
     assert '123 hours' in ans.text and 'no fixed' not in ans.text and 'wiki.torn.com' in ans.text
+
+    # "Does mugging count for the chain?": the bot hands over BOTH the wiki
+    # and the rulebook (live, the AI read only the rules and said mugging
+    # doesn't count; Torn says 0.75x).
+    seen = {}
+    async def both(session, messages, f, used):
+        seen['text'] = ' '.join(m['content'] for m in messages if m['role'] == 'system')
+        return 'Torn: mugging counts, at 0.75x respect.', list(messages)
+    ans = asyncio.run(answer_question(None, 'does mugging count for the chain?', FactBook('data', roster={}),
+                                      providers=[('fake', both)]))
+    assert 'TORN WIKI' in seen['text'] and 'Mugging: 0.75x' in seen['text'], seen
+    assert ans.text.startswith('Torn: mugging counts') and 'wiki.torn.com' in ans.text, ans.text
+    # A member asking about RANKED war is not "ranking the members".
+    from features.ask_ai import guard_question, MEMBER_REFUSAL
+    async def plain(session, messages, f, used):
+        return 'Torn: score is the respect each hit earns. https://wiki.torn.com/x', list(messages)
+    ans = asyncio.run(answer_question(None, 'how is ranked war score calculated?', FactBook('data', roster={}),
+                                      providers=[('fake', plain)], management=False))
+    assert ans.text != MEMBER_REFUSAL and 'respect' in ans.text, ans.text
+    assert guard_question('who is the most active?', management=False) == MEMBER_REFUSAL
 
     # The lookup searches the person's words, not the AI's rewording, and the
     # tool's raw link label is tidied.

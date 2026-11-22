@@ -1682,6 +1682,9 @@ def _records_cue(q):
     return RECORDS_RX.search(q)
 
 
+NUMBER_Q = re.compile(r"\bhow (?:long|much|many|often|fast)\b|\bwhat level\b|\bwhen (?:does|do|is|are)\b", re.I)
+
+
 def mechanics_sections(question, facts, rules_ok=False):
     """The saved wiki sections for a how-Torn-works question, or [] when it
     is not one (a member named, our records, an action, or with rules_ok
@@ -2022,9 +2025,12 @@ NOTICE_RULE_RX = re.compile(r"\brules?\b|\bwhat happens\b|\bhow (?:do|should|can
                             r"\b(?:allowed|required|supposed)\b|\bwhere do i\b|\bhow long\b", re.I)
 
 
-def guard_question(question, management=True):
+def guard_question(question, management=True, game=False):
     """The bot's own fixed reply for questions the AI must never word, or
-    None to go on to the AI. Checked in Python before any AI is asked."""
+    None to go on to the AI. Checked in Python before any AI is asked.
+    game=True: a question about Torn itself, so the members' judging filter
+    (meant for "rank the members") is skipped: "how is RANKED war score
+    calculated?" and "what's the BEST gym?" were refused (live 22/11/2026)."""
     q = question or ''
     if STRIKE_ACTION_RX.search(q):
         return STRIKE_REFUSAL
@@ -2032,7 +2038,7 @@ def guard_question(question, management=True):
         return KICK_DODGE
     if PAYOUT_RX.search(q):
         return PAYOUT_REFUSAL
-    if not management and JUDGE_RX.search(q):
+    if not management and not game and JUDGE_RX.search(q):
         return MEMBER_REFUSAL
     if not DATA_WORDS.search(q):
         if STATS_RX.search(q):
@@ -2070,7 +2076,10 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
       - the raw records, when the AI kept using numbers that aren't in them.
     """
     providers = providers or PROVIDERS
-    fixed = guard_question(question, management)
+    game = not management and not names_in(question, facts) and not _records_cue(question or '') \
+        and bool(MECH_RX.search(question or '')) \
+        and bool(GAME_TOPIC.search(question or '') or mechanics_sections(question, facts, rules_ok=True))
+    fixed = guard_question(question, management, game=game)
     if fixed:
         # Fixed reply, no AI (strikes, kicks, payouts; judging for members).
         # 'none' = not remembered as a conversation.
@@ -2156,6 +2165,25 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
     base = [{'role': 'system', 'content': sys_txt}]
     if earlier_facts:
         base.append({'role': 'system', 'content': 'Data from earlier in this conversation:\n' + earlier_facts})
+    # Wiki questions: the bot looks everything up itself, so the AI can't
+    # skip a source. Live 22/11/2026, with the choice left to it, it read
+    # only our rulebook and filled the gap: "mugging does NOT count toward
+    # the chain" (Torn: it counts, at 0.75x). Also one AI round trip less.
+    lookup_facts = ''
+    if mech or mixed:
+        if getattr(facts, 'live_tools', None) is not None:
+            wiki_txt = await facts.live_tools.torn_lookup(question)
+        else:
+            from features.torn_wiki import load_pages, lookup_text
+            wiki_txt = lookup_text(question, None, load_pages())[0]
+        lookup_facts = 'TORN WIKI (how the game works):\n' + wiki_txt
+        if mixed:
+            rules_txt = facts.faction_rules(question)
+            if str(rules_txt).startswith('RULEBOOK'):
+                # faction_rules() already drops payout lines (without_payouts).
+                lookup_facts += '\n\nOUR FACTION RULEBOOK:\n' + rules_txt
+        base.append({'role': 'system', 'content': 'Looked up for the next question (already done, no need '
+                     'to call a tool):\n' + lookup_facts})
     # Announcements: the bot itself looks up every event the conversation
     # mentions and hands the facts over, so the draft can carry the useful
     # details (how long, what it does) without the AI guessing them. Pat
@@ -2176,15 +2204,16 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
         base.append({'role': 'system', 'content': f'In the next question, he/she/they/him/her/them/his/their '
                      f'means {who}, the member from earlier in this conversation. Look them up by that name.'})
     if mech:
-        base.append({'role': 'system', 'content': 'The next question is about how Torn works. Call torn_lookup '
-                     'with it first, then answer only from what it returns, numbers exactly as written, and '
-                     'include the wiki search link. Answer just what was asked, short, as bullet points; '
-                     'no tables (Discord shows them as a mess).'})
+        base.append({'role': 'system', 'content': 'The next question is about how Torn works. Answer only from '
+                     'the TORN WIKI text above, numbers exactly as written, and include the wiki search link. '
+                     'Answer just what was asked, short, as bullet points; no tables (Discord shows them as a '
+                     'mess). If the text does not answer it, say so and give the link.'})
     elif mixed:
-        base.append({'role': 'system', 'content': 'The next question may be about how Torn works (torn_lookup) '
-                     'or about our faction rules (faction_rules). Look up whichever fits, or both, and say '
-                     'which is which: "Torn:" for the game, "Our rules:" for the faction. Short bullets, no '
-                     'tables, numbers exactly as written.'})
+        base.append({'role': 'system', 'content': 'The next question may be about how Torn works, our faction '
+                     'rules, or both. Answer from the text above only: first "Torn:" bullets from the TORN WIKI, '
+                     'then "Our rules:" bullets ONLY for what the RULEBOOK actually says about this exact thing '
+                     '(leave that part out if it says nothing; never say what the rules do not say). Short, no '
+                     'tables, numbers exactly as written, and include the wiki search link.'})
     base += list(history or []) + [{'role': 'user', 'content': question}]
 
     t0, problems = time.monotonic(), []
@@ -2213,9 +2242,27 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
         # The prompt's "It is now <date time>" must not count: whatever minute
         # it happened to be became an "allowed" number (at 01:16, an invented
         # "16 hits" passed the check).
-        sources = lambda: (_facts_text(used), earlier_facts, question, sys_static)
-        if mech and not any(n == 'torn_lookup' for n, _, _ in used):
+        sources = lambda: (_facts_text(used), earlier_facts, lookup_facts, question, sys_static)
+        if mech and not lookup_facts and not any(n == 'torn_lookup' for n, _, _ in used):
             return Answer(wiki_quote(question, mech), pname, '\n\n'.join(mech), True, took())
+        # Mixed (game or rules) answers must say which is which, as told. One
+        # with neither part ("No idea, mate.") didn't use the lookups: the bot
+        # quotes the rulebook itself, as it always did for rules questions,
+        # or the wiki when the rulebook has nothing on it.
+        if mixed and not facts.final and not re.search(r'\b(?:torn|our rules)\b\W*:', text or '', re.I):
+            if 'OUR FACTION RULEBOOK:\n' in lookup_facts:
+                first = lookup_facts.split('OUR FACTION RULEBOOK:\n', 1)[1].split('\n\nRULEBOOK, ')[0]
+                title, _, body = first.partition(':\n')
+                return Answer(f"Here's what the rulebook says ({title[len('RULEBOOK, '):]}):\n{body[:1500]}",
+                              pname, lookup_facts, True, took())
+            return Answer(wiki_quote(question, mixed), pname, lookup_facts, True, took())
+        # Safety net for an AI that ignores the handed-over page: asked "how
+        # long / how much / how many / what level / when", an answer with no
+        # number while the page has one is a guess ("there is no fixed time
+        # limit", page: 123 hours at most). The bot quotes the page instead.
+        if (mech or mixed) and NUMBER_Q.search(question) and not re.search(r'\d', text or '') \
+                and re.search(r'\d', (mech or mixed)[0]) and not facts.final:
+            return Answer(wiki_quote(question, mech or mixed), pname, lookup_facts, True, took())
 
         # Actions: Python already checked every detail (plan_action). Either
         # the confirm card goes out, or the bot's own question about what is
@@ -2305,7 +2352,7 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
 
         # 2. Nothing was found at all. Whatever the AI wrote can only be a
         #    guess, so the bot's own "who do you mean?" goes out instead.
-        if not facts.found_any and not earlier_facts:
+        if not facts.found_any and not earlier_facts and not lookup_facts:
             if facts.notices:
                 return Answer('\n\n'.join(facts.notices), pname, '', True, took(), kind='ask')
             # Mid-action, the person answered the bot's own question ("24
@@ -2442,10 +2489,10 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
         # The tool's own label leaked into answers as "WIKI SEARCH LINK: ...".
         text = re.sub(r'\*{0,2}WIKI SEARCH LINK\*{0,2}(?: \(always give this to the person\))?:\*{0,2}',
                       'More on the Torn wiki:', text)
-        if any(n == 'torn_lookup' for n, _, _ in used) and 'wiki.torn.com' not in text:
+        if (lookup_facts or any(n == 'torn_lookup' for n, _, _ in used)) and 'wiki.torn.com' not in text:
             from features.torn_wiki import search_link
             text += f'\n-# More on the Torn wiki: <{search_link(question)}>'
-        return Answer(text, pname, _facts_text(used), True, took())
+        return Answer(text, pname, _facts_text(used) or lookup_facts, True, took())
     logger.warning(f'ask_ai: no AI could answer: {"; ".join(problems)}')
     return Answer("Both my brains are offline right now 🔌 (the cloud AI and the one on the Mac). "
                   'Give it a few minutes and try again.', 'none', '', True, time.monotonic() - t0)
