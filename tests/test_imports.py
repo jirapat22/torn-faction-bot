@@ -10632,6 +10632,9 @@ def test_two_questions_in_one_message_both_get_answered():
     # "hows sadrapp? and Ellanna?": two cards, the second about Ellanna.
     ans = asyncio.run(answer_question(None, 'hows sadrapp? and Ellanna?', Facts(), [], providers=[('x', ai)]))
     assert ans.text.count('📋') == 2 and 'Ellanna' in ans.text.split('\n\n')[1], ans.text
+    ans = asyncio.run(answer_question(None, "who's in an oc? is Ellanna in an oc?", Facts(), [],
+                                      providers=[('x', ai)]))
+    assert ans.text.count('Checked Torn just now') == 1 and ans.text.startswith('Checked Torn'), ans.text
 
 
 def test_status_now_and_faction_size_are_answered_from_the_roster():

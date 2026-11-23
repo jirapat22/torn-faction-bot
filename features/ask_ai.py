@@ -2599,7 +2599,13 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
         answers = [await _answer_question(session, p, facts, history, earlier_facts, providers, management)
                    for p in parts]
         real = [a for a in answers if a.provider != 'none'] or answers
-        ans = Answer('\n\n'.join(a.text for a in answers), real[0].provider,
+        # "Checked Torn just now 👀" once, at the top, not before every part.
+        intro = 'Checked Torn just now 👀\n\n'
+        texts = [a.text for a in answers]
+        if sum(t.startswith(intro) for t in texts) > 1:
+            texts = [intro + texts[0][len(intro):] if texts[0].startswith(intro) else texts[0]] + \
+                    [t[len(intro):] if t.startswith(intro) else t for t in texts[1:]]
+        ans = Answer('\n\n'.join(texts), real[0].provider,
                      '\n\n'.join(a.facts_text for a in answers if a.facts_text), all(a.checked for a in answers),
                      sum(a.seconds for a in answers), fallback=any(a.fallback for a in answers),
                      kind='answer' if any(a.kind == 'answer' for a in answers) else answers[0].kind)
