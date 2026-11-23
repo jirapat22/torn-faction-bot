@@ -10763,7 +10763,12 @@ def test_live_war_is_a_short_card_built_by_the_bot():
     assert 'Lead 1506' in ans.text and ans.provider == 'bot'
     # The AI's flavour line: several examples, so answers don't all open the same way.
     from features.ask_ai import PERSONALITY
-    assert 'vary it' in PERSONALITY and PERSONALITY.count('", "') >= 2 and '\u2014' not in PERSONALITY
+    import re
+    from features.ask_ai import FLAVOUR_LINES, system_prompt
+    assert 'vary it' in PERSONALITY and len(FLAVOUR_LINES) >= 5 and '\u2014' not in ''.join(FLAVOUR_LINES)
+    assert len({re.search(r'Flavour line for this answer[^"]*"([^"]+)"', system_prompt()).group(1)
+                for _ in range(40)}) > 1
+    assert not any(re.search(r'\d', l) for l in FLAVOUR_LINES)   # never an "allowed number"
 
 
 def test_who_has_strikes_is_a_short_card_for_management():

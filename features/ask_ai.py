@@ -38,6 +38,7 @@ import json
 import logging
 import os
 import inspect
+import random
 import re
 import time
 from datetime import datetime, timedelta, timezone
@@ -1226,9 +1227,14 @@ PERSONALITY = (
     'short in-character line at the start or end (no numbers in it, no judging the member, no emojis), '
     # One example made nearly every answer open with that exact line (the
     # real log, 22/11/2026): several, and an order to vary them.
-    'and vary it every time, e.g. "Dug through the armoury.", "Straight from the books.", "Scanner says:", '
-    '"Fresh off the duct-taped hard drive.", or just skip it. Never let the personality change or soften a fact.\n'
+    'and vary it every time (the line to use is given below), or just skip it. Never let the personality '
+    'change or soften a fact.\n'
 )
+
+
+FLAVOUR_LINES = ['Pulled the files from the armoury.', 'Dug through the armoury.', 'Straight from the books.',
+                 'Scanner says:', 'Fresh off the duct-taped hard drive.', 'Checked the ledger.',
+                 'Rummaged through the files.', 'Here is what the books say.']
 
 
 ACTION_PROMPT = (
@@ -1249,6 +1255,9 @@ def system_prompt(announce=False, acting=False):
     now = datetime.now(timezone.utc).strftime('%d/%m/%Y %H:%M')
     return (
         PERSONALITY +
+        # Picked here: told to "vary it", the model still chose the same line
+        # every time (live 24/11/2026).
+        f'Flavour line for this answer, if you use one: "{random.choice(FLAVOUR_LINES)}"\n'
         'You answer questions from the management team of Ascended Punks, a faction in the game Torn. '
         f'It is now {now} TCT (Torn time, same as UTC).\n'
         'RULES FOR RECORDS, follow them exactly:\n'
