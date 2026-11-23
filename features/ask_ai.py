@@ -2449,9 +2449,11 @@ HELP_WORDS = re.compile(r'^\s*(help|commands?|what can you do|what can i ask(?: 
 # the revive list, after 75 seconds.
 STATUS_NOW_RX = re.compile(
     r"\b(?:who(?:'s| is| are|s)?|any ?(?:one|1|body)|anybody|how many|which|list)\b[^?\n]{0,30}?"
-    r"\b(hosp(?:ital)?(?:i[sz]ed)?|in hosp\w*|jail\w*|abroad|overseas|travell?ing|flying|in the air)\b", re.I)
+    r"\b(hosp(?:ital)?(?:i[sz]ed)?|in hosp\w*|jail\w*|abroad|overseas|travell?ing|flying|in the air|online|idle)\b",
+    re.I)
 STATUS_PAST_RX = re.compile(r"\b(?:given|friendly|last|ago|yesterday|week|most|least|revives?|rules?|hit|"
-                            r"hits|attack\w*|hosped|by)\b", re.I)
+                            r"hits|attack\w*|hosped|by|been|while|since|days?|not|never|offline|every|"
+                            r"often|usually)\b|n'?t\b", re.I)
 # "how many ppl r in the faction?" got "the bot does not keep a record of
 # the total number of members" (live 24/11/2026): the roster IS that count.
 FACTION_SIZE_RX = re.compile(r"\bhow many (?:members|ppl|people|players|peeps|punks|of us)\b(?![^?\n]*\b(?:"
@@ -2475,6 +2477,15 @@ def status_now_answer(question, roster, now):
         states, label = ('Hospital',), '🏥 In hospital'
     elif word.startswith('jail'):
         states, label = ('Jail',), '⛓️ In jail'
+    elif word in ('online', 'idle'):
+        # "who's online rn" got "Online status is not recorded" (live
+        # 24/11/2026): the roster's last action says it.
+        on = sorted((v.get('name', '?') for v in roster.values()
+                     if (v.get('last_action') or {}).get('status') == 'Online'), key=str.lower)
+        idle = sorted((v.get('name', '?') for v in roster.values()
+                       if (v.get('last_action') or {}).get('status') == 'Idle'), key=str.lower)
+        return (f'🟢 Online right now ({len(on)} of {len(roster)}): ' + (', '.join(on) or 'nobody') +
+                f'\n🟡 Idle ({len(idle)}): ' + (', '.join(idle) or 'nobody'))
     elif word in ('abroad', 'overseas'):
         states, label = ('Abroad',), '🌴 Abroad'
     else:
@@ -2719,8 +2730,12 @@ async def _answer_question(session, question, facts, history=None, earlier_facts
     from features.ask_live import LIVE_SPECS
     from features.ask_actions import ACTION_SPECS, ACTION_RX
     acting = bool(ACTION_RX.search(convo)) and not announcing and management
+    # The announcement tools only in an announcement conversation: Groq's
+    # 8,000 tokens a minute is what makes a second question within a minute
+    # wait or fall back (measured 24/11/2026: ~3.4k tokens per AI round).
     facts.tool_specs = [t for t in TOOL_SPECS + LIVE_SPECS + (ACTION_SPECS if acting else [])
-                        if management or t['function']['name'] not in MEMBER_BLOCKED_TOOLS]
+                        if (management or t['function']['name'] not in MEMBER_BLOCKED_TOOLS)
+                        and (announcing or t['function']['name'] not in ('announce_ask', 'announce_draft'))]
     # A how-Torn-works question with a saved wiki page: the lookup is the
     # only tool on offer, and if the AI still skips it the bot quotes the
     # page itself (see the check after each provider below).

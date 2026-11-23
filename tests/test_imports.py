@@ -10663,6 +10663,16 @@ def test_status_now_and_faction_size_are_answered_from_the_roster():
     assert 'Ellanna (Traveling to Japan)' in status_now_answer('anyone flying?', roster, now)
     assert 'nobody right now' in status_now_answer('who is in jail', roster, now)
     assert "Torn isn't answering" in status_now_answer('who is in hosp', None, now)    # never "nobody"
+    roster['4']['last_action'] = {'status': 'Online'}
+    roster['3']['last_action'] = {'status': 'Idle'}
+    for q in ["who's online rn", 'anyone online?', 'who is online']:
+        assert status_q(q), q
+    for q in ['who hasnt been online for a while', "who isn't online", 'who is online the most?',
+              'who was online every day']:
+        assert not status_q(q), q
+    on = status_now_answer("who's online rn", roster, now)
+    assert on == '🟢 Online right now (1 of 4): Ikaros22\n🟡 Idle (1): Ellanna', on
+
 
     for q in ['how many ppl r in the faction', 'how many members do we have?', 'how big is our faction']:
         assert FACTION_SIZE_RX.search(q), q
@@ -10690,6 +10700,20 @@ def test_status_now_and_faction_size_are_answered_from_the_roster():
     for q in ['whats up with the war', "what's going on with the chain", 'r we at war?', 'wats the chain at rn']:
         assert _records_cue(q), q
     assert not _records_cue('how long can a ranked war last?')
+
+    # The announcement tools only go out in an announcement conversation
+    # (Groq's 8,000 tokens a minute).
+    offered = []
+
+    async def spy(session, messages, f, used):
+        offered.append({t['function']['name'] for t in f.tool_specs})
+        return 'ok', messages
+    f = Facts(roster)
+    f.run = lambda name, args: ''
+    asyncio.run(answer_question(None, 'what was the score last war?', f, [], providers=[('x', spy)]))
+    asyncio.run(answer_question(None, 'make an announcement about the chain', f, [], providers=[('x', spy)]))
+    assert 'announce_draft' not in offered[0] and 'war_report' in offered[0]
+    assert 'announce_draft' in offered[1]
 
 
 if __name__ == '__main__':
