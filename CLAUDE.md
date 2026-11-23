@@ -7,7 +7,7 @@ A Discord bot for a Torn.com faction (Ascended Punks), running on Pat's home Mac
 ## Commands
 
 ```bash
-<py> -m pytest -q tests/          # full suite (188 tests), the one to trust
+<py> -m pytest -q tests/          # full suite (189 tests), the one to trust
 <py> -m pytest -q tests/test_imports.py::test_flytrack_logic   # single test
 <py> tests/test_imports.py        # runs test_imports.py ONLY, see note below
 <py> bot.py                       # run locally (needs .env)
@@ -133,6 +133,8 @@ Layout (Pat, 22/11/2026, "readability is rough"): 🔴/🟢 mean flying out / co
 The cooldown is stamped only when a warning actually goes out, so an outage or a filtered-out weakling never silences the next real threat.
 
 **Self-cleaning channel** (Pat, 23/11/2026: ~100 posts a day in a war, "too many messages, hard to read on phone"). Every flight post and warning is its own message, remembered in `live_posts` (flytrack.json, so a restart still cleans up) and deleted once it stops being true: flying out on landing abroad, coming home `RETURN_POST_GRACE_SECONDS` (10 min) after landing because its Attack link is wanted right then, a warning once every enemy in it has left that country again (`FollowWarning` is a str that also carries the enemy ids and country). Cleanup runs only after a successful roster read, so a Torn outage deletes nothing; anything a day old goes regardless; `disable()` (war over) clears the lot. Flight posts are two lines (`_landing_line`): "🔴 **X** flying to 🇬🇧 **United Kingdom**" / "└ lands <in 12 min> · between 13:05 and 13:09". The old "latest" countdown went: a post still showing now means still in the air. Warnings stay one per member (Pat's pick).
+
+**Pinned board** (Pat, 23/11/2026: "similar to targets and retals"): `build_flight_board` (pure, tested) is edited in place every tick (`board_message_id` in flytrack.json; skipped when the text is unchanged, the countdowns are Discord timestamps), grouped 🔴 Flying out / 🌴 Abroad / 🟢 Coming home, soonest first, name = attack link, FFScouter stats (cached an hour), and "N of ours there" from our own roster (re-read every 5 min, `OWN_ROSTER_REFRESH_SECONDS`; unreadable = the bit is left off, never "0"). Flight posts are coloured cards (`_card`: red out, green home) like retals; warnings stay plain text because a mention only pings from message content. War over: the board is deleted with the rest, and a fresh one is posted and pinned on the next war.
 
 ### Asking the bot (`features/ask_ai.py`)
 

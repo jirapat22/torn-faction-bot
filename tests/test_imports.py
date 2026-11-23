@@ -265,8 +265,9 @@ def test_flytrack_fast_turnaround_detected():
     posted = []
 
     async def fake_post(content=None, embed=None):
-        if content:
-            posted.append(content)
+        # Flight posts are cards (embeds) since 23/11/2026
+        if content or embed is not None:
+            posted.append(content or embed.description)
     mgr._post = fake_post
 
     async def fake_save():
@@ -9550,9 +9551,9 @@ def test_war_tracker_posts_clean_themselves_up():
 
     class Channel:
         def __init__(self): self.n, self.live, self.deleted = 0, {}, []
-        async def send(self, content=None, **kw):
+        async def send(self, content=None, embed=None, **kw):
             self.n += 1
-            self.live[self.n] = content
+            self.live[self.n] = content if content is not None else embed.description
             return Msg(self.n)
         def get_partial_message(self, mid):
             chan = self
@@ -9573,6 +9574,8 @@ def test_war_tracker_posts_clean_themselves_up():
     mgr.save_data = nosave
     async def no_warnings(deps, now): return []
     mgr._follow_alerts = no_warnings
+    async def no_board(now): return False   # the board has its own test
+    mgr._refresh_board = no_board
     mgr.players['1'] = {'name': 'Fab', 'phase': 'home', 'dest': None, 'eta': None,
                         'leg_start': None, 'leg_observed': False}
 
@@ -9634,6 +9637,42 @@ def test_war_tracker_posts_clean_themselves_up():
         assert 100 in chan.deleted and not mgr.live_posts
     finally:
         flytrack.datetime = real_dt
+
+
+def test_war_tracker_board_like_the_target_board():
+    """
+    Pat, 23/11/2026: "similar to targets and retals". A pinned board grouped
+    Flying out / Abroad / Coming home, soonest first, name = attack link,
+    FFScouter stats, and "N of ours there" where our members sit. Our roster
+    unreadable = that bit left off, never "0 of ours".
+    """
+    from features.flytrack import build_flight_board, FlyTracker
+    players = {
+        '1': {'name': 'Fab', 'phase': 'out', 'dest': 'United Kingdom', 'eta': 2000},
+        '2': {'name': 'Jet', 'phase': 'out', 'dest': 'Japan', 'eta': 1500},
+        '3': {'name': 'K4den', 'phase': 'abroad', 'dest': 'UAE', 'eta': None},
+        '4': {'name': 'Hazy', 'phase': 'returning', 'dest': 'Japan', 'eta': 3000},
+        '5': {'name': 'Homebody', 'phase': 'home', 'dest': None, 'eta': None},
+    }
+    ff = {'1': {'bs_estimate': 510_600_000, 'bs_estimate_human': '510.6m'}}
+    own = {'United Kingdom': [{'tid': 'a'}, {'tid': 'b'}, {'tid': 'c'}]}
+    e = build_flight_board(players, lambda tid, p: p['eta'] - 100, ff, own, 'Phantom Force')
+    d = e.description
+    assert 'Phantom Force' in e.title
+    assert d.index('Flying out') < d.index('Abroad') < d.index('Coming home')
+    assert d.index('Jet') < d.index('Fab'), 'soonest landing first'
+    assert '[Fab](https://www.torn.com/page.php?sid=attack&user2ID=1)' in d and '510.6m' in d
+    assert 'lands <t:1900:R>' in d, 'countdown tracks the early edge'
+    assert '**3 of ours there**' in d and 'Homebody' not in d
+    assert 'K4den' in d and 'stats ?' in d
+    unknown = build_flight_board(players, lambda tid, p: None, ff, None).description
+    assert 'of ours' not in unknown, 'roster unreadable: say nothing, not 0'
+    assert 'Nobody flying' in build_flight_board({}, lambda t, p: None, {}, {}).description
+
+    # Flight posts are coloured cards: red out, green home.
+    card = FlyTracker._card('x', 'out')
+    assert card.description == 'x' and card.color.value == 0xe74c3c
+    assert FlyTracker._card('x', 'returning').color.value == 0x2ecc71
 
 
 def test_revive_check_by_chat_is_info_only():
@@ -10512,6 +10551,7 @@ if __name__ == '__main__':
     test_link_steps_spelled_out_and_management_commands_hidden()
     test_flight_alerts_compact_with_flags()
     test_war_tracker_posts_clean_themselves_up()
+    test_war_tracker_board_like_the_target_board()
     test_revive_check_by_chat_is_info_only()
     test_torn_lookup_items_wiki_pages_and_link()
     test_saved_wiki_pages_answer_the_right_section()

@@ -36,6 +36,7 @@ from config import (
     EMBED_COLOR_INFO,
     EMBED_COLOR_SUCCESS,
     EMBED_COLOR_WARNING,
+    EMBED_COLOR_CRITICAL,
 )
 from utils.torn_api import fetch_any_faction_data, fetch_ffscouter_stats
 
@@ -142,6 +143,15 @@ RETURN_POST_GRACE_SECONDS = 10 * 60
 # A post that can't be deleted (no permission, Discord down) is retried every
 # tick, but forgotten after a day so the list can't grow forever.
 LIVE_POST_GIVE_UP_SECONDS = 24 * 3600
+
+# The pinned board (Pat, 23/11/2026: "similar to targets and retals"). Our own
+# roster is re-read for it every few minutes, not every tick: "3 of ours in
+# the UK" changes slowly and each read is a Torn call. FFScouter estimates
+# barely move during a war, so once an hour is plenty.
+BOARD_TITLE = '\u2708\ufe0f Enemy flights'
+OWN_ROSTER_REFRESH_SECONDS = 5 * 60
+FF_REFRESH_SECONDS = 60 * 60
+BOARD_BUDGET = 3800  # Discord caps a description at 4096; shorten, never fail
 FOLLOW_THREAT_RATIO = 0.5      # below this x the member's stats, never worth a ping
 FOLLOW_COOLDOWN_RETENTION = 4  # prune cooldown rows older than N x the cooldown
 
@@ -280,6 +290,67 @@ def parse_phase(status: Dict, torn_id: str = '', name: str = '') -> Tuple[str, O
     return PHASE_HOME, None
 
 
+def build_flight_board(players: Dict, early_for, ff: Dict, own: Optional[Dict],
+                       enemy_name: str = '') -> discord.Embed:
+    """The pinned #war-tracker board, like the target board: one short line
+    per enemy, grouped Flying out / Abroad / Coming home, soonest landing
+    first. The name is the attack link; stats are FFScouter's rough guide;
+    "3 of ours there" marks a country where our members are sitting, which is
+    who a departure there endangers.
+
+    early_for(tid, player) gives the early edge of the landing window (the
+    countdown always tracks it, see _landing_line). own is {country: [members]}
+    or None when our roster couldn't be read: then the "of ours" bit is just
+    left off rather than claiming nobody is there."""
+    groups = {PHASE_OUT: [], PHASE_ABROAD: [], PHASE_RETURNING: []}
+    for tid, p in players.items():
+        phase = p.get('phase')
+        if phase not in groups:
+            continue
+        dest = p.get('dest')
+        rec = ff.get(str(tid)) or {}
+        stats = rec.get('bs_estimate_human') if rec.get('bs_estimate') else None
+        parts = [f"[{p.get('name') or tid}](https://www.torn.com/page.php?sid=attack&user2ID={tid})",
+                 stats or 'stats ?']
+        arrow = {PHASE_OUT: '\u2192 ', PHASE_RETURNING: '\u2190 '}.get(phase, '')
+        parts.append(arrow + place(dest, 'unknown').replace('**', ''))
+        eta = p.get('eta')
+        if phase != PHASE_ABROAD:
+            early = early_for(tid, p) if eta else None
+            parts.append(f'lands <t:{early or eta}:R>' if eta else 'landing time unknown')
+        if own is not None and phase != PHASE_RETURNING and dest:
+            n = len(own.get(dest, []))
+            if n:
+                parts.append(f"**{n} of ours there**")
+        sort_key = (eta or float('inf')) if phase != PHASE_ABROAD else (p.get('name') or '').lower()
+        groups[phase].append((sort_key, ' \u00b7 '.join(parts)))
+
+    labels = [(PHASE_OUT, '\U0001f534 Flying out'), (PHASE_ABROAD, '\U0001f334 Abroad'),
+              (PHASE_RETURNING, '\U0001f7e2 Coming home')]
+    blocks, budget, total, shown = [], BOARD_BUDGET, 0, 0
+    for phase, label in labels:
+        rows = sorted(groups[phase], key=lambda r: r[0])
+        total += len(rows)
+        if not rows:
+            continue
+        lines = [f'**{label}** ({len(rows)})']
+        for _k, line in rows:
+            if budget - len(line) - 1 < 0:
+                break
+            budget -= len(line) + 1
+            lines.append(line)
+            shown += 1
+        blocks.append('\n'.join(lines))
+    body = '\n\n'.join(blocks) if blocks else 'Nobody flying or abroad right now. \U0001f3e0'
+    title = BOARD_TITLE + (f' \u00b7 {enemy_name}' if enemy_name else '')
+    embed = create_embed(title=title[:256], description=body, color=EMBED_COLOR_WARNING)
+    footer = 'tap a name to attack \u00b7 landing times are estimates \u00b7 stats are FFScouter, a rough guide'
+    if total > shown:
+        footer = f'{total - shown} more not shown \u00b7 ' + footer
+    embed.set_footer(text=footer)
+    return embed
+
+
 class FollowWarning(str):
     """A follow-warning message (it IS the text, so it compares and posts like
     a plain string) that also remembers which enemies it is about and where,
@@ -318,6 +389,10 @@ class FlyTracker:
         # 'leg_start', 'dest', 'posted', 'done_at'}]. Persisted: after a
         # restart they would otherwise sit in the channel forever.
         self.live_posts = []
+        self.board_message_id = None
+        self._board_text = None      # last description posted, to skip no-op edits
+        self._own_cache = (0, None)  # (fetched_at, {country: [members]} or None)
+        self._ff_cache = (0, {})     # (fetched_at, FFScouter dict for the enemies)
 
     async def load_data(self):
         data = load_json(self.data_file, default={})
@@ -338,6 +413,7 @@ class FlyTracker:
         self.follow_cooldowns = data.get('follow_cooldowns', {})
         self.auto_started_war_id = data.get('auto_started_war_id')
         self.live_posts = data.get('live_posts', [])
+        self.board_message_id = data.get('board_message_id')
         if self.enabled:
             logger.info(f'Fly tracking resumed for faction {self.enemy_faction_id} ({self.enemy_faction_name})')
 
@@ -352,6 +428,7 @@ class FlyTracker:
             'follow_cooldowns': self.follow_cooldowns,
             'auto_started_war_id': self.auto_started_war_id,
             'live_posts': self.live_posts,
+            'board_message_id': self.board_message_id,
         })
 
     # ===== Toggle =====
@@ -517,6 +594,7 @@ class FlyTracker:
         self._war_end_strikes = 0
         # Nobody is being tracked any more, so no post can still be true.
         await self._delete_posts(list(self.live_posts))
+        await self._remove_board()
         await self.save_data()
         logger.info(f'Fly tracking DISABLED ({reason})')
         return create_embed(
@@ -775,7 +853,7 @@ class FlyTracker:
         # One message per flight (not one combined feed) so each can be
         # deleted on its own once that enemy has landed.
         for text, rec in alerts:
-            if self._track(await self._post(content=text), rec, now_ts):
+            if self._track(await self._post(embed=self._card(text, rec['phase'])), rec, now_ts):
                 changed = True
 
         # Follow warnings are posted one message per member rather than folded
@@ -787,6 +865,9 @@ class FlyTracker:
                        'dest': getattr(line, 'dest', None)}
                 self._track(await self._post(content=line), rec, now_ts)
                 changed = True  # cooldowns were stamped - persist them
+
+        if await self._refresh_board(now_ts):
+            changed = True
 
         if changed:
             await self.save_data()
@@ -1242,6 +1323,102 @@ class FlyTracker:
             logger.error(f'Fly: failed to post to war-tracker channel: {e}')
         return sent
 
+    # ===== Cards and the pinned board =====
+
+    def _channel(self):
+        """The #war-tracker channel, or None (not set, not found, or no bot
+        at all in the offline tests)."""
+        get = getattr(self.bot, 'get_channel', None)
+        return get(WAR_TRACKER_CHANNEL_ID) if get and WAR_TRACKER_CHANNEL_ID else None
+
+    @staticmethod
+    def _card(text: str, phase: str) -> discord.Embed:
+        """A flight post as a coloured card, like a retal: red bar flying out,
+        green coming home. The text is the same two lines as before."""
+        color = EMBED_COLOR_CRITICAL if phase == PHASE_OUT else EMBED_COLOR_SUCCESS
+        return discord.Embed(description=text, color=color)
+
+    async def _own_for_board(self, now_ts: float) -> Optional[Dict]:
+        ts, own = self._own_cache
+        if now_ts - ts >= OWN_ROSTER_REFRESH_SECONDS:
+            fresh = await self._fetch_own_abroad()
+            if fresh is not None:
+                self._own_cache = (now_ts, fresh)
+                own = fresh
+            elif now_ts - ts >= 3 * OWN_ROSTER_REFRESH_SECONDS:
+                own = None  # too old to trust: leave the "of ours" bit off
+        return own
+
+    async def _ff_for_board(self, now_ts: float) -> Dict:
+        ts, ff = self._ff_cache
+        if FFSCOUTER_API_KEY and self.players and now_ts - ts >= FF_REFRESH_SECONDS:
+            try:
+                fresh = await fetch_ffscouter_stats(list(self.players))
+            except Exception as e:
+                logger.error(f'Fly: FFScouter lookup for the board failed: {e}')
+                fresh = None
+            if fresh:
+                self._ff_cache = (now_ts, fresh)
+                ff = fresh
+            else:
+                # Try again in a few minutes, not an hour.
+                self._ff_cache = (now_ts - FF_REFRESH_SECONDS + 300, ff)
+        return ff
+
+    async def _refresh_board(self, now_ts: float) -> bool:
+        """Edit the pinned board in place, or post and pin it if it's gone.
+        Skips the edit when nothing changed (the countdowns are Discord
+        timestamps, so they tick on their own). True when the id changed."""
+        channel = self._channel()
+        if channel is None:
+            return False
+        try:
+            own = await self._own_for_board(now_ts)
+            ff = await self._ff_for_board(now_ts)
+            embed = build_flight_board(
+                self.players, lambda tid, p: self._eta_window(tid, p.get('dest'), p.get('eta')),
+                ff, own, self.enemy_faction_name)
+        except Exception as e:
+            logger.error(f'Fly: could not build the board: {e}')
+            return False
+        if self.board_message_id and embed.description == self._board_text:
+            return False
+        try:
+            if self.board_message_id:
+                try:
+                    await channel.get_partial_message(self.board_message_id).edit(embed=embed)
+                    self._board_text = embed.description
+                    return False
+                except discord.NotFound:
+                    self.board_message_id = None  # someone deleted it: post a new one
+            msg = await channel.send(embed=embed)
+            try:
+                await msg.pin()
+            except discord.HTTPException as e:
+                logger.warning(f'Fly: could not pin the board: {e}')
+            self.board_message_id = msg.id
+            self._board_text = embed.description
+            return True
+        except Exception as e:
+            logger.error(f'Fly: could not update the board: {e}')
+            return False
+
+    async def _remove_board(self):
+        """War over: the board would only show stale flights, so it goes (a
+        fresh one is posted when tracking starts again)."""
+        if not self.board_message_id:
+            return
+        channel = self._channel()
+        try:
+            if channel is not None:
+                await channel.get_partial_message(self.board_message_id).delete()
+        except discord.NotFound:
+            pass
+        except Exception as e:
+            logger.warning(f'Fly: could not delete the board: {e}')
+        self.board_message_id = None
+        self._board_text = None
+
     # ===== Self-cleaning posts =====
 
     def _track(self, sent, rec: Dict, now_ts: float) -> bool:
@@ -1299,7 +1476,7 @@ class FlyTracker:
         if not recs:
             return
         now_ts = now_ts or datetime.now(timezone.utc).timestamp()
-        channel = self.bot.get_channel(WAR_TRACKER_CHANNEL_ID) if WAR_TRACKER_CHANNEL_ID else None
+        channel = self._channel()
         for rec in recs:
             done = False
             try:
