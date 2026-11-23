@@ -7,7 +7,7 @@ A Discord bot for a Torn.com faction (Ascended Punks), running on Pat's home Mac
 ## Commands
 
 ```bash
-<py> -m pytest -q tests/          # full suite (195 tests), the one to trust
+<py> -m pytest -q tests/          # full suite (196 tests), the one to trust
 <py> -m pytest -q tests/test_imports.py::test_flytrack_logic   # single test
 <py> tests/test_imports.py        # runs test_imports.py ONLY, see note below
 <py> bot.py                       # run locally (needs .env)
@@ -180,6 +180,7 @@ Announcement layout (Pat's picks): bold emoji headings + bullets, blank line bet
 - Roster answers, no AI: "who's in hosp/jail/abroad/flying" (`STATUS_NOW_RX`, not past/war-stat wording `STATUS_PAST_RX`; `status_now_answer`, soonest out first, Torn down = said, never "nobody") and faction size (`FACTION_SIZE_RX`). War slang ("whats up with", "rn", "atm", "r we") is a records cue, not a wiki question.
 - Live war (`WAR_NOW_RX`: "war score", "r we winning", "how's the war going"; not past/trend/"vs X" wording `WAR_PAST_RX`) is a bot card (`war_answer`) from `live_status('war')`, with the lead against the target worked out in Python (a ranked war is won when the lead reaches the target). "who's online rn" reads `last_action.status` from the roster. Multi-part answers keep one "Checked Torn just now 👀".
 - The announcement tools are only offered in an announcement conversation (token budget).
+- "who has strikes" (`STRIKES_LIST_RX`, nobody named, management only) is `FactBook.strikes_card()`: one line per member, candidates below, read-only (points to `/strikes`).
 - No `CEREBRAS_API_KEY` is set (24/11/2026), so a Groq per-minute 429 waits up to 60s then goes to Gemini: two questions close together measured 60-90s.
 
 Every answer is also written to `data/logs/ask_ai.jsonl` (question, answer, provider, data used; 2 MB, one old copy) so odd answers can be traced. When the AI gives up, the bot itself tries "did you mean <close name>?" (`near_names`) and, for rules-ish questions (`RULES_CUE`), quotes the rulebook directly.
