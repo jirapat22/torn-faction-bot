@@ -291,7 +291,7 @@ def parse_phase(status: Dict, torn_id: str = '', name: str = '') -> Tuple[str, O
 
 
 def build_flight_board(players: Dict, early_for, ff: Dict, own: Optional[Dict],
-                       enemy_name: str = '') -> discord.Embed:
+                       enemy_name: str = '') -> list:
     """The pinned #war-tracker board, like the target board, grouped
     Flying out / Abroad / Coming home, and inside each by COUNTRY, nearest
     first (Pat, 23/11/2026: "easier to see and skim"). Nearest first is also
@@ -302,7 +302,11 @@ def build_flight_board(players: Dict, early_for, ff: Dict, own: Optional[Dict],
     early_for(tid, player) gives the early edge of the landing window (the
     countdown always tracks it, see _landing_line). own is {country: [members]}
     or None when our roster couldn't be read: then the "of ours" bit is just
-    left off rather than claiming nobody is there."""
+    left off rather than claiming nobody is there.
+
+    Returns a LIST of embeds, one per non-empty section, posted together as
+    one message: each has its own colour bar (red out, blue abroad, green
+    home), because a single embed read as a wall of text (Pat, 23/11/2026)."""
     def distance(dest):
         # Unknown destinations go last, after the furthest real country.
         return (STANDARD_FLIGHT_MINUTES.get(dest, 10_000), dest or '~')
@@ -324,16 +328,19 @@ def build_flight_board(players: Dict, early_for, ff: Dict, own: Optional[Dict],
         sort_key = (eta or float('inf'), '') if phase != PHASE_ABROAD else (0, (p.get('name') or '').lower())
         groups[phase].setdefault(dest, []).append((sort_key, ' \u00b7 '.join(parts)))
 
-    labels = [(PHASE_OUT, '\U0001f534 Flying out'), (PHASE_ABROAD, '\U0001f334 Abroad'),
-              (PHASE_RETURNING, '\U0001f7e2 Coming home')]
-    blocks, budget, total, shown = [], BOARD_BUDGET, 0, 0
-    for phase, label in labels:
+    labels = [(PHASE_OUT, '\U0001f534 Flying out', EMBED_COLOR_CRITICAL),
+              (PHASE_ABROAD, '\U0001f334 Abroad', EMBED_COLOR_INFO),
+              (PHASE_RETURNING, '\U0001f7e2 Coming home', EMBED_COLOR_SUCCESS)]
+    embeds, total, shown = [], 0, 0
+    for phase, label, color in labels:
         countries = groups[phase]
         count = sum(len(rows) for rows in countries.values())
         total += count
         if not count:
             continue
-        lines = [f'**{label}** ({count})']
+        # Each section gets its own budget; a message holds 6000 chars across
+        # all its embeds, so three of these always fit.
+        lines, budget = [], BOARD_BUDGET // 2
         for dest in sorted(countries, key=distance):
             head = place(dest, 'unknown')
             # Our members only matter where the enemy is going or sitting;
@@ -342,28 +349,30 @@ def build_flight_board(players: Dict, early_for, ff: Dict, own: Optional[Dict],
                 n = len(own.get(dest, []))
                 if n:
                     head += f' \u00b7 \u26a0\ufe0f {n} of ours there'
-            rows = sorted(countries[dest], key=lambda r: r[0])
             if budget - len(head) - 1 < 0:
                 break
             budget -= len(head) + 1
             lines.append(head)
-            for _k, line in rows:
+            for _k, line in sorted(countries[dest], key=lambda r: r[0]):
                 line = '\u2003' + line  # indent under the country
                 if budget - len(line) - 1 < 0:
                     break
                 budget -= len(line) + 1
                 lines.append(line)
                 shown += 1
-        blocks.append('\n'.join(lines))
-    body = '\n\n'.join(blocks) if blocks else 'Nobody flying or abroad right now. \U0001f3e0'
-    title = BOARD_TITLE + (f' \u00b7 {enemy_name}' if enemy_name else '')
-    embed = create_embed(title=title[:256], description=body, color=EMBED_COLOR_WARNING)
+        embeds.append(discord.Embed(title=f'{label} ({count})', description='\n'.join(lines), color=color))
+
+    heading = BOARD_TITLE + (f' \u00b7 {enemy_name}' if enemy_name else '')
+    if not embeds:
+        embeds.append(discord.Embed(description='Nobody flying or abroad right now. \U0001f3e0',
+                                    color=EMBED_COLOR_INFO))
+    embeds[0].set_author(name=heading[:256])
     footer = ('countries nearest first \u00b7 tap a name to attack \u00b7 landing times are estimates '
               '\u00b7 stats are FFScouter, a rough guide')
     if total > shown:
         footer = f'{total - shown} more not shown \u00b7 ' + footer
-    embed.set_footer(text=footer)
-    return embed
+    embeds[-1].set_footer(text=footer)
+    return embeds
 
 
 class FollowWarning(str):
@@ -1390,29 +1399,30 @@ class FlyTracker:
         try:
             own = await self._own_for_board(now_ts)
             ff = await self._ff_for_board(now_ts)
-            embed = build_flight_board(
+            embeds = build_flight_board(
                 self.players, lambda tid, p: self._eta_window(tid, p.get('dest'), p.get('eta')),
                 ff, own, self.enemy_faction_name)
         except Exception as e:
             logger.error(f'Fly: could not build the board: {e}')
             return False
-        if self.board_message_id and embed.description == self._board_text:
+        text = '\n'.join(f'{e.title}|{e.description}' for e in embeds)
+        if self.board_message_id and text == self._board_text:
             return False
         try:
             if self.board_message_id:
                 try:
-                    await channel.get_partial_message(self.board_message_id).edit(embed=embed)
-                    self._board_text = embed.description
+                    await channel.get_partial_message(self.board_message_id).edit(embeds=embeds)
+                    self._board_text = text
                     return False
                 except discord.NotFound:
                     self.board_message_id = None  # someone deleted it: post a new one
-            msg = await channel.send(embed=embed)
+            msg = await channel.send(embeds=embeds)
             try:
                 await msg.pin()
             except discord.HTTPException as e:
                 logger.warning(f'Fly: could not pin the board: {e}')
             self.board_message_id = msg.id
-            self._board_text = embed.description
+            self._board_text = text
             return True
         except Exception as e:
             logger.error(f'Fly: could not update the board: {e}')

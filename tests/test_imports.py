@@ -9656,10 +9656,13 @@ def test_war_tracker_board_like_the_target_board():
     }
     ff = {'1': {'bs_estimate': 510_600_000, 'bs_estimate_human': '510.6m'}}
     own = {'United Kingdom': [{'tid': 'a'}, {'tid': 'b'}, {'tid': 'c'}]}
-    e = build_flight_board(players, lambda tid, p: p['eta'] - 100, ff, own, 'Phantom Force')
-    d = e.description
-    assert 'Phantom Force' in e.title
-    assert d.index('Flying out') < d.index('Abroad') < d.index('Coming home')
+    em = build_flight_board(players, lambda tid, p: p['eta'] - 100, ff, own, 'Phantom Force')
+    # Pat, 23/11/2026 ("wall of text"): one card per section, own colour bar
+    assert [e.title for e in em] == ['\U0001f534 Flying out (2)', '\U0001f334 Abroad (1)',
+                                     '\U0001f7e2 Coming home (1)']
+    assert [e.color.value for e in em] == [0xe74c3c, 0x3498db, 0x2ecc71]
+    assert 'Phantom Force' in em[0].author.name and em[-1].footer.text
+    d = '\n'.join(f'{e.title}\n{e.description}' for e in em)
     # Pat, 23/11/2026: grouped by country, nearest first (UK 159 min
     # standard, Japan 225), the "of ours" count once on the country line
     out = d[d.index('Flying out'):d.index('Abroad')]
@@ -9669,9 +9672,11 @@ def test_war_tracker_board_like_the_target_board():
     assert 'lands <t:1900:R>' in d, 'countdown tracks the early edge'
     assert '**United Kingdom** \u00b7 \u26a0\ufe0f 3 of ours there' in d and 'Homebody' not in d
     assert 'K4den' in d and 'stats ?' in d
-    unknown = build_flight_board(players, lambda tid, p: None, ff, None).description
+    unknown = ' '.join(e.description for e in build_flight_board(players, lambda tid, p: None, ff, None))
     assert 'of ours' not in unknown, 'roster unreadable: say nothing, not 0'
-    assert 'Nobody flying' in build_flight_board({}, lambda t, p: None, {}, {}).description
+    only_home = build_flight_board({'4': players['4']}, lambda t, p: None, {}, {})
+    assert len(only_home) == 1 and 'Coming home' in only_home[0].title, 'empty sections are left out'
+    assert 'Nobody flying' in build_flight_board({}, lambda t, p: None, {}, {})[0].description
 
     # Flight posts are coloured cards: red out, green home.
     card = FlyTracker._card('x', 'out')
