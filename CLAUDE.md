@@ -7,7 +7,7 @@ A Discord bot for a Torn.com faction (Ascended Punks), running on Pat's home Mac
 ## Commands
 
 ```bash
-<py> -m pytest -q tests/          # full suite (193 tests), the one to trust
+<py> -m pytest -q tests/          # full suite (194 tests), the one to trust
 <py> -m pytest -q tests/test_imports.py::test_flytrack_logic   # single test
 <py> tests/test_imports.py        # runs test_imports.py ONLY, see note below
 <py> bot.py                       # run locally (needs .env)
@@ -176,6 +176,9 @@ Announcement layout (Pat's picks): bold emoji headings + bullets, blank line bet
 - `small_talk_reply`: a message that is ONLY thanks/hi/bye/good bot gets a canned in-character line (`SMALL_TALK`), provider 'none' (no member cooldown, no tokens).
 - `member_card`: "hows X activities", "how active is X", "tell me about X" (`is_overview`, every word from `_OVERVIEW_WORDS`) get a short card built from `member_report` text (provider 'bot', report behind 📎). Report lines it can't parse fall back to the AI (`None` when under 3 lines understood). Changing a `member_report` line format means updating its regex in `member_card` (the test pins them).
 - A named member's OC question ("is Ellanna in an OC?", `OC_ONE_RX`, not past tense) is answered live like `OC_NOW_RX`.
+- Two questions in one message (`question_parts`, split on "?", ";" or "and <question word>") are answered part by part, but ONLY when a part hits a bot shortcut (`_has_shortcut`): pure-AI multi-part questions the AI already handles in one go.
+- Roster answers, no AI: "who's in hosp/jail/abroad/flying" (`STATUS_NOW_RX`, not past/war-stat wording `STATUS_PAST_RX`; `status_now_answer`, soonest out first, Torn down = said, never "nobody") and faction size (`FACTION_SIZE_RX`). War slang ("whats up with", "rn", "atm", "r we") is a records cue, not a wiki question.
+- No `CEREBRAS_API_KEY` is set (24/11/2026), so a Groq per-minute 429 waits up to 60s then goes to Gemini: two questions close together measured 60-90s.
 
 Every answer is also written to `data/logs/ask_ai.jsonl` (question, answer, provider, data used; 2 MB, one old copy) so odd answers can be traced. When the AI gives up, the bot itself tries "did you mean <close name>?" (`near_names`) and, for rules-ish questions (`RULES_CUE`), quotes the rulebook directly.
 
