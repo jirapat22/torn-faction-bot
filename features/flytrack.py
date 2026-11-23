@@ -361,7 +361,15 @@ def build_flight_board(players: Dict, early_for, ff: Dict, own: Optional[Dict],
         eta = p.get('eta')
         if phase != PHASE_ABROAD:
             early = early_for(tid, p) if eta else None
-            parts.append(f'lands <t:{early or eta}:R>' if eta else 'landing time unknown')
+            # The window as clock times too (it was on the flight cards, Pat
+            # missed it on the board): countdown to the early edge, then
+            # "13:05-13:09", so a passed early edge still shows the late one.
+            if eta and early:
+                parts.append(f'lands <t:{early}:R> (<t:{early}:t>-<t:{eta}:t>)')
+            elif eta:
+                parts.append(f'lands <t:{eta}:R> (<t:{eta}:t>)')
+            else:
+                parts.append('landing time unknown')
         parts += details
         # Our members only matter where the enemy is going or sitting;
         # someone coming home is leaving that country behind.

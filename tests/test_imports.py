@@ -9681,7 +9681,7 @@ def test_war_tracker_board_like_the_target_board():
     # Fixed-width bits first so the rows line up (Pat, 23/11/2026)
     assert out.splitlines()[0].startswith(
         '\U0001f1ec\U0001f1e7 \u2754 `510.6m` [Fab](https://www.torn.com/page.php?sid=attack&user2ID=1)')
-    assert 'lands <t:1900:R>' in d, 'countdown tracks the early edge'
+    assert 'lands <t:1900:R> (<t:1900:t>-<t:2000:t>)' in d, 'countdown tracks the early edge, window as clock times'
     assert '\u26a0\ufe0f**3**' in out and 'Homebody' not in d
     assert len(out.splitlines()) == 2, 'no country heading lines'
     assert '`?`' in d, 'unknown stats'
