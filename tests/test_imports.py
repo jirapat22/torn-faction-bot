@@ -7923,7 +7923,8 @@ def test_ask_ai_wrong_name_gets_a_question_not_an_ai_guess():
     assert gossip.kind == 'ask' and 'BunnyBull' not in gossip.text
     judge = asyncio.run(answer_question(None, 'is BunnyBull a lazy idiot?', FactBook(d, roster={}), providers=[
         ('fake', provider([], 'Yeah, total slacker.'))]))
-    assert judge.kind == 'ask' and 'trash-talk' in judge.text and 'slacker' not in judge.text
+    # (the records now come as the bot's own card, under the no-judging line)
+    assert 'trash-talk' in judge.text and 'slacker' not in judge.text
     data_q = asyncio.run(answer_question(None, 'who made the most hits?', FactBook(d, roster={}), providers=[
         ('fake', provider([], 'Probably the leader.'))]))
     assert data_q.kind == 'ask'
@@ -8356,7 +8357,7 @@ def test_ask_ai_backup_ai_never_words_records():
     async def local(session, messages, fb, used):
         used.append(('member_report', {'name': 'Bob'}, fb.run('member_report', {'name': 'Bob'})))
         return 'Bob: 697 days since an OC.', list(messages)
-    ans = asyncio.run(answer_question(None, 'how is Bob?', FactBook(d, roster={}), providers=[('local AI', local)]))
+    ans = asyncio.run(answer_question(None, 'when was Bob last in an OC?', FactBook(d, roster={}), providers=[('local AI', local)]))
     assert ans.fallback and '697' not in ans.text and 'MEMBER: Bob' in ans.text and '(2 days ago)' in ans.text
 
     async def chat(session, messages, fb, used):
@@ -10197,7 +10198,7 @@ def test_members_see_only_their_own_records():
     trends = asyncio.run(fb.run('faction_extra', {'what': 'war_trends'}))
     assert '1W' in trends and 'BunnyBull' not in trends
     # Management: unchanged, and "my" works for them too when linked.
-    ans, _ = ask('how active is BunnyBull?', management=True)
+    ans, _ = ask('how many war hits did BunnyBull make?', management=True)
     assert ans.provider == 'Fake'
     full = FactBook(d, roster=roster).war_report('latest')
     assert 'Most hits made (top 3): BunnyBull (68)' in full
@@ -10520,6 +10521,69 @@ def test_greetings_and_thanks_are_answered_by_the_bot():
                                     for l in ls)   # Pat: never an em dash
 
 
+def test_member_overview_is_a_short_card_built_by_the_bot():
+    """
+    "hows sadrapp activites" (4 of the first 28 real questions were this
+    shape) got a long AI wall, every war on its own bullet. The bot now
+    builds a phone-sized card from member_report, with no AI and no tokens.
+    """
+    import asyncio
+    from features.ask_ai import is_overview, member_card, answer_question
+
+    for q in ['hows sadrapp activites', "how's sadrapp activity?", 'hows sadrapp activities and war hits?',
+              'how active is sadrapp', 'tell me about sadrapp', 'sadrapp?', 'how is he doing?']:
+        assert is_overview(q, 'sadrapp'), q
+    for q in ['how many hits did sadrapp make last war?', 'is sadrapp in an OC?', 'did sadrapp post a notice?',
+              'add sadrapp to targets', 'how is the war going?']:
+        assert not is_overview(q, 'sadrapp'), q
+
+    report = """MEMBER: Sadrapp [4167482]
+In the faction now: yes. Level 40.
+Last action in Torn: 22/11/2026 (0 hours ago), status now Idle.
+Discord linked to Torn: no (the bot cannot DM them)
+Online or idle in 70% of hourly checks since tracking began (recent weeks count more).
+Days online in the 14 days before now: 13.
+WARS: the bot keeps the last 5 wars and has member stats for 5 of them; this member appears in 2.
+- War 48339 vs INF (29/08/2026, unknown): hits made 8, hits taken from the enemy unknown, hits taken from outside 1
+- War 50338 vs The Naughty Kids (05/10/2026, defeat): hits made 4, hits taken from the enemy 29, hits taken from outside 23
+War totals: hits made 12, hits taken from the enemy at least 29 (some wars unknown), hits taken from outside 24.
+CHAINS: Chain history on record from 24/07/2026 (206 chains).
+- Last 14 days: 7 chains run by the faction. This member was in the faction for 7 of them and made hits in 0 of those chains, 0 chain hits in total.
+- Last 60 days: 136 chains run by the faction. This member was in the faction for 136 of them and made hits in 5 of those chains, 61 chain hits in total.
+- Last chain hit on record: 30/10/2026 (24 days ago).
+Last seen in an OC: 17/11/2026 (6 days ago).
+Strikes active now: 1. Strikes ever recorded: 2.
+Active strikes all clear on 11/01/2027 if no new strike comes first (60 days after the latest one)."""
+    card = member_card(report)
+    for bit in ['XID=4167482', 'Last action just now (Idle)', '13 of the last 14 days', '70%',
+                '12 hits made · 29+ taken · 24 from outside', 'Latest vs The Naughty Kids (05/10/2026): 4 made, 29 taken',
+                '0 hits in 14 days · 61 in 60 days · last 30/10/2026', 'Last OC 17/11/2026 (6 days ago)',
+                '1 active strike, all clear 11/01/2027', 'Not linked to Discord']:
+        assert bit in card, (bit, card)
+    assert '\n\n' not in card and len(card) < 600 and '\u2014' not in card
+    assert member_card('I have no records of anyone called **bob**.') is None   # not a report: AI as before
+    left = member_card('MEMBER: Bob [1]\nIn the faction now: no, they have left. Last seen in the faction on '
+                       '01/11/2026.\nWARS: not in any of the wars the bot has stats for.\nOC: never seen in an OC by the bot.')
+    assert 'Left the faction (last seen 01/11/2026)' in left and 'Never seen in an OC' in left
+
+    class Facts:
+        now = 0
+        live_tools = None
+        def _known_names(self):
+            return {'4167482': 'Sadrapp'}
+        def member_report(self, name):
+            return report
+
+    async def no_ai(session, messages, f, used):
+        raise AssertionError('the AI should not be asked')
+    ans = asyncio.run(answer_question(None, 'hows sadrapp activites', Facts(), [], providers=[('x', no_ai)]))
+    assert ans.provider == 'bot' and ans.text == card and ans.facts_text == report
+    # "is he lazy?" still gets the no-judging line, on top of the card.
+    hist = [{'role': 'user', 'content': 'hows sadrapp activites'}]
+    ans = asyncio.run(answer_question(None, 'is he lazy?', Facts(), hist, providers=[('x', no_ai)]))
+    assert ans.text.startswith("I don't trash-talk the crew") and 'Last OC' in ans.text
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -10708,4 +10772,5 @@ if __name__ == '__main__':
     test_help_is_short_and_links_to_the_posted_guide()
     test_followup_yes_and_bare_name_rewrite_the_question()
     test_greetings_and_thanks_are_answered_by_the_bot()
+    test_member_overview_is_a_short_card_built_by_the_bot()
     print('All smoke tests passed.')

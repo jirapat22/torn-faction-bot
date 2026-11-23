@@ -1710,6 +1710,106 @@ def did_you_mean(names):
     return 'Did you mean ' + ', '.join(f'**{n}**' for n in names[:-1]) + f' or **{names[-1]}**? Reply with the right name.'
 
 
+# "hows sadrapp activites", "how's Ellanna activity?", "how active is X",
+# "tell me about X": a general look at one member. 4 of the first 28 real
+# questions were this, and each got a long AI wall (every war on its own
+# 3-line bullet) that took a scroll on a phone. The bot now builds a short
+# card from member_report itself: instant, no tokens, every number copied.
+_OVERVIEW_WORDS = {
+    'how', 'hows', "how's", 'is', 'are', 'was', 'active', 'activity', 'activities', 'activites', 'activty',
+    'actvity', 'activeness', 'doing', 'going', 'lately', 'recently', 'been', 'looking', 'tell', 'me', 'about',
+    'check', 'on', 'look', 'up', 'lookup', 'info', 'the', 'of', 'for', 'report', 'overview', 'profile',
+    'record', 'records', 'summary', 'summarise', 'summarize', 'overall', 'and', 'his', 'her', 'their', 'war',
+    'wars', 'hits', 'chain', 'chains', 'quick', 'give', 'show', 'pull', 'files', 'file', 'pls', 'please',
+    'what', 'whats', "what's", 'about', 'x', 's', 'any', 'good', 'a', 'an', 'he', 'she', 'they', 'them', 'him',
+}
+
+
+def is_overview(question, name):
+    """True when the question is only "how is <name>" in some wording."""
+    q = re.sub(rf'(?<![\w]){re.escape(name)}(?![\w])', ' x ', question or '', flags=re.I)
+    words = re.findall(r"[a-z']+", q.lower().replace('’', "'"))
+    words = [w.strip("'") for w in words if w.strip("'")]
+    if 'x' not in words and not PRONOUN_RX.search(question or ''):
+        return False
+    return bool(words) and all(w in _OVERVIEW_WORDS for w in words)
+
+
+def member_card(report):
+    """
+    A short, phone-sized card from member_report's text, or None when the
+    report is not a normal one (no such member, members-only refusal...),
+    which then goes to the AI as before. Every number is copied from the
+    report, so the bot's no-made-up-numbers promise holds without a check.
+    """
+    lines = (report or '').split('\n')
+    head = re.match(r'MEMBER: (.+) \[(\d+)\]$', lines[0] if lines else '')
+    if not head:
+        return None
+    name, tid = head.groups()
+    find = lambda rx: next((m for m in (re.search(rx, l) for l in lines) if m), None)
+    out = [f'📋 **[{name}](<https://www.torn.com/profiles.php?XID={tid}>)**']
+    if find(r'^In the faction now: no'):
+        when = find(r'Last seen in the faction on ([\d/]+)')
+        out.append('- 🚪 Left the faction' + (f' (last seen {when.group(1)})' if when else ''))
+    else:
+        la = find(r'^Last action in Torn: [\d/]+ \((.+?)\), status now (\w+)')
+        if la:
+            ago = 'just now' if re.match(r'0 (?:hours?|h|minutes?|m)\b', la.group(1)) else la.group(1)
+            out.append(f'- 🟢 Last action {ago} ({la.group(2)})')
+        elif find(r'^In the faction now: unknown'):
+            out.append("- ❔ Torn isn't answering, so no live status")
+    days = find(r'^Days online in the 14 days before (?:now|they left): (\d+)')
+    pct = find(r'^Online or idle in (\d+)% of hourly checks')
+    bits = ([f'{days.group(1)} of the last 14 days online'] if days else []) + \
+           ([f'online/idle {pct.group(1)}% of the time'] if pct else [])
+    if bits:
+        out.append('- 📅 ' + ' · '.join(bits))
+    elif find(r'^(?:Activity pattern: no record|Days seen online: none)'):
+        out.append('- 📅 No activity on record')
+    tot = find(r'^War totals: hits made (\d+), hits taken from the enemy (at least )?(\d+)[^,]*, hits taken '
+               r'from outside (at least )?(\d+)')
+    seen = find(r'^WARS: the bot keeps the last (\d+) wars .*this member appears in (\d+)')
+    if tot:
+        plus = lambda a: '+' if a else ''
+        where = f' (in {seen.group(2)} of the last {seen.group(1)})' if seen else ''
+        out.append(f'- ⚔️ Wars{where}: {tot.group(1)} hits made · {tot.group(3)}{plus(tot.group(2))} taken '
+                   f'· {tot.group(5)}{plus(tot.group(4))} from outside')
+        wars = [m for m in (re.match(r'- War \d+ vs (.+?) \(([\d/]+), [^)]*\): hits made (\d+), hits taken '
+                                     r'from the enemy (\w+)', l) for l in lines) if m]
+        if wars:
+            # member_report lists wars oldest first; the newest by date is last.
+            w = max(wars, key=lambda m: datetime.strptime(m.group(2), '%d/%m/%Y'))
+            taken = f', {w.group(4)} taken' if w.group(4) != 'unknown' else ''
+            out.append(f'  └ Latest vs {w.group(1)} ({w.group(2)}): {w.group(3)} made{taken}')
+    elif find(r'^WARS: not in any'):
+        out.append('- ⚔️ Not in any war the bot has stats for')
+    c14 = find(r'^- Last 14 days: .* (\d+) chain hits in total')
+    c60 = find(r'^- Last 60 days: .* (\d+) chain hits in total')
+    last = find(r'^- Last chain hit on record: ([\d/]+)')
+    if c14 and c60:
+        out.append(f'- ⛓️ Chains: {c14.group(1)} hits in 14 days · {c60.group(1)} in 60 days'
+                   + (f' · last {last.group(1)}' if last else ''))
+    oc = find(r'^Last seen in an OC: ([\d/]+) \((\d+) days ago\)')
+    if oc:
+        out.append(f'- 🕵️ Last OC {oc.group(1)} ({oc.group(2)} days ago)')
+    elif find(r'^OC: never seen'):
+        out.append('- 🕵️ Never seen in an OC')
+    st = find(r'^Strikes active now: (\d+)\. Strikes ever recorded: (\d+)')
+    if st:
+        if st.group(1) == '0':
+            out.append('- ✅ No active strikes' + (f' ({st.group(2)} old)' if st.group(2) != '0' else ''))
+        else:
+            clear = find(r'^Active strikes all clear on ([\d/]+)')
+            out.append(f'- ⚠️ {st.group(1)} active strike' + ('s' if st.group(1) != '1' else '')
+                       + (f', all clear {clear.group(1)}' if clear else ''))
+    if find(r'^Discord linked to Torn: no'):
+        out.append('- 🔗 Not linked to Discord')
+    if len(out) < 3:
+        return None   # too little understood: let the AI word the full report
+    return '\n'.join(out)
+
+
 # A plain "yes" to the bot's own "Did you mean **X**?". Live 15/11/2026 Pat
 # had to retype the whole question ("hows TrevorLahry420 activities and war
 # hits?") after the bot offered the right name.
@@ -2482,6 +2582,16 @@ async def _answer_question(session, question, facts, history=None, earlier_facts
             ans.text = f"I don't trash-talk the crew 😤 Here's what the records say about **{judged}**, " \
                        f"you be the judge:\n\n{body}"
         return ans
+    # "hows X activities": a short card built by the bot (see member_card).
+    one = names_in(question, facts)
+    if len(one) != 1 and not one:
+        who_ = pronoun_target(question, history, facts)
+        one = [who_.split(' [')[0]] if who_ else []
+    if len(one) == 1 and is_overview(question, one[0]) and hasattr(facts, 'member_report'):
+        report = facts.member_report(one[0])
+        card = member_card(report)
+        if card:
+            return Answer(card, 'bot', report, True, 0)
     convo =' '.join([question] + [t.get('content', '') for t in history or [] if t.get('role') == 'user'])
     announcing = bool(ANNOUNCE_RX.search(convo)) and management
     # The action tools (features/ask_actions.py) are only shown when the
