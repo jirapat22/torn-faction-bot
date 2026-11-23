@@ -2497,13 +2497,17 @@ def status_now_answer(question, roster, now):
             continue
         until = st.get('until') or 0
         desc = re.sub(r'\s+', ' ', st.get('description') or '').strip()
+        # "Traveling from Torn to United Kingdom" -> "Torn → United Kingdom" (phone width)
+        desc = re.sub(r'^Travell?ing from (.+?) to (.+)$', r'\1 → \2', desc)
+        desc = re.sub(r'^Returning to Torn from (.+)$', r'\1 → Torn', desc)
         extra = f'out in {_mins(until - now)}' if until and until > now and states[0] in ('Hospital', 'Jail') \
             else desc
-        rows.append((until or 0, f"- {v.get('name', '?')}" + (f' ({extra})' if extra else '')))
+        rows.append((until or 0, str(v.get('name', '?')).lower(),
+                     f"- {v.get('name', '?')}" + (f' ({extra})' if extra else '')))
     if not rows:
         return f'{label}: nobody right now ✅'
     rows.sort()
-    return f'{label} right now ({len(rows)} of {len(roster)}):\n' + '\n'.join(r for _, r in rows)
+    return f'{label} right now ({len(rows)} of {len(roster)}):\n' + '\n'.join(r for _, _, r in rows)
 
 
 # Two questions in one message: "who's in an OC and what's the war score?".

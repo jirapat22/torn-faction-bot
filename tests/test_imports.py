@@ -10660,7 +10660,8 @@ def test_status_now_and_faction_size_are_answered_from_the_roster():
     hosp = status_now_answer('any1 hosp atm?', roster, now)
     assert hosp.startswith('🏥 In hospital right now (2 of 4)') and 'Blazingdragon6 (out in 17m)' in hosp
     assert hosp.index('Blazingdragon6') < hosp.index('yoang (out in 2h 5m)'), hosp   # soonest out first
-    assert 'Ellanna (Traveling to Japan)' in status_now_answer('anyone flying?', roster, now)
+    roster['3']['status']['description'] = 'Traveling from Torn to Japan'
+    assert 'Ellanna (Torn → Japan)' in status_now_answer('anyone flying?', roster, now)
     assert 'nobody right now' in status_now_answer('who is in jail', roster, now)
     assert "Torn isn't answering" in status_now_answer('who is in hosp', None, now)    # never "nobody"
     roster['4']['last_action'] = {'status': 'Online'}
