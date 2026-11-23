@@ -2510,6 +2510,46 @@ def status_now_answer(question, roster, now):
     return f'{label} right now ({len(rows)} of {len(roster)}):\n' + '\n'.join(r for _, _, r in rows)
 
 
+# "whats the war score", "r we winning?", "how's the war going": the live
+# war, the most asked thing during a war. Posted by the bot from /war's own
+# text (no AI, no tokens): each one cost ~7k of Groq's 8k tokens a minute.
+WAR_NOW_RX = re.compile(r"\bwar ?score\b|\bscore\b[^?\n]{0,20}\bwar\b|\bhow(?:'s| is|s) (?:the |our |this )?war\b|"
+                        r"\b(?:are|r) we (?:winning|losing|ahead|behind|at war|in a war)\b|\bup with the war\b|"
+                        r"\bwar status\b|\bwho(?:'s| is|s) winning\b|\bwar (?:going|goin)\b", re.I)
+WAR_PAST_RX = re.compile(r"\b(?:last|previous|ago|history|rules?|calculat\w*|works?|trends?|before|was|were|"
+                         r"did|vs|against)\b|\bwars\b", re.I)
+
+
+def war_answer(raw):
+    """The live war as a short card: score, lead against the target, time."""
+    raw = str(raw or '')
+    if not raw.startswith('WAR RIGHT NOW'):
+        return raw   # no war on / next war / Torn down: already plain English
+    block, _, rest = raw.partition('\n\n')
+    lines = block.split('\n')[1:]
+    title = lines[0] if lines else 'Ranked war'
+    get = lambda label: next((l.split(': ', 1)[1] for l in lines if l.startswith(label + ': ')), None)
+    status = next((l for l in lines[1:] if re.match(r'^\S+ (?:Winning|Losing)\b', l)), None)
+    ours, theirs, target = get('Our Score'), get('Enemy Score'), get('Target Score')
+    out = [f'⚔️ **{title}**']
+    if status:
+        out.append(re.sub(r'(\d+ - \d+)', r'**\1**', status))
+    if ours and theirs and target and ours.isdigit() and theirs.isdigit() and target.isdigit() and int(target):
+        # A ranked war is won by the first side whose LEAD reaches the target.
+        lead = int(ours) - int(theirs)
+        if lead >= 0:
+            out.append(f'🎯 Lead {lead} of the {target} needed ({min(100, round(100 * lead / int(target)))}%)')
+        else:
+            out.append(f'🎯 Behind by {-lead}, target {target}')
+    when = [f'Started {get("Started")}' if get('Started') else '', f'ends {get("Ends")}' if get('Ends') else '']
+    when = ' · '.join(w for w in when if w)
+    if when:
+        out.append('⏱️ ' + when)
+    if len(out) < 2:
+        return raw
+    return '\n'.join(out) + (f'\n\n{rest}' if rest else '')
+
+
 # Two questions in one message: "who's in an OC and what's the war score?".
 # The bot's own shortcuts (live OC list, revives, notices, hits on us, the
 # member card) each answer ONE thing, so the other half used to vanish.
@@ -2536,7 +2576,8 @@ def _has_shortcut(part, facts, history=None):
                 or is_incoming_question(part, lower)
                 or (len(names) == 1 and is_overview(part, names[0]))
                 or (STATUS_NOW_RX.search(part) and not STATUS_PAST_RX.search(part))
-                or FACTION_SIZE_RX.search(part))
+                or FACTION_SIZE_RX.search(part)
+                or (WAR_NOW_RX.search(part) and not WAR_PAST_RX.search(part)))
 
 
 async def answer_question(session, question, facts, history=None, earlier_facts='', providers=None,
@@ -2681,6 +2722,10 @@ async def _answer_question(session, question, facts, history=None, earlier_facts
             and hasattr(facts, 'roster'):
         text = status_now_answer(question, roster, facts.now)
         return Answer('Checked Torn just now 👀\n\n' + text if roster is not None else text, 'bot', text, True, 0)
+    if WAR_NOW_RX.search(question) and not WAR_PAST_RX.search(question) \
+            and getattr(facts, 'live_tools', None) is not None:
+        raw = await facts.live_tools.live_status('war')
+        return Answer('Checked Torn just now 👀\n\n' + war_answer(raw), 'bot', raw, True, 0)
     if FACTION_SIZE_RX.search(question) and hasattr(facts, 'roster'):
         text = (f"We've got **{len(roster)}** members in the faction right now 🤘" if roster is not None else
                 "Torn isn't answering right now, so I can't count heads 🤷 Try again in a minute.")

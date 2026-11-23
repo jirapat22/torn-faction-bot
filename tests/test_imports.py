@@ -10626,9 +10626,9 @@ def test_two_questions_in_one_message_both_get_answered():
     async def ai(session, messages, f, used):
         asked.append(messages[-1]['content'])
         return 'Chat: war score is unknown.', messages
-    ans = asyncio.run(answer_question(None, "who's in an oc and whats the war score?", Facts(), [],
+    ans = asyncio.run(answer_question(None, "who's in an oc and who made the most chain hits?", Facts(), [],
                                       providers=[('x', ai)]))
-    assert 'In an OC: 1 of 2' in ans.text and asked == ['whats the war score'], (asked, ans.text)
+    assert 'In an OC: 1 of 2' in ans.text and asked == ['who made the most chain hits'], (asked, ans.text)
     # "hows sadrapp? and Ellanna?": two cards, the second about Ellanna.
     ans = asyncio.run(answer_question(None, 'hows sadrapp? and Ellanna?', Facts(), [], providers=[('x', ai)]))
     assert ans.text.count('📋') == 2 and 'Ellanna' in ans.text.split('\n\n')[1], ans.text
@@ -10715,6 +10715,49 @@ def test_status_now_and_faction_size_are_answered_from_the_roster():
     asyncio.run(answer_question(None, 'make an announcement about the chain', f, [], providers=[('x', spy)]))
     assert 'announce_draft' not in offered[0] and 'war_report' in offered[0]
     assert 'announce_draft' in offered[1]
+
+
+def test_live_war_is_a_short_card_built_by_the_bot():
+    """
+    "whats the war score" is the most asked thing in a war, and each one went
+    through the AI (~7k of Groq's 8k tokens a minute, so a second question
+    in the same minute waited or fell back for 60-90s). The bot now posts
+    /war's own numbers as a card, with the lead against the target.
+    """
+    import asyncio
+    from features.ask_ai import war_answer, WAR_NOW_RX, WAR_PAST_RX, answer_question
+    now_q = lambda q: bool(WAR_NOW_RX.search(q)) and not WAR_PAST_RX.search(q)
+    for q in ['whats the war score', 'r we winning?', "how's the war going", 'whats up with the war',
+              'r we at war?', "who's winning"]:
+        assert now_q(q), q
+    for q in ['what was the score last war?', 'how is war score calculated?', 'war trends',
+              "what's the score in the war vs Kaos", 'who made the most hits in the war?']:
+        assert not now_q(q), q
+    raw = ('WAR RIGHT NOW (same as /war):\nRanked War vs Phantom Force\n✅ Winning 3435 - 1929\nOur Score: 3435\n'
+           'Enemy Score: 1929\nTarget Score: 3318\nWar ID: 52994\nStarted: 1d 20h ago\nStatus: In Progress')
+    card = war_answer(raw)
+    assert card == ('⚔️ **Ranked War vs Phantom Force**\n✅ Winning **3435 - 1929**\n'
+                    '🎯 Lead 1506 of the 3318 needed (45%)\n⏱️ Started 1d 20h ago'), card
+    losing = war_answer(raw.replace('✅ Winning 3435 - 1929', '⚠️ Losing 1000 - 1200')
+                        .replace('Our Score: 3435', 'Our Score: 1000').replace('Enemy Score: 1929', 'Enemy Score: 1200'))
+    assert 'Behind by 200, target 3318' in losing
+    none = 'No ranked war is on right now and none is enlisted yet (or Torn did not answer).'
+    assert war_answer(none) == none
+
+    class Live:
+        async def live_status(self, what):
+            assert what == 'war'
+            return raw
+
+    class Facts:
+        now, live_tools, roster = 0, Live(), {}
+        def _known_names(self):
+            return {}
+
+    async def no_ai(session, messages, f, used):
+        raise AssertionError('the AI should not be asked')
+    ans = asyncio.run(answer_question(None, 'r we winning?', Facts(), [], providers=[('x', no_ai)]))
+    assert 'Lead 1506' in ans.text and ans.provider == 'bot'
 
 
 if __name__ == '__main__':
@@ -10908,4 +10951,5 @@ if __name__ == '__main__':
     test_member_overview_is_a_short_card_built_by_the_bot()
     test_two_questions_in_one_message_both_get_answered()
     test_status_now_and_faction_size_are_answered_from_the_roster()
+    test_live_war_is_a_short_card_built_by_the_bot()
     print('All smoke tests passed.')
