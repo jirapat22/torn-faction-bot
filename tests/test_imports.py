@@ -9674,14 +9674,18 @@ def test_war_tracker_board_like_the_target_board():
     assert [e.color.value for e in em] == [0xe74c3c, 0x3498db, 0x2ecc71]
     assert 'Phantom Force' in em[0].author.name and em[-1].footer.text
     d = '\n'.join(f'{e.title}\n{e.description}' for e in em)
-    # Pat, 23/11/2026: grouped by country, nearest first (UK 159 min
-    # standard, Japan 225), the "of ours" count once on the country line
-    out = d[d.index('Flying out'):d.index('Abroad')]
-    assert out.index('United Kingdom') < out.index('Japan'), 'nearer country first'
-    assert out.index('United Kingdom') < out.index('Fab') < out.index('Japan') < out.index('Jet')
-    assert '[Fab](https://www.torn.com/page.php?sid=attack&user2ID=1)' in d and '510.6m' in d
-    assert 'lands <t:1900:R>' in d, 'countdown tracks the early edge'
-    assert '**United Kingdom** \u00b7 \u26a0\ufe0f 3 of ours there' in d and 'Homebody' not in d
+    # Pat, 23/11/2026: one line per enemy, flag in front, nearest country
+    # first (UK 159 min standard, Japan 225); coming home by landing time
+    out = em[0].description
+    assert out.index('Fab') < out.index('Jet'), 'nearer country first'
+    assert out.splitlines()[0].startswith('\U0001f1ec\U0001f1e7 [Fab](https://www.torn.com/page.php?sid=attack&user2ID=1)')
+    assert '510.6m' in out and 'lands <t:1900:R>' in d, 'countdown tracks the early edge'
+    assert '\u26a0\ufe0f **3 ours there**' in out and 'Homebody' not in d
+    assert len(out.splitlines()) == 2, 'no country heading lines'
+    home = build_flight_board({'a': {'name': 'Far', 'phase': 'returning', 'dest': 'South Africa', 'eta': 100},
+                               'b': {'name': 'Near', 'phase': 'returning', 'dest': 'Mexico', 'eta': 900}},
+                              lambda t, p: None, {}, {})[2].description
+    assert home.index('Far') < home.index('Near'), 'coming home: who lands first, not distance'
     assert 'K4den' in d and 'stats ?' in d
     unknown = ' '.join(e.description for e in build_flight_board(players, lambda tid, p: None, ff, None))
     assert 'of ours' not in unknown, 'roster unreadable: say nothing, not 0'
