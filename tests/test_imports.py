@@ -10763,6 +10763,50 @@ def test_live_war_is_a_short_card_built_by_the_bot():
     assert 'Lead 1506' in ans.text and ans.provider == 'bot'
 
 
+def test_who_has_strikes_is_a_short_card_for_management():
+    """
+    "who has strikes" went to the AI (24s via a backup live 24/11/2026) and
+    came back as long per-strike lines. The bot now groups them per member.
+    Members never get it, and giving/removing strikes stays on /strikes.
+    """
+    import asyncio
+    from features.ask_ai import FactBook, STRIKES_LIST_RX, answer_question, DAY
+    for q in ['who has strikes', 'any active strikes?', 'show the strike list']:
+        assert STRIKES_LIST_RX.search(q), q
+    for q in ['what is the strike rule', 'how do i give a strike', 'what gets you a strike']:
+        assert not STRIKES_LIST_RX.search(q), q
+
+    class SM:
+        pending = {'9': {'torn_name': 'MrDeath', 'reason': '6 days without joining an OC (strike territory at 4 days). '
+                                                          'They were nudged at 1 day.'}}
+    fb = FactBook.__new__(FactBook)
+    fb.sm = SM()
+    from datetime import datetime, timezone
+    t0 = datetime(2026, 11, 3, 12, tzinfo=timezone.utc).timestamp()
+    fb._strikes_active = lambda tid=None: [
+        {'torn_id': 1, 'torn_name': 'Ellanna', 'type': 'oc', 'issued_at': t0},
+        {'torn_id': 2, 'torn_name': 'hugrosBalour', 'type': 'oc', 'issued_at': t0 + 12 * DAY},
+        {'torn_id': 1, 'torn_name': 'Ellanna', 'type': 'oc', 'issued_at': t0 + 9 * DAY}]
+    card = fb.strikes_card()
+    lines = card.split('\n')
+    assert lines[0] == '⚠️ **Active strikes (3)**'
+    assert lines[1].startswith('- **Ellanna** (2): ') and '03/11' in lines[1] and '12/11' in lines[1], card
+    assert 'all clear 11/01/2027' in lines[1], card
+    assert '⏳ **Waiting for a decision (1)**' in card and '- MrDeath: 6 days without joining an OC' in card
+    assert 'They were nudged' not in card and card.endswith('`/strikes`')
+
+    fb._known_names = lambda: {}
+    fb.now, fb.live_tools = 0, None
+    fb.strikes_overview = lambda: 'ACTIVE STRIKES: 3'
+
+    async def ai(session, messages, f, used):
+        return 'members path', messages
+    ans = asyncio.run(answer_question(None, 'who has strikes', fb, [], providers=[('x', ai)]))
+    assert ans.provider == 'bot' and 'Ellanna' in ans.text
+    ans = asyncio.run(answer_question(None, 'who has strikes', fb, [], providers=[('x', ai)], management=False))
+    assert 'Ellanna' not in ans.text
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -10955,4 +10999,5 @@ if __name__ == '__main__':
     test_two_questions_in_one_message_both_get_answered()
     test_status_now_and_faction_size_are_answered_from_the_roster()
     test_live_war_is_a_short_card_built_by_the_bot()
+    test_who_has_strikes_is_a_short_card_for_management()
     print('All smoke tests passed.')

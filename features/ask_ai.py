@@ -928,6 +928,32 @@ class FactBook:
             out.append(f'- {c.get("torn_name")}: {(c.get("reason") or "").strip()[:160]}')
         return '\n'.join(out)
 
+    def strikes_card(self):
+        """
+        "who has strikes?" as a short card, one line per member (Ellanna's two
+        strikes were two 300-character lines before). Read-only: giving or
+        removing a strike stays on /strikes.
+        """
+        self.found_any = True
+        active = self._strikes_active()
+        by = {}
+        for st in sorted(active, key=lambda x: x.get('issued_at', 0)):
+            by.setdefault(str(st.get('torn_id')), []).append(st)
+        out = [f'⚠️ **Active strikes ({len(active)})**' if active else '✅ No active strikes']
+        for tid, rows in sorted(by.items(), key=lambda kv: (-len(kv[1]), str(kv[1][0].get('torn_name')).lower())):
+            clears = max(r.get('issued_at', 0) for r in rows) + STRIKE_EXPIRY_DAYS * DAY
+            short = lambda r: re.sub(r'(?i)^not in an organi[sz]ed crime$', 'No OC', _stype(r))
+            what = ', '.join(f'{short(r)} {_date(r.get("issued_at", 0))[:5]}' for r in rows)
+            out.append(f'- **{rows[0].get("torn_name") or tid}** ({len(rows)}): {what} · all clear {_date(clears)}')
+        pending = (self.sm.pending if self.sm is not None else (self._strike_file or {}).get('pending', {})) or {}
+        if pending:
+            out.append(f'⏳ **Waiting for a decision ({len(pending)})**')
+            for c in pending.values():
+                why = (c.get('reason') or '').strip().split('. ')[0][:90]
+                out.append(f'- {c.get("torn_name")}: {why}')
+        out.append('-# Give or remove strikes with `/strikes`')
+        return '\n'.join(out)
+
     def faction_rules(self, topic):
         """
         The rulebook sections that match `topic`, quoted word for word from
@@ -2550,6 +2576,11 @@ def war_answer(raw):
     return '\n'.join(out) + (f'\n\n{rest}' if rest else '')
 
 
+# "who has strikes?", "any active strikes", "strike list": management only.
+STRIKES_LIST_RX = re.compile(r"\b(?:who(?:'s| is| has|s)?|any(?:one| active)?|list|show|all)\b[^?\n]{0,25}\bstrikes?\b(?![^?\n]*\b(?:"
+                             r"rule|for|happens|get|give|remove|clear|issue|add)\w*\b)|\bstrike (?:list|board|ledger)\b", re.I)
+
+
 # Two questions in one message: "who's in an OC and what's the war score?".
 # The bot's own shortcuts (live OC list, revives, notices, hits on us, the
 # member card) each answer ONE thing, so the other half used to vanish.
@@ -2577,7 +2608,8 @@ def _has_shortcut(part, facts, history=None):
                 or (len(names) == 1 and is_overview(part, names[0]))
                 or (STATUS_NOW_RX.search(part) and not STATUS_PAST_RX.search(part))
                 or FACTION_SIZE_RX.search(part)
-                or (WAR_NOW_RX.search(part) and not WAR_PAST_RX.search(part)))
+                or (WAR_NOW_RX.search(part) and not WAR_PAST_RX.search(part))
+                or (STRIKES_LIST_RX.search(part) and not names_in(part, facts)))
 
 
 async def answer_question(session, question, facts, history=None, earlier_facts='', providers=None,
@@ -2728,6 +2760,10 @@ async def _answer_question(session, question, facts, history=None, earlier_facts
             and hasattr(facts, 'roster'):
         text = status_now_answer(question, roster, facts.now)
         return Answer('Checked Torn just now 👀\n\n' + text if roster is not None else text, 'bot', text, True, 0)
+    if management and STRIKES_LIST_RX.search(question) and not names_in(question, facts) \
+            and hasattr(facts, 'strikes_card'):
+        text = facts.strikes_card()
+        return Answer(text, 'bot', facts.strikes_overview(), True, 0)
     if WAR_NOW_RX.search(question) and not WAR_PAST_RX.search(question) \
             and getattr(facts, 'live_tools', None) is not None:
         raw = await facts.live_tools.live_status('war')
