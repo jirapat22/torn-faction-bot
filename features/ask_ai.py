@@ -2288,6 +2288,42 @@ def guard_question(question, management=True, game=False):
     return None
 
 
+# Pure greetings, thanks and goodbyes, answered by the bot itself in
+# character. Each one used to cost a full AI round trip (~3-7k of Groq's
+# 200,000 free tokens a day, the same pool real questions need) to say "np".
+# Only a message that is NOTHING but this counts: "hi, how active is X?" is
+# a question and goes on as normal.
+_TAIL = r"(?:[\s,!.]*(?:mate|boss|bro|bruh|dude|man|punk|apex(?:punk)?|bot|buddy|there|all|guys|everyone|team|legend|fam|lol|haha|again|so much|a lot|heaps|<3|[\U0001F300-\U0001FAFF\u2600-\u27BF\uFE0F]))*[\s!.?]*$"
+SMALL_TALK = [
+    ('thanks', re.compile(r"^\s*(?:thanks?(?: you)?|thx|ty|tyvm|cheers|ta|much appreciated|appreciate (?:it|you)|"
+                          r"nice one|good (?:job|work)|well done|legend|🙏|❤️|👍)" + _TAIL, re.I),
+     ["Anytime, boss 🤘", "No worries, that's what the armoury's for 😎", "Cheers, now go stack some hits 💪",
+      "All good 🤘 holler if you need the files again.", "Easy. Duct tape and loyalty, baby 🛠️"]),
+    ('hello', re.compile(r"^\s*(?:h(?:i+|e+y+|ello|owdy|iya)|yo+|sup|wass?up|what'?s up|g'?day|kia ora|oi|"
+                         r"morning|good (?:morning|afternoon|evening)|👋)" + _TAIL, re.I),
+     ["Yo 🤘 what do you need from the armoury?", "Oi oi 👋 ask me about wars, chains, OCs, members or the rules.",
+      "Sup boss 😎 what are we digging up today?", "Kia ora 🤘 what can I pull from the files?"]),
+    ('bye', re.compile(r"^\s*(?:bye+|cya|see (?:ya|you)|later|laters|night|nighty?|gn|good ?night|sleep well|"
+                       r"catch (?:ya|you)(?: later)?)" + _TAIL, re.I),
+     ["Later 🤘 don't get mugged on the way out.", "Night boss 🌙 I'll guard the armoury.",
+      "Cya 👋 turtle up if you're going offline."]),
+    ('praise', re.compile(r"^\s*(?:(?:good|nice|best|great|smart|clever) (?:bot|boy|girl|one)|you(?:'re| are) "
+                          r"(?:the best|awesome|a legend|great|smart)|love (?:you|ya|u))" + _TAIL, re.I),
+     ["Aw shucks, I'm just duct tape and attitude 😎", "I know 😏 tell management I want a raise.",
+      "Punks look after punks 🤘"]),
+]
+
+
+def small_talk_reply(question, pick=None):
+    """The bot's own reply to a pure greeting/thanks/bye, or None."""
+    import random
+    pick = pick or random.choice
+    for _kind, rx, lines in SMALL_TALK:
+        if rx.match(question or ''):
+            return pick(lines)
+    return None
+
+
 I_DID = re.compile(
     r"\b(?:i'?ve|i have|i|we'?ve|we have)\s+(?:just\s+|now\s+|already\s+|gone and\s+)?"
     r"(?:deleted|removed|added|started|ended|cancell?ed|created|posted|scheduled|kicked|banned|booted|issued|"
@@ -2337,6 +2373,10 @@ async def _answer_question(session, question, facts, history=None, earlier_facts
     if fixed:
         # 'none' = not remembered as a conversation.
         return Answer(fixed, 'none', '', True, 0, kind='ask')
+    chat = small_talk_reply(question)
+    if chat:
+        # 'none': a "thanks" doesn't start a member's cooldown either.
+        return Answer(chat, 'none', '', True, 0, kind='chat')
     # "my hits" -> "Ikaros22's hits": the asker about themselves.
     asker = getattr(facts, 'asker', None)
     if FIRST_RX.search(question or '') and not FIRST_SKIP_RX.search(question or ''):

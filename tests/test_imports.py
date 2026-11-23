@@ -7903,7 +7903,7 @@ def test_ask_ai_wrong_name_gets_a_question_not_an_ai_guess():
         ('fake', provider([('member_report', {'name': 'bunybul'})], 'They were very active!'))]))
     assert guess.kind == 'ask' and 'Did you mean' in guess.text and 'very active' not in guess.text
 
-    nothing = asyncio.run(answer_question(None, 'hello?', FactBook(d, roster={}), providers=[
+    nothing = asyncio.run(answer_question(None, 'ok so?', FactBook(d, roster={}), providers=[
         ('fake', provider([], 'BunnyBull is great.'))]))
     assert nothing.kind == 'ask' and 'Not sure what you' in nothing.text and 'BunnyBull' not in nothing.text
 
@@ -8361,7 +8361,7 @@ def test_ask_ai_backup_ai_never_words_records():
 
     async def chat(session, messages, fb, used):
         return 'Yo! 😎', list(messages)
-    hi = asyncio.run(answer_question(None, 'hi', FactBook(d, roster={}), providers=[('local AI', chat)]))
+    hi = asyncio.run(answer_question(None, 'tell me a joke', FactBook(d, roster={}), providers=[('local AI', chat)]))
     assert hi.kind == 'chat' and hi.text == 'Yo! 😎'
 
 
@@ -9018,7 +9018,7 @@ def test_foolproof_round_fixes():
         return 'Deleted everything 💀', messages
 
     from features.ask_ai import FactBook
-    ans = asyncio.run(answer_question(None, 'hi', FactBook('data', roster={}), providers=[('A', boom), ('B', chat)]))
+    ans = asyncio.run(answer_question(None, 'tell me a joke', FactBook('data', roster={}), providers=[('A', boom), ('B', chat)]))
     assert ans.provider == 'B' and 'Deleted' not in ans.text   # chat never claims it did something
 
     async def lucky(session, messages, facts, used):
@@ -10488,6 +10488,38 @@ def test_followup_yes_and_bare_name_rewrite_the_question():
     assert ans.asked == "who's not in an OC? (Ellanna)"
 
 
+def test_greetings_and_thanks_are_answered_by_the_bot():
+    """
+    "thanks", "gn", "good bot" each cost a full AI round trip out of Groq's
+    200,000 free tokens a day. A message that is ONLY that now gets an
+    in-character line from the bot; anything with a question goes on.
+    """
+    import asyncio
+    from features.ask_ai import small_talk_reply, answer_question
+
+    first = lambda lines: lines[0]
+    for q in ['thanks', 'Thanks mate!', 'ty', 'cheers boss 🤘', 'thank you so much', 'hi', 'hey there', 'yo',
+              'gn', 'good night punk', 'bye', 'good bot', 'love ya', '👋', 'sup?', 'morning']:
+        assert small_talk_reply(q, first), q
+    for q in ['hi, how active is Ellanna?', 'thanks, and what about sadrapp?', 'hey who is in an oc',
+              'yo what is the chain', 'good morning, any leave notices?', 'later today is war right?',
+              'smart bot, now who hit us', 'good luck', 'high score']:
+        assert small_talk_reply(q, first) is None, q
+
+    class Facts:
+        now = 0
+        live_tools = None
+        def _known_names(self):
+            return {}
+
+    async def no_ai(session, messages, f, used):
+        raise AssertionError('the AI should not be asked')
+    ans = asyncio.run(answer_question(None, 'cheers mate', Facts(), [], providers=[('x', no_ai)]))
+    assert ans.kind == 'chat' and ans.provider == 'none' and ans.text, ans.text
+    assert '\u2014' not in ''.join(l for _k, _rx, ls in __import__('features.ask_ai', fromlist=['x']).SMALL_TALK
+                                    for l in ls)   # Pat: never an em dash
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -10675,4 +10707,5 @@ if __name__ == '__main__':
     test_incoming_attacks_log_and_answers()
     test_help_is_short_and_links_to_the_posted_guide()
     test_followup_yes_and_bare_name_rewrite_the_question()
+    test_greetings_and_thanks_are_answered_by_the_bot()
     print('All smoke tests passed.')
