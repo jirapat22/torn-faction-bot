@@ -10429,6 +10429,65 @@ def test_help_is_short_and_links_to_the_posted_guide():
     assert a.cooldown_left(1, now=1040) == 80 and a.cooldown_left(1, now=1200) == 0
 
 
+def test_followup_yes_and_bare_name_rewrite_the_question():
+    """
+    Live 15/11/2026 Pat retyped "hows TrevorLahey420 activities and war hits?"
+    after the bot itself offered "Did you mean TrevorLahey420?". And after
+    "who's not in an OC?", replying just "Ellanna" got "which member?" then a
+    records answer instead of Torn's live OC line. Short follow-ups are now
+    rewritten into the full question in Python.
+    """
+    import asyncio
+    from features.ask_ai import followup_rewrite, answer_question, OC_ONE_RX
+
+    class F:
+        management = True
+        def _known_names(self):
+            return {'1': 'TrevorLahey420', '2': 'Ellanna', '3': 'sadrapp'}
+    typo = [{'role': 'user', 'content': 'hows TrevorLahry420 activities and war hits?'},
+            {'role': 'assistant', 'content': 'Did you mean **TrevorLahey420**? Reply with the right name.'}]
+    for yes in ['yes', 'Yep', 'yeah pls', 'y', 'correct', '👍', 'yes that one']:
+        assert followup_rewrite(yes, typo, F()) == 'hows TrevorLahey420 activities and war hits?', yes
+    assert followup_rewrite('TrevorLahey420', typo, F()) == 'hows TrevorLahey420 activities and war hits?'
+    assert followup_rewrite('no', typo, F()) is None
+    assert followup_rewrite('yes', [], F()) is None                       # nothing to follow
+
+    hist = [{'role': 'user', 'content': 'hows sadrapp activites'}, {'role': 'assistant', 'content': '...'}]
+    assert followup_rewrite('and Ellanna?', hist, F()) == 'hows Ellanna activites'
+    assert followup_rewrite('what about ellanna', hist, F()) == 'hows Ellanna activites'
+    assert followup_rewrite('Ellanna too', hist, F()) == 'hows Ellanna activites'
+    assert followup_rewrite('is Ellanna lazy?', hist, F()) is None        # a real question of its own
+    oc = [{'role': 'user', 'content': "who's not in an OC?"}, {'role': 'assistant', 'content': '...'}]
+    assert followup_rewrite('Ellanna', oc, F()) == "who's not in an OC? (Ellanna)"
+    # Inside an announcement or action, a name answers the bot's question.
+    ann = [{'role': 'user', 'content': 'make an announcement about the chain'},
+           {'role': 'assistant', 'content': 'Who should I ping?'}]
+    assert followup_rewrite('Ellanna', ann, F()) is None
+
+    # A named member's OC question goes to Torn live, not the AI.
+    assert OC_ONE_RX.search('i think she is in OC (Ellanna)') and OC_ONE_RX.search('is Ellanna in an oc?')
+    calls = []
+
+    class Live:
+        async def live_status(self, what):
+            calls.append(what)
+            return ('OC RIGHT NOW (live from Torn):\n- In an OC: 1 of 2 members: Ellanna\n'
+                    '- Not in an OC: 1: sadrapp\n- Pet Project (level 2) · Planning: Ellanna')
+
+    class Facts(F):
+        now = 0
+        live_tools = Live()
+        found_any = False
+        def run(self, name, args):
+            return ''
+
+    async def no_ai(session, messages, f, used):
+        raise AssertionError('the AI should not be asked')
+    ans = asyncio.run(answer_question(None, 'Ellanna', Facts(), oc, providers=[('x', no_ai)]))
+    assert calls == ['oc'] and 'Pet Project' in ans.text and 'sadrapp' not in ans.text, ans.text
+    assert ans.asked == "who's not in an OC? (Ellanna)"
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -10615,4 +10674,5 @@ if __name__ == '__main__':
     test_members_see_only_their_own_records()
     test_incoming_attacks_log_and_answers()
     test_help_is_short_and_links_to_the_posted_guide()
+    test_followup_yes_and_bare_name_rewrite_the_question()
     print('All smoke tests passed.')

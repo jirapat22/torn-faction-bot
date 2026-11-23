@@ -1497,6 +1497,7 @@ class Answer:
         self.fallback = fallback        # True = AI answer rejected, raw facts shown
         self.draft = None               # kind 'draft': {'channel', 'ping', 'text'}
         self.unsure = []                # numbers in a draft the person never gave (flagged on the card)
+        self.asked = None               # the question as answered (follow-ups rewritten in full)
 
 
 def _facts_text(used):
@@ -1707,6 +1708,74 @@ def did_you_mean(names):
     if len(names) == 1:
         return f'Did you mean **{names[0]}**? Reply with the right name.'
     return 'Did you mean ' + ', '.join(f'**{n}**' for n in names[:-1]) + f' or **{names[-1]}**? Reply with the right name.'
+
+
+# A plain "yes" to the bot's own "Did you mean **X**?". Live 15/11/2026 Pat
+# had to retype the whole question ("hows TrevorLahry420 activities and war
+# hits?") after the bot offered the right name.
+YES_RX = re.compile(r"^\s*(?:y|ya|ye|yes|yeah|yea|yep|yup|yus|ok|okay|correct|right|exactly|that one|"
+                    r"that'?s (?:him|her|them|it|the one|right)|👍|✅)(?:[\s,]+(?:pls|please|mate|boss|bro|"
+                    r"that one|him|her|thanks|ty))*\s*[!.]*\s*$", re.I)
+# "and Ellanna?", "what about sadrapp", "same for babacool": the same question
+# again, about someone else. The filler words around the name.
+_SWAP_FILL = re.compile(r"^\s*(?:and|what about|how about|wbu|same (?:for|with)|also|now|ok|then|now do)\b[\s,]*|"
+                        r"[\s,]*\b(?:too|then|as well|also|pls|please)\s*$|[\s?!.]+$", re.I)
+
+
+def _offered_names(text, facts):
+    """The names in the bot's own "Did you mean **X**?" line, if that's what it said."""
+    if not re.search(r'\bdid you mean\b', text or '', re.I):
+        return []
+    known = {n.lower(): n for n in facts._known_names().values()}
+    return [known[n.lower()] for n in re.findall(r'\*\*([^*\n]+)\*\*', text) if n.lower() in known]
+
+
+def _swap_name(prev, new, facts):
+    """prev with its one named member (or the typo of one) replaced by new;
+    new tacked on the end when prev named nobody ("who's not in an OC?")."""
+    named = names_in(prev, facts)
+    if len(named) == 1:
+        return re.sub(rf'(?<![\w]){re.escape(named[0])}(?![\w])', new, prev, flags=re.I)
+    if not named:
+        # The typo the bot asked about ("TrevorLahry420"): the closest word.
+        best, score = None, 0.6
+        for word in re.findall(r"[A-Za-z0-9_\-]{3,}", prev):
+            r = difflib.SequenceMatcher(None, word.lower(), new.lower()).ratio()
+            if r > score and word.lower() not in _QUESTION_STOP:
+                best, score = word, r
+        if best:
+            return re.sub(rf'(?<![\w]){re.escape(best)}(?![\w])', new, prev)
+    return f'{prev.rstrip()} ({new})'
+
+
+def followup_rewrite(question, history, facts):
+    """
+    A short reply that only makes sense with the turn before, rewritten into
+    the full question, in Python, so every check after this (OC lookups,
+    notices, members-only rules) sees who it is about:
+      - "yes" / the name itself, after the bot's "Did you mean **X**?",
+      - "and X?" / "what about X" / just "X", after any question.
+    Returns the rewritten question, or None to leave it alone. Not inside an
+    announcement or action conversation: there a name is an answer to the
+    bot's own question ("who should I ping?"), not a new subject.
+    """
+    turns = list(history or [])
+    prev = next((t.get('content', '') for t in reversed(turns) if t.get('role') == 'user'), '')
+    last_bot = next((t.get('content', '') for t in reversed(turns) if t.get('role') == 'assistant'), '')
+    if not prev or not (question or '').strip():
+        return None
+    convo = ' '.join([question] + [t.get('content', '') for t in turns if t.get('role') == 'user'])
+    from features.ask_actions import ACTION_RX
+    if ANNOUNCE_RX.search(convo) or ACTION_RX.search(convo):
+        return None
+    offered = _offered_names(last_bot, facts)
+    if offered and YES_RX.match(question) and len(offered) == 1:
+        return _swap_name(prev, offered[0], facts)
+    bare = _SWAP_FILL.sub('', _SWAP_FILL.sub('', question)).strip()
+    named = names_in(question, facts)
+    if len(named) == 1 and bare.lower() == named[0].lower():
+        return _swap_name(prev, named[0], facts)
+    return None
 
 
 def raw_records_text(facts, question='', limit=1500):
@@ -2142,6 +2211,13 @@ OC_HISTORY_RX = re.compile(
     r"should|must|allowed)\b|\b(?:has|have)\s?n[o']?t\b", re.I)
 
 
+# "Is Ellanna in an OC?", "i think she is in OC (Ellanna)": one named member,
+# now. Live 10/11/2026 the AI answered that from the daily check's records
+# ("isn't listed as currently in one") while Pat said she was in one.
+OC_ONE_RX = re.compile(r"\bin\s+(?:an?\s+|any\s+|the\s+)?(?:ocs?|organi[sz]ed crimes?)\b", re.I)
+OC_PAST_RX = re.compile(r"\b(?:been|was|were|did|done)\b", re.I)
+
+
 def oc_now_answer(question, raw, named=()):
     """The live OC lines that answer the question, worded by the bot."""
     lines = (raw or '').split('\n')
@@ -2231,6 +2307,19 @@ HELP_WORDS = re.compile(r'^\s*(help|commands?|what can you do|what can i ask(?: 
 
 async def answer_question(session, question, facts, history=None, earlier_facts='', providers=None,
                           management=True):
+    """The full question (a "yes" or "and X?" follow-up rewritten, see
+    followup_rewrite), answered. ans.asked is the question as answered, so
+    the conversation memory keeps the name for the next follow-up."""
+    asked = followup_rewrite(question, history, facts) or question
+    if asked != question:
+        logger.info(f'ask_ai: follow-up {question[:40]!r} read as {asked[:80]!r}')
+    ans = await _answer_question(session, asked, facts, history, earlier_facts, providers, management)
+    ans.asked = asked
+    return ans
+
+
+async def _answer_question(session, question, facts, history=None, earlier_facts='', providers=None,
+                           management=True):
     """
     Ask the AI, then enforce the rules in Python. The returned text is always
     one of:
@@ -2317,7 +2406,8 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
             name = who.split(' [')[0] if who else ''
             close = near_names(question, facts) if not who else []
             if close:
-                return Answer(did_you_mean(close), 'none', '', True, 0, kind='ask')
+                # 'bot', not 'none': remembered, so a "yes" reply can follow on.
+                return Answer(did_you_mean(close), 'bot', '', True, 0, kind='ask')
         if len(named) <= 1:
             from features.ask_live import notices_answer
             raw = await facts.live_tools.members_extra('leave_notices', name)
@@ -2331,8 +2421,9 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
             and getattr(facts, 'live_tools', None) is not None:
         raw = await facts.live_tools.live_status('revives')
         return Answer(raw, 'bot', raw, True, 0)
-    if OC_NOW_RX.search(question) and not OC_HISTORY_RX.search(question) \
-            and getattr(facts, 'live_tools', None) is not None:
+    if (OC_NOW_RX.search(question) or (OC_ONE_RX.search(question) and names_in(question, facts)
+                                       and not OC_PAST_RX.search(question))) \
+            and not OC_HISTORY_RX.search(question) and getattr(facts, 'live_tools', None) is not None:
         raw = await facts.live_tools.live_status('oc')
         return Answer(oc_now_answer(question, raw, names_in(question, facts)), 'bot', raw, True, 0)
     # "Is he lazy?" about ONE member: the bot never judges (Pat's rule). The
@@ -2341,7 +2432,7 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
     # neutral "how active is X?" and the bot adds its own line on top.
     judged = judged_member(question, history, facts)
     if judged:
-        ans = await answer_question(session, f'how active is {judged}?', facts, history, earlier_facts,
+        ans = await _answer_question(session, f'how active is {judged}?', facts, history, earlier_facts,
                                     providers, management)
         # Not on "both my brains are offline" (provider 'none'): that is no
         # record to judge from.
@@ -3081,6 +3172,9 @@ class AskAI:
                 # before the AI and inside every tool (FactBook.run).
                 ans = await answer_question(await self.session(), question, facts, history, earlier,
                                             management=management)
+        # "yes" after "Did you mean X?" is remembered as the full question,
+        # so the next follow-up still knows who it was about.
+        question = ans.asked or question
         if not management and ans.provider != 'none':
             # Only an answered question starts the cooldown, not a refusal.
             self.last_answered[message.author.id] = time.time()
@@ -3127,9 +3221,12 @@ class AskAI:
             from features.ask_actions import ACTION_RX
             convo = ' '.join([question] + [t['content'] for t in history])
             about_task = ANNOUNCE_RX.search(convo) or ACTION_RX.search(convo)
+            # "Did you mean X?" also takes a plain reply ("yes", no @ping
+            # needed): typing @ApexPunk just to say yes was a chore.
             self._remember(sent, history, question, ans.text, earlier, ans.facts_text, message,
                            drafting=ans.kind in ('announce_ask', 'action_ask')
-                           or (ans.kind == 'ask' and bool(about_task)))
+                           or (ans.kind == 'ask' and bool(about_task))
+                           or bool(re.search(r'\bdid you mean\b', ans.text, re.I)))
 
     def _remember(self, sent, history, question, answer_text, earlier, facts_text, message, drafting=True):
         """Remember the conversation so a reply to this message can follow on
