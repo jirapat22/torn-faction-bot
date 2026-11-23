@@ -7,7 +7,7 @@ A Discord bot for a Torn.com faction (Ascended Punks), running on Pat's home Mac
 ## Commands
 
 ```bash
-<py> -m pytest -q tests/          # full suite (189 tests), the one to trust
+<py> -m pytest -q tests/          # full suite (193 tests), the one to trust
 <py> -m pytest -q tests/test_imports.py::test_flytrack_logic   # single test
 <py> tests/test_imports.py        # runs test_imports.py ONLY, see note below
 <py> bot.py                       # run locally (needs .env)
@@ -170,6 +170,12 @@ Announcement layout (Pat's picks): bold emoji headings + bullets, blank line bet
 **Incoming hits** (`features/incoming_attacks.py`, `data/incoming_attacks.json`, loop `incoming_attacks_check` every 10 min): every hit ON our members, kept 90 days, deduped by attack id, stealthed attackers kept as "Someone (stealthed)". One cursor walks forward in windows of at most a day (`to` set, so a short page PROVES the window is done; unbounded, one short page read as "caught up" 27 days early), 20 pages a tick, 3 s apart; the first run starts 45 days back (`BACKFILL_DAYS`; raising it later reads the older days first via `back_cursor`). Friendly hits (attacker in our faction) are left out. A failed page leaves the cursor alone. "Who hit us?", "did stepbro hit us?" (substring, any case, all kept days), "who hit <member>/me" are answered by the bot in Python (`incoming_answer`, no AI, members too, neutral wording), and while the backfill is still catching up a "no hits" says so instead. Also an AI tool, `incoming_attacks`.
 
 **Help** (Pat, 22/11/2026): the guide is a bot post in the channel named like `commands-the-punk` (`features/ask_help_post.py`, found by name, `MEMBER_COMMANDS_CHANNEL_ID` as backup). Posted once, id in `data/ask_help_post.json`, edited in place on later starts; it says "members: opens soon" while the switch is off, so flipping the switch updates it by itself. `@ApexPunk help` / "what can I ask" replies with one line linking to it; `HELP_TEXT` / `MEMBER_HELP_TEXT` (short) only when the post can't be linked. `member_commands.refresh` shares that channel and skips the guide by its saved id (it would otherwise edit or delete it as an "old board").
+
+**Conversation upgrades (overnight 23-24/11/2026), all decided in Python before any AI:**
+- `followup_rewrite`: "yes" / 👍 / the name after the bot's "Did you mean **X**?", and "and X?" / "what about X" / a bare name after any question, rerun the previous question about X (typo swapped by closeness, else "(X)" appended). Skipped inside announcement/action conversations (there a name answers the bot's question). `Answer.asked` carries the rewritten question so memory keeps the name. A "did you mean" reply needs no @ping (it sets `drafting`).
+- `small_talk_reply`: a message that is ONLY thanks/hi/bye/good bot gets a canned in-character line (`SMALL_TALK`), provider 'none' (no member cooldown, no tokens).
+- `member_card`: "hows X activities", "how active is X", "tell me about X" (`is_overview`, every word from `_OVERVIEW_WORDS`) get a short card built from `member_report` text (provider 'bot', report behind 📎). Report lines it can't parse fall back to the AI (`None` when under 3 lines understood). Changing a `member_report` line format means updating its regex in `member_card` (the test pins them).
+- A named member's OC question ("is Ellanna in an OC?", `OC_ONE_RX`, not past tense) is answered live like `OC_NOW_RX`.
 
 Every answer is also written to `data/logs/ask_ai.jsonl` (question, answer, provider, data used; 2 MB, one old copy) so odd answers can be traced. When the AI gives up, the bot itself tries "did you mean <close name>?" (`near_names`) and, for rules-ish questions (`RULES_CUE`), quotes the rulebook directly.
 
