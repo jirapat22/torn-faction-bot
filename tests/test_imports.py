@@ -9682,6 +9682,19 @@ def test_war_tracker_board_like_the_target_board():
     assert '510.6m' in out and 'lands <t:1900:R>' in d, 'countdown tracks the early edge'
     assert '\u26a0\ufe0f **3 ours there**' in out and 'Homebody' not in d
     assert len(out.splitlines()) == 2, 'no country heading lines'
+    # Status on each row (Pat, 23/11/2026): hosp countdown, online icons
+    # that don't clash with the red/green section dots, last seen
+    from features.flytrack import status_bits
+    assert status_bits(None, 100) == [], 'not read yet: show nothing, never guess'
+    assert status_bits({'state': 'Hospital', 'until': 700, 'last_status': 'Online'}, 100) == \
+        ['\U0001f3e5 out <t:700:R>', '\u2705']
+    assert status_bits({'state': 'Hospital', 'until': 50, 'last_status': 'Idle', 'last_ts': 40}, 100) == \
+        ['\U0001f4a4 seen <t:40:R>'], 'a hosp time already past is not shown'
+    assert status_bits({'state': 'Abroad', 'last_status': 'Offline', 'last_ts': 5}, 100) == ['\u2796 seen <t:5:R>']
+    row = build_flight_board({'1': players['1']}, lambda t, p: None, {}, None, '',
+                             {'1': {'state': 'Hospital', 'until': 900, 'last_status': 'Offline', 'last_ts': 3}},
+                             100)[0].description
+    assert '\U0001f3e5 out <t:900:R> \u00b7 \u2796 seen <t:3:R>' in row
     home = build_flight_board({'a': {'name': 'Far', 'phase': 'returning', 'dest': 'South Africa', 'eta': 100},
                                'b': {'name': 'Near', 'phase': 'returning', 'dest': 'Mexico', 'eta': 900}},
                               lambda t, p: None, {}, {})[2].description

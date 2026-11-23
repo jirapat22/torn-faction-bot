@@ -290,8 +290,33 @@ def parse_phase(status: Dict, torn_id: str = '', name: str = '') -> Tuple[str, O
     return PHASE_HOME, None
 
 
+def status_bits(live: Optional[Dict], now: float) -> list:
+    """Hospital and online state for one board row (Pat, 23/11/2026): "🏥 out
+    in 12m", then ✅ online / 💤 idle / ➖ offline, with "seen 3h ago" for
+    idle and offline. ✅/💤/➖ rather than Torn's coloured dots, because 🔴/🟢
+    already mean flying out / coming home on this board.
+
+    live is {'state', 'until', 'last_status', 'last_ts'} from the roster read
+    this tick, or None (not read yet): then nothing is shown, never a guess."""
+    if not live:
+        return []
+    bits = []
+    until = live.get('until') or 0
+    if live.get('state') == 'Hospital' and until > now:
+        bits.append(f'\U0001f3e5 out <t:{int(until)}:R>')
+    last = (live.get('last_status') or '').lower()
+    seen = live.get('last_ts')
+    if last == 'online':
+        bits.append('\u2705')
+    elif last in ('idle', 'offline'):
+        icon = '\U0001f4a4' if last == 'idle' else '\u2796'
+        bits.append(f'{icon} seen <t:{int(seen)}:R>' if seen else icon)
+    return bits
+
+
 def build_flight_board(players: Dict, early_for, ff: Dict, own: Optional[Dict],
-                       enemy_name: str = '') -> list:
+                       enemy_name: str = '', live: Optional[Dict] = None,
+                       now: Optional[float] = None) -> list:
     """The pinned #war-tracker board, like the target board, grouped
     Flying out / Abroad / Coming home, and inside each by COUNTRY, nearest
     first (Pat, 23/11/2026: "easier to see and skim"). Nearest first is also
@@ -330,6 +355,7 @@ def build_flight_board(players: Dict, early_for, ff: Dict, own: Optional[Dict],
         if phase != PHASE_ABROAD:
             early = early_for(tid, p) if eta else None
             parts.append(f'lands <t:{early or eta}:R>' if eta else 'landing time unknown')
+        parts += status_bits((live or {}).get(str(tid)), now or 0)
         # Our members only matter where the enemy is going or sitting;
         # someone coming home is leaving that country behind.
         if own is not None and phase != PHASE_RETURNING and dest:
@@ -420,6 +446,9 @@ class FlyTracker:
         self._board_text = None      # last description posted, to skip no-op edits
         self._own_cache = (0, None)  # (fetched_at, {country: [members]} or None)
         self._ff_cache = (0, {})     # (fetched_at, FFScouter dict for the enemies)
+        # Hosp/online per enemy from this tick's roster read, for the board.
+        # In memory only: it changes every minute and is re-read every tick.
+        self.live_status = {}
 
     async def load_data(self):
         data = load_json(self.data_file, default={})
@@ -787,6 +816,13 @@ class FlyTracker:
             return  # API hiccup · keep previous state, try next tick
 
         now_ts = datetime.now(timezone.utc).timestamp()
+        self.live_status = {}
+        for tid, m in members.items():
+            st, la = m.get('status') or {}, m.get('last_action') or {}
+            self.live_status[str(tid)] = {
+                'state': st.get('state'), 'until': st.get('until'),
+                'last_status': la.get('status'), 'last_ts': la.get('timestamp'),
+            }
         alerts = []
         departures = []  # outbound legs this tick, for the follow warnings below
         changed = False
@@ -1406,7 +1442,7 @@ class FlyTracker:
             ff = await self._ff_for_board(now_ts)
             embeds = build_flight_board(
                 self.players, lambda tid, p: self._eta_window(tid, p.get('dest'), p.get('eta')),
-                ff, own, self.enemy_faction_name)
+                ff, own, self.enemy_faction_name, self.live_status, now_ts)
         except Exception as e:
             logger.error(f'Fly: could not build the board: {e}')
             return False
