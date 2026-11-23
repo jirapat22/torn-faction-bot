@@ -281,9 +281,12 @@ def test_flytrack_fast_turnaround_detected():
 
     asyncio.run(mgr.check_flights())
 
-    assert len(posted) == 1, 'return alert must fire even though the roster state stayed "Traveling" both ticks'
-    assert 'Testy' in posted[0] and 'Mexico' in posted[0]
+    # The return leg must be caught even though the roster state stayed
+    # "Traveling" both ticks. Since 23/11/2026 it shows on the pinned board
+    # (a new leg, new leg_start), not as a post: only warnings are posted.
+    assert posted == []
     assert mgr.players['1']['phase'] == PHASE_RETURNING
+    assert mgr.players['1']['leg_start'] != 1_500_000, 'a new leg was started'
 
 
 def test_register_rejects_torn_discord_mismatch():
@@ -9597,18 +9600,26 @@ def test_war_tracker_posts_clean_themselves_up():
             clock['t'] += dt
             asyncio.run(mgr.check_flights())
 
+        # Since 23/11/2026 flights are only on the pinned board; nothing is
+        # posted per flight. Cards posted before that are still tracked and
+        # must still clean up, so they are tracked by hand here.
         tick()  # takes off
-        assert list(chan.live) == [1] and 'flying to' in chan.live[1] and '\n\u2514 lands' in chan.live[1]
+        assert not chan.live, 'no per-flight post, the board shows it'
+        mgr._track([Msg(1)], {'kind': 'flight', 'tids': ['1'], 'phase': 'out',
+                              'leg_start': mgr.players['1']['leg_start'], 'dest': 'Mexico'}, clock['t'])
+        chan.live[1] = 'old card'
         status['s'] = None
         tick()  # Torn read failed: nothing may be deleted
         assert chan.live and not chan.deleted
         status['s'] = {'state': 'Abroad', 'description': 'In Mexico'}
-        tick()  # landed abroad: the flying-out post goes
+        tick()  # landed abroad: the flying-out card goes
         assert chan.deleted == [1] and not chan.live and not mgr.live_posts
 
         status['s'] = {'state': 'Traveling', 'description': 'Traveling from Mexico to Torn'}
         tick()  # coming home
-        assert list(chan.live) == [2] and 'coming home from' in chan.live[2]
+        mgr._track([Msg(2)], {'kind': 'flight', 'tids': ['1'], 'phase': 'returning',
+                              'leg_start': mgr.players['1']['leg_start'], 'dest': 'Mexico'}, clock['t'])
+        chan.live[2] = 'old card'
         status['s'] = {'state': 'Okay', 'description': 'Okay'}
         tick()  # landed: the Attack link stays a while
         assert 2 in chan.live

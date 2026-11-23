@@ -876,11 +876,13 @@ class FlyTracker:
         if await self._cleanup_posts(now_ts):
             changed = True
 
-        # One message per flight (not one combined feed) so each can be
-        # deleted on its own once that enemy has landed.
-        for text, rec in alerts:
-            if self._track(await self._post(embed=self._card(text, rec['phase'])), rec, now_ts):
-                changed = True
+        # No per-flight posts any more: the pinned board already lists every
+        # flight, and a card under it said the same thing twice (Pat,
+        # 23/11/2026: "the bottom one only do that and tag people"). Only the
+        # follow warnings below are posted, because they ping someone. The
+        # alert texts are still built (and logged) so a flight is traceable.
+        for text, _rec in alerts:
+            logger.info('Fly: ' + text.replace('\n', ' '))
 
         # Follow warnings are posted one message per member rather than folded
         # into the feed above, because each one @-mentions a specific person and
