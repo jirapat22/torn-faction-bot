@@ -292,17 +292,22 @@ def parse_phase(status: Dict, torn_id: str = '', name: str = '') -> Tuple[str, O
 
 def build_flight_board(players: Dict, early_for, ff: Dict, own: Optional[Dict],
                        enemy_name: str = '') -> discord.Embed:
-    """The pinned #war-tracker board, like the target board: one short line
-    per enemy, grouped Flying out / Abroad / Coming home, soonest landing
-    first. The name is the attack link; stats are FFScouter's rough guide;
-    "3 of ours there" marks a country where our members are sitting, which is
-    who a departure there endangers.
+    """The pinned #war-tracker board, like the target board, grouped
+    Flying out / Abroad / Coming home, and inside each by COUNTRY, nearest
+    first (Pat, 23/11/2026: "easier to see and skim"). Nearest first is also
+    the order the danger arrives in: a Mexico flight lands long before a
+    South Africa one. Each country heading says once how many of OURS are
+    sitting there, so the rows stay short: attack link, stats, countdown.
 
     early_for(tid, player) gives the early edge of the landing window (the
     countdown always tracks it, see _landing_line). own is {country: [members]}
     or None when our roster couldn't be read: then the "of ours" bit is just
     left off rather than claiming nobody is there."""
-    groups = {PHASE_OUT: [], PHASE_ABROAD: [], PHASE_RETURNING: []}
+    def distance(dest):
+        # Unknown destinations go last, after the furthest real country.
+        return (STANDARD_FLIGHT_MINUTES.get(dest, 10_000), dest or '~')
+
+    groups = {PHASE_OUT: {}, PHASE_ABROAD: {}, PHASE_RETURNING: {}}
     for tid, p in players.items():
         phase = p.get('phase')
         if phase not in groups:
@@ -312,39 +317,49 @@ def build_flight_board(players: Dict, early_for, ff: Dict, own: Optional[Dict],
         stats = rec.get('bs_estimate_human') if rec.get('bs_estimate') else None
         parts = [f"[{p.get('name') or tid}](https://www.torn.com/page.php?sid=attack&user2ID={tid})",
                  stats or 'stats ?']
-        arrow = {PHASE_OUT: '\u2192 ', PHASE_RETURNING: '\u2190 '}.get(phase, '')
-        parts.append(arrow + place(dest, 'unknown').replace('**', ''))
         eta = p.get('eta')
         if phase != PHASE_ABROAD:
             early = early_for(tid, p) if eta else None
             parts.append(f'lands <t:{early or eta}:R>' if eta else 'landing time unknown')
-        if own is not None and phase != PHASE_RETURNING and dest:
-            n = len(own.get(dest, []))
-            if n:
-                parts.append(f"**{n} of ours there**")
-        sort_key = (eta or float('inf')) if phase != PHASE_ABROAD else (p.get('name') or '').lower()
-        groups[phase].append((sort_key, ' \u00b7 '.join(parts)))
+        sort_key = (eta or float('inf'), '') if phase != PHASE_ABROAD else (0, (p.get('name') or '').lower())
+        groups[phase].setdefault(dest, []).append((sort_key, ' \u00b7 '.join(parts)))
 
     labels = [(PHASE_OUT, '\U0001f534 Flying out'), (PHASE_ABROAD, '\U0001f334 Abroad'),
               (PHASE_RETURNING, '\U0001f7e2 Coming home')]
     blocks, budget, total, shown = [], BOARD_BUDGET, 0, 0
     for phase, label in labels:
-        rows = sorted(groups[phase], key=lambda r: r[0])
-        total += len(rows)
-        if not rows:
+        countries = groups[phase]
+        count = sum(len(rows) for rows in countries.values())
+        total += count
+        if not count:
             continue
-        lines = [f'**{label}** ({len(rows)})']
-        for _k, line in rows:
-            if budget - len(line) - 1 < 0:
+        lines = [f'**{label}** ({count})']
+        for dest in sorted(countries, key=distance):
+            head = place(dest, 'unknown')
+            # Our members only matter where the enemy is going or sitting;
+            # someone coming home is leaving that country behind.
+            if own is not None and phase != PHASE_RETURNING and dest:
+                n = len(own.get(dest, []))
+                if n:
+                    head += f' \u00b7 \u26a0\ufe0f {n} of ours there'
+            rows = sorted(countries[dest], key=lambda r: r[0])
+            if budget - len(head) - 1 < 0:
                 break
-            budget -= len(line) + 1
-            lines.append(line)
-            shown += 1
+            budget -= len(head) + 1
+            lines.append(head)
+            for _k, line in rows:
+                line = '\u2003' + line  # indent under the country
+                if budget - len(line) - 1 < 0:
+                    break
+                budget -= len(line) + 1
+                lines.append(line)
+                shown += 1
         blocks.append('\n'.join(lines))
     body = '\n\n'.join(blocks) if blocks else 'Nobody flying or abroad right now. \U0001f3e0'
     title = BOARD_TITLE + (f' \u00b7 {enemy_name}' if enemy_name else '')
     embed = create_embed(title=title[:256], description=body, color=EMBED_COLOR_WARNING)
-    footer = 'tap a name to attack \u00b7 landing times are estimates \u00b7 stats are FFScouter, a rough guide'
+    footer = ('countries nearest first \u00b7 tap a name to attack \u00b7 landing times are estimates '
+              '\u00b7 stats are FFScouter, a rough guide')
     if total > shown:
         footer = f'{total - shown} more not shown \u00b7 ' + footer
     embed.set_footer(text=footer)

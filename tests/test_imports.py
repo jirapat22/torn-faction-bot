@@ -9660,10 +9660,14 @@ def test_war_tracker_board_like_the_target_board():
     d = e.description
     assert 'Phantom Force' in e.title
     assert d.index('Flying out') < d.index('Abroad') < d.index('Coming home')
-    assert d.index('Jet') < d.index('Fab'), 'soonest landing first'
+    # Pat, 23/11/2026: grouped by country, nearest first (UK 159 min
+    # standard, Japan 225), the "of ours" count once on the country line
+    out = d[d.index('Flying out'):d.index('Abroad')]
+    assert out.index('United Kingdom') < out.index('Japan'), 'nearer country first'
+    assert out.index('United Kingdom') < out.index('Fab') < out.index('Japan') < out.index('Jet')
     assert '[Fab](https://www.torn.com/page.php?sid=attack&user2ID=1)' in d and '510.6m' in d
     assert 'lands <t:1900:R>' in d, 'countdown tracks the early edge'
-    assert '**3 of ours there**' in d and 'Homebody' not in d
+    assert '**United Kingdom** \u00b7 \u26a0\ufe0f 3 of ours there' in d and 'Homebody' not in d
     assert 'K4den' in d and 'stats ?' in d
     unknown = build_flight_board(players, lambda tid, p: None, ff, None).description
     assert 'of ours' not in unknown, 'roster unreadable: say nothing, not 0'
