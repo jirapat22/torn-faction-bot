@@ -290,28 +290,30 @@ def parse_phase(status: Dict, torn_id: str = '', name: str = '') -> Tuple[str, O
     return PHASE_HOME, None
 
 
-def status_bits(live: Optional[Dict], now: float) -> list:
-    """Hospital and online state for one board row (Pat, 23/11/2026): "🏥 out
-    in 12m", then ✅ online / 💤 idle / ➖ offline, with "seen 3h ago" for
-    idle and offline. ✅/💤/➖ rather than Torn's coloured dots, because 🔴/🟢
-    already mean flying out / coming home on this board.
+def status_bits(live: Optional[Dict], now: float) -> Tuple[str, list]:
+    """Status for one board row as (icon, details). The icon has a fixed
+    slot right after the flag so it lines up as a column (Pat, 23/11/2026:
+    "alignment hard to see"): 🏥 in hospital, else ✅ online / 💤 idle /
+    🌑 offline (➖ was too faint). Not Torn's coloured dots: 🔴/🟢 already
+    mean flying out / coming home on this board. Details: "out in 12m" for
+    hospital, "seen 3h ago" for idle/offline.
 
-    live is {'state', 'until', 'last_status', 'last_ts'} from the roster read
-    this tick, or None (not read yet): then nothing is shown, never a guess."""
+    live is {'state', 'until', 'last_status', 'last_ts'} from this tick's
+    roster read, or None (not read yet): then ❔ and no details, never a
+    guess."""
     if not live:
-        return []
-    bits = []
+        return '\u2754', []
+    details = []
     until = live.get('until') or 0
-    if live.get('state') == 'Hospital' and until > now:
-        bits.append(f'\U0001f3e5 out <t:{int(until)}:R>')
+    hosp = live.get('state') == 'Hospital' and until > now
+    if hosp:
+        details.append(f'out <t:{int(until)}:R>')
     last = (live.get('last_status') or '').lower()
+    icon = {'online': '\u2705', 'idle': '\U0001f4a4', 'offline': '\U0001f311'}.get(last, '\u2754')
     seen = live.get('last_ts')
-    if last == 'online':
-        bits.append('\u2705')
-    elif last in ('idle', 'offline'):
-        icon = '\U0001f4a4' if last == 'idle' else '\u2796'
-        bits.append(f'{icon} seen <t:{int(seen)}:R>' if seen else icon)
-    return bits
+    if last in ('idle', 'offline') and seen:
+        details.append(f'seen <t:{int(seen)}:R>')
+    return ('\U0001f3e5' if hosp else icon), details
 
 
 def build_flight_board(players: Dict, early_for, ff: Dict, own: Optional[Dict],
@@ -349,19 +351,24 @@ def build_flight_board(players: Dict, early_for, ff: Dict, own: Optional[Dict],
         rec = ff.get(str(tid)) or {}
         stats = rec.get('bs_estimate_human') if rec.get('bs_estimate') else None
         flag = COUNTRY_FLAGS.get(dest, '\U0001f3f3\ufe0f')
-        parts = [f"{flag} [{p.get('name') or tid}](https://www.torn.com/page.php?sid=attack&user2ID={tid})",
-                 stats or 'stats ?']
+        icon, details = status_bits((live or {}).get(str(tid)), now or 0)
+        # Fixed-width bits first (flag, status icon, stats in a code box),
+        # the name and the variable bits after, so the left edge reads as
+        # columns; Discord can't align text any other way and keep links.
+        head = f"{flag} {icon} `{stats or '?'}` [{p.get('name') or tid}]" \
+               f"(https://www.torn.com/page.php?sid=attack&user2ID={tid})"
+        parts = [head]
         eta = p.get('eta')
         if phase != PHASE_ABROAD:
             early = early_for(tid, p) if eta else None
             parts.append(f'lands <t:{early or eta}:R>' if eta else 'landing time unknown')
-        parts += status_bits((live or {}).get(str(tid)), now or 0)
+        parts += details
         # Our members only matter where the enemy is going or sitting;
         # someone coming home is leaving that country behind.
         if own is not None and phase != PHASE_RETURNING and dest:
             n = len(own.get(dest, []))
             if n:
-                parts.append(f'\u26a0\ufe0f **{n} ours there**')
+                parts.append(f'\u26a0\ufe0f**{n}**')
         name_key = (p.get('name') or '').lower()
         if phase == PHASE_RETURNING:
             key = (eta or float('inf'), name_key)
@@ -396,8 +403,10 @@ def build_flight_board(players: Dict, early_for, ff: Dict, own: Optional[Dict],
 
     heading = BOARD_TITLE + (f' \u00b7 {enemy_name}' if enemy_name else '')
     embeds[0].set_author(name=heading[:256])
-    footer = ('nearest country first, coming home by landing time \u00b7 tap a name to attack \u00b7 landing times are estimates '
-              '\u00b7 stats are FFScouter, a rough guide')
+    footer = ('\u2705 online \u00b7 \U0001f4a4 idle \u00b7 \U0001f311 offline \u00b7 \U0001f3e5 hospital \u00b7 '
+              '\u26a0\ufe0f2 = 2 of ours in that country\n'
+              'nearest country first, coming home by landing time \u00b7 tap a name to attack \u00b7 '
+              'landing times are estimates \u00b7 stats are FFScouter, a rough guide')
     if total > shown:
         footer = f'{total - shown} more not shown \u00b7 ' + footer
     embeds[-1].set_footer(text=footer)

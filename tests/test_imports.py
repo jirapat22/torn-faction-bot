@@ -9678,28 +9678,34 @@ def test_war_tracker_board_like_the_target_board():
     # first (UK 159 min standard, Japan 225); coming home by landing time
     out = em[0].description
     assert out.index('Fab') < out.index('Jet'), 'nearer country first'
-    assert out.splitlines()[0].startswith('\U0001f1ec\U0001f1e7 [Fab](https://www.torn.com/page.php?sid=attack&user2ID=1)')
-    assert '510.6m' in out and 'lands <t:1900:R>' in d, 'countdown tracks the early edge'
-    assert '\u26a0\ufe0f **3 ours there**' in out and 'Homebody' not in d
+    # Fixed-width bits first so the rows line up (Pat, 23/11/2026)
+    assert out.splitlines()[0].startswith(
+        '\U0001f1ec\U0001f1e7 \u2754 `510.6m` [Fab](https://www.torn.com/page.php?sid=attack&user2ID=1)')
+    assert 'lands <t:1900:R>' in d, 'countdown tracks the early edge'
+    assert '\u26a0\ufe0f**3**' in out and 'Homebody' not in d
     assert len(out.splitlines()) == 2, 'no country heading lines'
-    # Status on each row (Pat, 23/11/2026): hosp countdown, online icons
-    # that don't clash with the red/green section dots, last seen
+    assert '`?`' in d, 'unknown stats'
+
+    # Status (Pat, 23/11/2026): hosp countdown, online icons that don't clash
+    # with the red/green section dots, last seen; nothing known = no guess
     from features.flytrack import status_bits
-    assert status_bits(None, 100) == [], 'not read yet: show nothing, never guess'
+    assert status_bits(None, 100) == ('\u2754', [])
     assert status_bits({'state': 'Hospital', 'until': 700, 'last_status': 'Online'}, 100) == \
-        ['\U0001f3e5 out <t:700:R>', '\u2705']
+        ('\U0001f3e5', ['out <t:700:R>'])
     assert status_bits({'state': 'Hospital', 'until': 50, 'last_status': 'Idle', 'last_ts': 40}, 100) == \
-        ['\U0001f4a4 seen <t:40:R>'], 'a hosp time already past is not shown'
-    assert status_bits({'state': 'Abroad', 'last_status': 'Offline', 'last_ts': 5}, 100) == ['\u2796 seen <t:5:R>']
+        ('\U0001f4a4', ['seen <t:40:R>']), 'a hosp time already past is not shown'
+    assert status_bits({'state': 'Abroad', 'last_status': 'Offline', 'last_ts': 5}, 100) == \
+        ('\U0001f311', ['seen <t:5:R>'])
     row = build_flight_board({'1': players['1']}, lambda t, p: None, {}, None, '',
                              {'1': {'state': 'Hospital', 'until': 900, 'last_status': 'Offline', 'last_ts': 3}},
                              100)[0].description
-    assert '\U0001f3e5 out <t:900:R> \u00b7 \u2796 seen <t:3:R>' in row
+    assert row.startswith('\U0001f1ec\U0001f1e7 \U0001f3e5 `?` [Fab]')
+    assert 'out <t:900:R> \u00b7 seen <t:3:R>' in row
     home = build_flight_board({'a': {'name': 'Far', 'phase': 'returning', 'dest': 'South Africa', 'eta': 100},
                                'b': {'name': 'Near', 'phase': 'returning', 'dest': 'Mexico', 'eta': 900}},
                               lambda t, p: None, {}, {})[2].description
     assert home.index('Far') < home.index('Near'), 'coming home: who lands first, not distance'
-    assert 'K4den' in d and 'stats ?' in d
+    assert 'K4den' in d
     unknown = ' '.join(e.description for e in build_flight_board(players, lambda tid, p: None, ff, None))
     assert 'of ours' not in unknown, 'roster unreadable: say nothing, not 0'
     only_home = build_flight_board({'4': players['4']}, lambda t, p: None, {}, {})
