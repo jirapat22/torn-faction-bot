@@ -10584,6 +10584,50 @@ Active strikes all clear on 11/01/2027 if no new strike comes first (60 days aft
     assert ans.text.startswith("I don't trash-talk the crew") and 'Last OC' in ans.text
 
 
+def test_two_questions_in_one_message_both_get_answered():
+    """
+    "who's in an OC and what's the war score?" hit the bot's live OC
+    shortcut, which answered the OC half and dropped the war score. A
+    message with a shortcut part is now split and every part answered.
+    """
+    import asyncio
+    from features.ask_ai import question_parts, answer_question
+
+    assert question_parts("who's in an oc and whats the war score?") == ["who's in an oc", 'whats the war score']
+    assert question_parts('any notices? who hit us today?') == ['any notices', 'who hit us today']
+    for one in ['how many hits did Ellanna and sadrapp make?', 'what happens if i miss an oc and get a strike',
+                'hows sadrapp activites']:
+        assert question_parts(one) == [one], one
+
+    class Live:
+        async def live_status(self, what):
+            return 'OC RIGHT NOW (live from Torn):\n- In an OC: 1 of 2 members: Ellanna\n- Not in an OC: 1: sadrapp'
+
+    class Facts:
+        now = 0
+        live_tools = Live()
+        found_any = False
+        notices = []
+        def _known_names(self):
+            return {'1': 'Ellanna', '2': 'sadrapp'}
+        def member_report(self, name):
+            return (f'MEMBER: {name} [1]\nLast seen in an OC: 21/11/2026 (2 days ago).\n'
+                    'Strikes active now: 0. Strikes ever recorded: 0.\nOC: x')
+        def run(self, name, args):
+            return ''
+    asked = []
+
+    async def ai(session, messages, f, used):
+        asked.append(messages[-1]['content'])
+        return 'Chat: war score is unknown.', messages
+    ans = asyncio.run(answer_question(None, "who's in an oc and whats the war score?", Facts(), [],
+                                      providers=[('x', ai)]))
+    assert 'In an OC: 1 of 2' in ans.text and asked == ['whats the war score'], (asked, ans.text)
+    # "hows sadrapp? and Ellanna?": two cards, the second about Ellanna.
+    ans = asyncio.run(answer_question(None, 'hows sadrapp? and Ellanna?', Facts(), [], providers=[('x', ai)]))
+    assert ans.text.count('📋') == 2 and 'Ellanna' in ans.text.split('\n\n')[1], ans.text
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -10773,4 +10817,5 @@ if __name__ == '__main__':
     test_followup_yes_and_bare_name_rewrite_the_question()
     test_greetings_and_thanks_are_answered_by_the_bot()
     test_member_overview_is_a_short_card_built_by_the_bot()
+    test_two_questions_in_one_message_both_get_answered()
     print('All smoke tests passed.')

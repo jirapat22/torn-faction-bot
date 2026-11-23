@@ -2441,6 +2441,33 @@ HELP_WORDS = re.compile(r'^\s*(help|commands?|what can you do|what can i ask(?: 
                         r'how do i use you|\?)\s*[?!.]*\s*$', re.I)
 
 
+# Two questions in one message: "who's in an OC and what's the war score?".
+# The bot's own shortcuts (live OC list, revives, notices, hits on us, the
+# member card) each answer ONE thing, so the other half used to vanish.
+_PART_SPLIT = re.compile(r"\?+\s*(?=\S)|\s*;\s*|\s+(?:and|&|also|plus)\s+(?=(?:also\s+)?(?:what|whats|what'?s|"
+                         r"wats|who|whos|who'?s|how|hows|how'?s|when|where|is|are|r|any|anyone|any1|did|do|does|can|"
+                         r"tell|show|give|list)\b)", re.I)
+
+
+def question_parts(question):
+    """The separate questions in one message (at most 3), or [question]."""
+    parts = [p.strip(' ,.?') for p in _PART_SPLIT.split(question or '')]
+    parts = [p for p in parts if len(re.findall(r'\w+', p)) >= 2]
+    return parts if 2 <= len(parts) <= 3 else [question]
+
+
+def _has_shortcut(part, facts, history=None):
+    """True when the bot answers this part itself, without the AI."""
+    from features.incoming_attacks import is_incoming_question
+    names = names_in(part, facts)
+    lower = {n.lower() for n in facts._known_names().values()}
+    return bool((OC_NOW_RX.search(part) and not OC_HISTORY_RX.search(part))
+                or (REVIVE_RX.search(part) and not RULES_CUE.search(part))
+                or (NOTICE_RX.search(part) and not NOTICE_RULE_RX.search(part))
+                or is_incoming_question(part, lower)
+                or (len(names) == 1 and is_overview(part, names[0])))
+
+
 async def answer_question(session, question, facts, history=None, earlier_facts='', providers=None,
                           management=True):
     """The full question (a "yes" or "and X?" follow-up rewritten, see
@@ -2449,6 +2476,23 @@ async def answer_question(session, question, facts, history=None, earlier_facts=
     asked = followup_rewrite(question, history, facts) or question
     if asked != question:
         logger.info(f'ask_ai: follow-up {question[:40]!r} read as {asked[:80]!r}')
+    parts = question_parts(asked)
+    # "hows sadrapp? and Ellanna?": a later part reads against the one before.
+    parts = [p if i == 0 else followup_rewrite(p, [{'role': 'user', 'content': parts[i - 1]}], facts) or p
+             for i, p in enumerate(parts)]
+    from features.ask_actions import ACTION_RX
+    if len(parts) > 1 and not ANNOUNCE_RX.search(asked) and not ACTION_RX.search(asked) \
+            and any(_has_shortcut(p, facts, history) for p in parts):
+        # Each part answered on its own, then joined in one reply.
+        answers = [await _answer_question(session, p, facts, history, earlier_facts, providers, management)
+                   for p in parts]
+        real = [a for a in answers if a.provider != 'none'] or answers
+        ans = Answer('\n\n'.join(a.text for a in answers), real[0].provider,
+                     '\n\n'.join(a.facts_text for a in answers if a.facts_text), all(a.checked for a in answers),
+                     sum(a.seconds for a in answers), fallback=any(a.fallback for a in answers),
+                     kind='answer' if any(a.kind == 'answer' for a in answers) else answers[0].kind)
+        ans.asked = asked
+        return ans
     ans = await _answer_question(session, asked, facts, history, earlier_facts, providers, management)
     ans.asked = asked
     return ans
