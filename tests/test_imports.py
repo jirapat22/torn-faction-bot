@@ -10658,7 +10658,8 @@ def test_status_now_and_faction_size_are_answered_from_the_roster():
               'how many in hosp']:
         assert status_q(q), q
     for q in ['who hosped us?', 'who gave the most friendly hosps last war?', 'who can be revived?',
-              'what is the hospital rule?', 'how long is hosp in Torn?']:
+              'what is the hospital rule?', 'how long is hosp in Torn?', 'any enemies flying?',
+              'who of them is in hosp', 'are any targets abroad?']:
         assert not status_q(q), q
     hosp = status_now_answer('any1 hosp atm?', roster, now)
     assert hosp.startswith('🏥 In hospital right now (2 of 4)') and 'Blazingdragon6 (out in 17m)' in hosp

@@ -2491,7 +2491,9 @@ STATUS_NOW_RX = re.compile(
     re.I)
 STATUS_PAST_RX = re.compile(r"\b(?:given|friendly|last|ago|yesterday|week|most|least|revives?|rules?|hit|"
                             r"hits|attack\w*|hosped|by|been|while|since|days?|not|never|offline|every|"
-                            r"often|usually)\b|n'?t\b", re.I)
+                            r"often|usually|"
+                            # "any enemies flying?" is the enemy (flytrack), not our roster
+                            r"enem\w*|opponents?|targets?|they|them|their|other faction)\b|n'?t\b", re.I)
 # "how many ppl r in the faction?" got "the bot does not keep a record of
 # the total number of members" (live 24/11/2026): the roster IS that count.
 FACTION_SIZE_RX = re.compile(r"\bhow many (?:members|ppl|people|players|peeps|punks|of us)\b(?![^?\n]*\b(?:"
