@@ -10761,6 +10761,9 @@ def test_live_war_is_a_short_card_built_by_the_bot():
         raise AssertionError('the AI should not be asked')
     ans = asyncio.run(answer_question(None, 'r we winning?', Facts(), [], providers=[('x', no_ai)]))
     assert 'Lead 1506' in ans.text and ans.provider == 'bot'
+    # The AI's flavour line: several examples, so answers don't all open the same way.
+    from features.ask_ai import PERSONALITY
+    assert 'vary it' in PERSONALITY and PERSONALITY.count('", "') >= 2 and '\u2014' not in PERSONALITY
 
 
 def test_who_has_strikes_is_a_short_card_for_management():

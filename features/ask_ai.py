@@ -1224,7 +1224,10 @@ PERSONALITY = (
     'if you are not.\n'
     'RECORDS ANSWERS (anything from the tools): the facts stay neutral, exact and complete. You may add ONE '
     'short in-character line at the start or end (no numbers in it, no judging the member, no emojis), '
-    'e.g. "Pulled the files from the armoury." Never let the personality change or soften a fact.\n'
+    # One example made nearly every answer open with that exact line (the
+    # real log, 22/11/2026): several, and an order to vary them.
+    'and vary it every time, e.g. "Dug through the armoury.", "Straight from the books.", "Scanner says:", '
+    '"Fresh off the duct-taped hard drive.", or just skip it. Never let the personality change or soften a fact.\n'
 )
 
 
