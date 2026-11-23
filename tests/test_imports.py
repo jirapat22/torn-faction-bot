@@ -10578,6 +10578,12 @@ Active strikes all clear on 11/01/2027 if no new strike comes first (60 days aft
         raise AssertionError('the AI should not be asked')
     ans = asyncio.run(answer_question(None, 'hows sadrapp activites', Facts(), [], providers=[('x', no_ai)]))
     assert ans.provider == 'bot' and ans.text == card and ans.facts_text == report
+    # A typo'd name: the bot asks itself, no AI call, and "yes" gets the card.
+    ans = asyncio.run(answer_question(None, 'hows sadrap activites', Facts(), [], providers=[('x', no_ai)]))
+    assert ans.kind == 'ask' and 'Did you mean **Sadrapp**' in ans.text, ans.text
+    hist = [{'role': 'user', 'content': 'hows sadrap activites'}, {'role': 'assistant', 'content': ans.text}]
+    ans = asyncio.run(answer_question(None, 'yes', Facts(), hist, providers=[('x', no_ai)]))
+    assert ans.text == card
     # "is he lazy?" still gets the no-judging line, on top of the card.
     hist = [{'role': 'user', 'content': 'hows sadrapp activites'}]
     ans = asyncio.run(answer_question(None, 'is he lazy?', Facts(), hist, providers=[('x', no_ai)]))

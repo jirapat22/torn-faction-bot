@@ -2696,6 +2696,15 @@ async def _answer_question(session, question, facts, history=None, earlier_facts
     if len(one) != 1 and not one:
         who_ = pronoun_target(question, history, facts)
         one = [who_.split(' [')[0]] if who_ else []
+    if not one and hasattr(facts, 'member_report'):
+        # "hows TrevorLahry420 activities": a typo in an overview question.
+        # The bot asks "did you mean" itself (a "yes" then reruns it, see
+        # followup_rewrite) instead of spending an AI call to get there.
+        close = near_names(question, facts)
+        typo = next((w for w in re.findall(r"[A-Za-z0-9_\-]{4,}", question)
+                     if close and difflib.get_close_matches(w.lower(), [c.lower() for c in close], 1, 0.75)), None)
+        if close and typo and is_overview(question, typo):
+            return Answer(did_you_mean(close), 'bot', '', True, 0, kind='ask')
     if len(one) == 1 and is_overview(question, one[0]) and hasattr(facts, 'member_report'):
         report = facts.member_report(one[0])
         card = member_card(report)
