@@ -9518,7 +9518,12 @@ def test_flight_alerts_compact_with_flags():
 
     mgr = FlyTracker.__new__(FlyTracker)
     out = mgr._format_outbound_alert('Japan', 'brantlers', 1000, 900)
-    assert out.startswith('\U0001f534 **brantlers** \u2192 \U0001f1ef\U0001f1f5 **Japan**')
+    # Pat, 23/11/2026: two lines, one countdown, the window as clock times
+    assert out == ('\U0001f534 **brantlers** flying to \U0001f1ef\U0001f1f5 **Japan**\n'
+                   '\u2514 lands <t:900:R> \u00b7 between <t:900:t> and <t:1000:t>')
+    back = mgr._format_return_alert('7', 'brantlers', 'Japan', None)
+    assert back.startswith('\U0001f7e2 **brantlers** coming home from \U0001f1ef\U0001f1f5 **Japan**\n'
+                           '\u2514 landing time unknown') and 'user2ID=7' in back
 
     mgr._mention_for = lambda tid: '<@1>'
     dep = {'tid': '9', 'name': 'HazyShark', 'dest': 'South Africa', 'eta': 2000, 'early': 1900}
@@ -9526,6 +9531,109 @@ def test_flight_alerts_compact_with_flags():
     assert msg.count('\n') == 0, 'one enemy fits on one line'
     assert '<t:1900:R>' in msg and '<t:1900:t>' not in msg, 'countdown only, the window is in the flight line'
     assert 'stronger than you' in msg and '~449.0k' in msg and 'where you are' in msg
+
+
+def test_war_tracker_posts_clean_themselves_up():
+    """
+    Pat, 23/11/2026: #war-tracker posted ~100 messages a day in a war (one per
+    departure, one per return, plus warnings). Each post is now deleted once
+    it stops being true: flying out on landing abroad, coming home 10 min
+    after landing (the Attack link is wanted then), a warning once the enemy
+    has left that country again. A failed roster read deletes nothing.
+    """
+    import asyncio
+    from features import flytrack
+    from features.flytrack import FlyTracker, FollowWarning, RETURN_POST_GRACE_SECONDS
+
+    class Msg:
+        def __init__(self, mid): self.id = mid
+
+    class Channel:
+        def __init__(self): self.n, self.live, self.deleted = 0, {}, []
+        async def send(self, content=None, **kw):
+            self.n += 1
+            self.live[self.n] = content
+            return Msg(self.n)
+        def get_partial_message(self, mid):
+            chan = self
+            class P:
+                async def delete(self_inner):
+                    chan.deleted.append(mid)
+                    chan.live.pop(mid, None)
+            return P()
+
+    chan = Channel()
+
+    class Bot:
+        def get_channel(self, cid): return chan
+
+    mgr = FlyTracker(bot=Bot())
+    mgr.enabled, mgr.enemy_faction_id = True, '1'
+    async def nosave(): pass
+    mgr.save_data = nosave
+    async def no_warnings(deps, now): return []
+    mgr._follow_alerts = no_warnings
+    mgr.players['1'] = {'name': 'Fab', 'phase': 'home', 'dest': None, 'eta': None,
+                        'leg_start': None, 'leg_observed': False}
+
+    status = {'s': {'state': 'Traveling', 'description': 'Traveling from Torn to Mexico'}}
+    async def members():
+        return None if status['s'] is None else {'1': {'name': 'Fab', 'status': status['s']}}
+    mgr._fetch_enemy_members = members
+
+    clock = {'t': 1_000_000.0}
+    class FakeDT:
+        @staticmethod
+        def now(tz=None):
+            from datetime import datetime, timezone
+            return datetime.fromtimestamp(clock['t'], timezone.utc)
+    real_dt = flytrack.datetime
+    flytrack.datetime = FakeDT
+    try:
+        def tick(dt=60):
+            clock['t'] += dt
+            asyncio.run(mgr.check_flights())
+
+        tick()  # takes off
+        assert list(chan.live) == [1] and 'flying to' in chan.live[1] and '\n\u2514 lands' in chan.live[1]
+        status['s'] = None
+        tick()  # Torn read failed: nothing may be deleted
+        assert chan.live and not chan.deleted
+        status['s'] = {'state': 'Abroad', 'description': 'In Mexico'}
+        tick()  # landed abroad: the flying-out post goes
+        assert chan.deleted == [1] and not chan.live and not mgr.live_posts
+
+        status['s'] = {'state': 'Traveling', 'description': 'Traveling from Mexico to Torn'}
+        tick()  # coming home
+        assert list(chan.live) == [2] and 'coming home from' in chan.live[2]
+        status['s'] = {'state': 'Okay', 'description': 'Okay'}
+        tick()  # landed: the Attack link stays a while
+        assert 2 in chan.live
+        tick(RETURN_POST_GRACE_SECONDS)
+        assert 2 not in chan.live and not mgr.live_posts
+
+        # A warning stays while the enemy flies to / sits in that country,
+        # and goes once he has left it.
+        mgr.players['1'] = {'name': 'Fab', 'phase': 'out', 'dest': 'Mexico', 'eta': None,
+                            'leg_start': 1, 'leg_observed': False}
+        w = FollowWarning('\u26a0\ufe0f <@5> Fab heading to Mexico', ['1'], 'Mexico')
+        assert w == '\u26a0\ufe0f <@5> Fab heading to Mexico', 'still posts like plain text'
+        mgr._track([Msg(99)], {'kind': 'warn', 'tids': w.tids, 'dest': w.dest}, clock['t'])
+        mgr.players['1']['phase'] = 'abroad'
+        asyncio.run(mgr._cleanup_posts(clock['t']))
+        assert mgr.live_posts, 'sitting in Mexico: the warning is still true'
+        mgr.players['1']['phase'] = 'returning'
+        asyncio.run(mgr._cleanup_posts(clock['t']))
+        assert 99 in chan.deleted and not mgr.live_posts
+
+        # War over: everything left is cleared.
+        mgr._track([Msg(100)], {'kind': 'flight', 'tids': ['1'], 'phase': 'returning',
+                                'leg_start': 5, 'dest': 'Mexico'}, clock['t'])
+        mgr.players['1'].update(phase='returning', leg_start=5)
+        asyncio.run(mgr.disable('War ended'))
+        assert 100 in chan.deleted and not mgr.live_posts
+    finally:
+        flytrack.datetime = real_dt
 
 
 def test_revive_check_by_chat_is_info_only():
@@ -10403,6 +10511,7 @@ if __name__ == '__main__':
     test_torn_event_start_post_and_announcement_pings()
     test_link_steps_spelled_out_and_management_commands_hidden()
     test_flight_alerts_compact_with_flags()
+    test_war_tracker_posts_clean_themselves_up()
     test_revive_check_by_chat_is_info_only()
     test_torn_lookup_items_wiki_pages_and_link()
     test_saved_wiki_pages_answer_the_right_section()

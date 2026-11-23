@@ -131,6 +131,17 @@ ASSUMED_SPREAD = 0.10          # loose · we are guessing their travel perks
 # 2. A stat threshold. An enemy with a fraction of the member's battle stats
 #    can't realistically hurt them, so they aren't worth a notification.
 FOLLOW_ALERT_COOLDOWN_SECONDS = 15 * 60
+
+# Self-cleaning #war-tracker (Pat, 23/11/2026: "too many messages", ~100 posts
+# a day during a war, one per departure and one per return). Every flight post
+# and warning is deleted once it stops being true, so the channel only ever
+# shows what is happening right now.
+# A coming-home post carries the [Attack] link, which matters most just AFTER
+# they land, so it lingers a few minutes; a flying-out post goes on landing.
+RETURN_POST_GRACE_SECONDS = 10 * 60
+# A post that can't be deleted (no permission, Discord down) is retried every
+# tick, but forgotten after a day so the list can't grow forever.
+LIVE_POST_GIVE_UP_SECONDS = 24 * 3600
 FOLLOW_THREAT_RATIO = 0.5      # below this x the member's stats, never worth a ping
 FOLLOW_COOLDOWN_RETENTION = 4  # prune cooldown rows older than N x the cooldown
 
@@ -269,6 +280,17 @@ def parse_phase(status: Dict, torn_id: str = '', name: str = '') -> Tuple[str, O
     return PHASE_HOME, None
 
 
+class FollowWarning(str):
+    """A follow-warning message (it IS the text, so it compares and posts like
+    a plain string) that also remembers which enemies it is about and where,
+    so the post can be deleted once they have all landed and left again."""
+    def __new__(cls, text, tids=(), dest=None):
+        obj = super().__new__(cls, text)
+        obj.tids = [str(t) for t in tids]
+        obj.dest = dest
+        return obj
+
+
 class FlyTracker:
     """Tracks enemy faction flights during ranked war with landing estimates."""
 
@@ -291,6 +313,11 @@ class FlyTracker:
         # would just see it switch itself back on a minute later.
         self.auto_started_war_id = None
         self._war_end_strikes = 0
+        # Posts still in #war-tracker that must be deleted once they stop
+        # being true: [{'id', 'kind': 'flight'|'warn', 'tids', 'phase',
+        # 'leg_start', 'dest', 'posted', 'done_at'}]. Persisted: after a
+        # restart they would otherwise sit in the channel forever.
+        self.live_posts = []
 
     async def load_data(self):
         data = load_json(self.data_file, default={})
@@ -310,6 +337,7 @@ class FlyTracker:
                         f'({len(self.tiers)} kept)')
         self.follow_cooldowns = data.get('follow_cooldowns', {})
         self.auto_started_war_id = data.get('auto_started_war_id')
+        self.live_posts = data.get('live_posts', [])
         if self.enabled:
             logger.info(f'Fly tracking resumed for faction {self.enemy_faction_id} ({self.enemy_faction_name})')
 
@@ -323,6 +351,7 @@ class FlyTracker:
             'tiers': self.tiers,
             'follow_cooldowns': self.follow_cooldowns,
             'auto_started_war_id': self.auto_started_war_id,
+            'live_posts': self.live_posts,
         })
 
     # ===== Toggle =====
@@ -486,6 +515,8 @@ class FlyTracker:
         self.players = {}
         self.war_id = None
         self._war_end_strikes = 0
+        # Nobody is being tracked any more, so no post can still be true.
+        await self._delete_posts(list(self.live_posts))
         await self.save_data()
         logger.info(f'Fly tracking DISABLED ({reason})')
         return create_embed(
@@ -691,9 +722,11 @@ class FlyTracker:
                 resolved = self._estimate_leg(tid, text_phase, text_dest, now_ts, prev)
 
                 early = self._eta_window(tid, resolved['dest'], resolved['eta'])
+                post_rec = {'kind': 'flight', 'tids': [tid], 'phase': resolved['phase'],
+                            'leg_start': now_ts, 'dest': resolved['dest']}
                 if resolved['phase'] == PHASE_OUT:
-                    alerts.append(self._format_outbound_alert(
-                        resolved['dest'], name, resolved['eta'], early))
+                    alerts.append((self._format_outbound_alert(
+                        resolved['dest'], name, resolved['eta'], early), post_rec))
                     if resolved['dest']:
                         # Only outbound legs with a known destination can be
                         # matched against where our own members are sitting.
@@ -702,8 +735,8 @@ class FlyTracker:
                             'eta': resolved['eta'], 'early': early,
                         })
                 else:
-                    alerts.append(self._format_return_alert(
-                        tid, name, resolved['dest'], resolved['eta'], early))
+                    alerts.append((self._format_return_alert(
+                        tid, name, resolved['dest'], resolved['eta'], early), post_rec))
 
                 self.players[tid] = {
                     'name': name, 'phase': resolved['phase'], 'dest': resolved['dest'],
@@ -733,15 +766,26 @@ class FlyTracker:
             del self.players[tid]
             changed = True
 
-        if alerts:
-            await self._post(content='\n'.join(alerts))
+        # Clean up first, against the roster we just read (a failed read
+        # returned above, so an API hiccup never deletes a post that is still
+        # true - the None-vs-empty rule).
+        if await self._cleanup_posts(now_ts):
+            changed = True
+
+        # One message per flight (not one combined feed) so each can be
+        # deleted on its own once that enemy has landed.
+        for text, rec in alerts:
+            if self._track(await self._post(content=text), rec, now_ts):
+                changed = True
 
         # Follow warnings are posted one message per member rather than folded
         # into the feed above, because each one @-mentions a specific person and
         # must not get chunked together with unrelated flights.
         if departures:
             for line in await self._follow_alerts(departures, now_ts):
-                await self._post(content=line)
+                rec = {'kind': 'warn', 'tids': list(getattr(line, 'tids', [])),
+                       'dest': getattr(line, 'dest', None)}
+                self._track(await self._post(content=line), rec, now_ts)
                 changed = True  # cooldowns were stamped - persist them
 
         if changed:
@@ -969,7 +1013,8 @@ class FlyTracker:
                             f"{items[0][0]['dest']} - all {len(items)} enemy(s) too weak")
                 continue
             items.sort(key=lambda it: it[0]['eta'] or float('inf'))
-            messages.append(self._format_follow_alert(mem, items))
+            messages.append(FollowWarning(self._format_follow_alert(mem, items),
+                                          [dep['tid'] for dep, _, _ in items], items[0][0]['dest']))
             self.follow_cooldowns[key] = now_ts
             logger.info(f"Fly: follow warning for {mem['name']} [{mem['tid']}] in "
                         f"{items[0][0]['dest']} - {len(items)} enemy(s) inbound")
@@ -1122,23 +1167,37 @@ class FlyTracker:
             return f'<t:{early}:t>–<t:{eta}:t> (earliest <t:{early}:R>, latest <t:{eta}:R>)'
         return f'<t:{eta}:t> (<t:{eta}:R>)'
 
+    @staticmethod
+    def _landing_line(eta: Optional[int], early: Optional[int]) -> str:
+        """Second line of a flight post (Pat's pick, 23/11/2026: two lines,
+        one countdown, the window as clock times): "└ lands in 12 minutes ·
+        between 13:05 and 13:09". The countdown tracks the EARLY edge, the
+        moment to be ready by.
+
+        The old post also carried a "latest" countdown, because a post that
+        stayed in the channel read as "landed" once the early edge passed
+        (HazyShark, 22/11/2026). Posts now delete themselves on landing, so a
+        post still showing means still in the air, and the window covers the
+        rest."""
+        if not eta:
+            return '\u2514 landing time unknown'
+        if early:
+            return f'\u2514 lands <t:{early}:R> \u00b7 between <t:{early}:t> and <t:{eta}:t>'
+        return f'\u2514 lands <t:{eta}:R> \u00b7 at <t:{eta}:t>'
+
     def _format_outbound_alert(self, dest: Optional[str], name: str, eta: Optional[int],
                                early: Optional[int] = None) -> str:
         # 🔴/🟢 instead of plane emoji - ✈️/🛬 look nearly identical at a
         # glance, which was the actual reason out/in was hard to tell apart.
         dest_label = place(dest, 'an unknown destination')
-        if eta:
-            return f'🔴 **{name}** → {dest_label} · lands {self._eta_text(eta, early)}'
-        return f'🔴 **{name}** → {dest_label} · flight time unknown'
+        return f'🔴 **{name}** flying to {dest_label}\n{self._landing_line(eta, early)}'
 
     def _format_return_alert(self, torn_id: str, name: str, dest: Optional[str],
                              eta: Optional[int], early: Optional[int] = None) -> str:
         dest_label = place(dest, 'abroad')
         attack = f'https://www.torn.com/page.php?sid=attack&user2ID={torn_id}'
-        if eta:
-            return (f'🟢 **{name}** ← {dest_label} · lands {self._eta_text(eta, early)} '
-                    f'· [Attack]({attack})')
-        return f'🟢 **{name}** ← {dest_label} · landing time unknown · [Attack]({attack})'
+        return (f'🟢 **{name}** coming home from {dest_label}\n'
+                f'{self._landing_line(eta, early)} \u00b7 [Attack]({attack})')
 
     def _format_group_line(self, name: str, phase: str, dest: Optional[str], eta: Optional[int],
                            early: Optional[int] = None) -> str:
@@ -1164,6 +1223,7 @@ class FlyTracker:
         if not channel:
             logger.warning(f'Fly: channel {WAR_TRACKER_CHANNEL_ID} not found')
             return
+        sent = []
         try:
             if content:
                 # Discord message limit is 2000 chars - chunk on line boundaries
@@ -1171,15 +1231,88 @@ class FlyTracker:
                 buf = ''
                 for line in lines:
                     if len(buf) + len(line) + 1 > 1900:
-                        await channel.send(buf, suppress_embeds=True)
+                        sent.append(await channel.send(buf, suppress_embeds=True))
                         buf = ''
                     buf = f'{buf}\n{line}' if buf else line
                 if buf:
-                    await channel.send(buf, suppress_embeds=True)
+                    sent.append(await channel.send(buf, suppress_embeds=True))
             if embed:
-                await channel.send(embed=embed)
+                sent.append(await channel.send(embed=embed))
         except Exception as e:
             logger.error(f'Fly: failed to post to war-tracker channel: {e}')
+        return sent
+
+    # ===== Self-cleaning posts =====
+
+    def _track(self, sent, rec: Dict, now_ts: float) -> bool:
+        """Remember the message(s) just posted so they can be deleted once
+        they stop being true. False when nothing was posted."""
+        ids = [m.id for m in (sent or []) if getattr(m, 'id', None)]
+        for mid in ids:
+            self.live_posts.append(dict(rec, id=mid, posted=now_ts, done_at=None))
+        return bool(ids)
+
+    def _post_is_over(self, rec: Dict) -> bool:
+        """Is what this post says no longer happening?
+
+        Flight post: that enemy is no longer on THAT leg (same phase and the
+        same leg_start, so a quick turnaround onto a new leg still counts as
+        over). Warning: every enemy in it has left that country again, i.e.
+        none is still flying there or sitting there. An enemy gone from the
+        roster (left the faction) counts as over too."""
+        if rec.get('kind') == 'warn':
+            for tid in rec.get('tids') or []:
+                p = self.players.get(str(tid))
+                if p and p.get('dest') == rec.get('dest') and p.get('phase') in (PHASE_OUT, PHASE_ABROAD):
+                    return False
+            return True
+        p = self.players.get(str((rec.get('tids') or [''])[0]))
+        return not (p and p.get('phase') == rec.get('phase') and p.get('leg_start') == rec.get('leg_start'))
+
+    async def _cleanup_posts(self, now_ts: float) -> bool:
+        """Delete every post that has stopped being true. Coming-home posts
+        wait RETURN_POST_GRACE_SECONDS after landing (their Attack link is
+        wanted right then). Returns True when the list changed."""
+        due, changed = [], False
+        for rec in self.live_posts:
+            if not self._post_is_over(rec):
+                continue
+            if rec.get('done_at') is None:
+                rec['done_at'] = now_ts
+                changed = True
+            wait = RETURN_POST_GRACE_SECONDS if rec.get('phase') == PHASE_RETURNING else 0
+            if now_ts - rec['done_at'] >= wait:
+                due.append(rec)
+        # Belt and braces: anything a day old goes, even if it somehow still
+        # looks true (lost leg data, a stuck status), so nothing piles up.
+        due += [r for r in self.live_posts if r not in due
+                and now_ts - (r.get('posted') or now_ts) >= LIVE_POST_GIVE_UP_SECONDS]
+        if due:
+            await self._delete_posts(due, now_ts)
+            changed = True
+        return changed
+
+    async def _delete_posts(self, recs: list, now_ts: Optional[float] = None):
+        """Delete these posts from #war-tracker. One already gone counts as
+        done; any other failure keeps it for the next tick (until it is a day
+        old), so a Discord hiccup doesn't leave it up for good."""
+        if not recs:
+            return
+        now_ts = now_ts or datetime.now(timezone.utc).timestamp()
+        channel = self.bot.get_channel(WAR_TRACKER_CHANNEL_ID) if WAR_TRACKER_CHANNEL_ID else None
+        for rec in recs:
+            done = False
+            try:
+                if channel is not None:
+                    await channel.get_partial_message(rec['id']).delete()
+                done = True
+            except discord.NotFound:
+                done = True  # someone already deleted it
+            except Exception as e:
+                logger.warning(f"Fly: could not delete post {rec.get('id')}: {e}")
+                done = now_ts - (rec.get('posted') or now_ts) >= LIVE_POST_GIVE_UP_SECONDS
+            if done and rec in self.live_posts:
+                self.live_posts.remove(rec)
 
 
 def prune_ratios(tiers, now=None, days=RATIO_RETENTION_DAYS):
