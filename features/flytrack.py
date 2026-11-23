@@ -304,7 +304,7 @@ def build_flight_board(players: Dict, early_for, ff: Dict, own: Optional[Dict],
     or None when our roster couldn't be read: then the "of ours" bit is just
     left off rather than claiming nobody is there.
 
-    Returns a LIST of embeds, one per non-empty section, posted together as
+    Returns a LIST of three embeds, one per section, posted together as
     one message: each has its own colour bar (red out, blue abroad, green
     home), because a single embed read as a wall of text (Pat, 23/11/2026)."""
     def distance(dest):
@@ -337,6 +337,11 @@ def build_flight_board(players: Dict, early_for, ff: Dict, own: Optional[Dict],
         count = sum(len(rows) for rows in countries.values())
         total += count
         if not count:
+            # Always shown, even empty: a hidden section read as "where is
+            # flying out??" (Pat, 23/11/2026), and a fixed layout is easier
+            # to skim than one that jumps around.
+            embeds.append(discord.Embed(title=f'{label} (0)', description='-# Nobody right now',
+                                        color=color))
             continue
         # Each section gets its own budget; a message holds 6000 chars across
         # all its embeds, so three of these always fit.
@@ -363,9 +368,6 @@ def build_flight_board(players: Dict, early_for, ff: Dict, own: Optional[Dict],
         embeds.append(discord.Embed(title=f'{label} ({count})', description='\n'.join(lines), color=color))
 
     heading = BOARD_TITLE + (f' \u00b7 {enemy_name}' if enemy_name else '')
-    if not embeds:
-        embeds.append(discord.Embed(description='Nobody flying or abroad right now. \U0001f3e0',
-                                    color=EMBED_COLOR_INFO))
     embeds[0].set_author(name=heading[:256])
     footer = ('countries nearest first \u00b7 tap a name to attack \u00b7 landing times are estimates '
               '\u00b7 stats are FFScouter, a rough guide')

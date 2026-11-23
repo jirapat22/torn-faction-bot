@@ -9675,8 +9675,11 @@ def test_war_tracker_board_like_the_target_board():
     unknown = ' '.join(e.description for e in build_flight_board(players, lambda tid, p: None, ff, None))
     assert 'of ours' not in unknown, 'roster unreadable: say nothing, not 0'
     only_home = build_flight_board({'4': players['4']}, lambda t, p: None, {}, {})
-    assert len(only_home) == 1 and 'Coming home' in only_home[0].title, 'empty sections are left out'
-    assert 'Nobody flying' in build_flight_board({}, lambda t, p: None, {}, {})[0].description
+    # Always all three, empty ones say so ("where is flying??", Pat 23/11/2026)
+    assert [e.title for e in only_home] == ['\U0001f534 Flying out (0)', '\U0001f334 Abroad (0)',
+                                            '\U0001f7e2 Coming home (1)']
+    assert only_home[0].description == '-# Nobody right now'
+    assert len(build_flight_board({}, lambda t, p: None, {}, {})) == 3
 
     # Flight posts are coloured cards: red out, green home.
     card = FlyTracker._card('x', 'out')
