@@ -290,30 +290,27 @@ def parse_phase(status: Dict, torn_id: str = '', name: str = '') -> Tuple[str, O
     return PHASE_HOME, None
 
 
-def status_bits(live: Optional[Dict], now: float) -> Tuple[str, list]:
-    """Status for one board row as (icon, details). The icon has a fixed
-    slot right after the flag so it lines up as a column (Pat, 23/11/2026:
-    "alignment hard to see"): 🏥 in hospital, else ✅ online / 💤 idle /
-    🌑 offline (➖ was too faint). Not Torn's coloured dots: 🔴/🟢 already
-    mean flying out / coming home on this board. Details: "out in 12m" for
-    hospital, "seen 3h ago" for idle/offline.
+def status_bits(live: Optional[Dict], now: float, flying: bool = False) -> Tuple[str, list]:
+    """Can-I-hit-them status for one board row as (icon, details), in a fixed
+    slot right after the flag so it lines up as a column. Pat, 23/11/2026:
+    "dont have idle and offline, just hosp, jail and status that they can
+    hit or not". So: 🏥 hospital / ⛓️ jail with "out in 12m", ✈️ in the air
+    (nobody can be hit mid-flight), else ✅ can hit (abroad: if you are in
+    that country too, which the row's flag shows).
 
-    live is {'state', 'until', 'last_status', 'last_ts'} from this tick's
-    roster read, or None (not read yet): then ❔ and no details, never a
-    guess."""
+    live is {'state', 'until'} from this tick's roster read, or None (not
+    read yet): then ❔, never a guess."""
+    if flying:
+        return '\u2708\ufe0f', []
     if not live:
         return '\u2754', []
-    details = []
     until = live.get('until') or 0
-    hosp = live.get('state') == 'Hospital' and until > now
-    if hosp:
-        details.append(f'out <t:{int(until)}:R>')
-    last = (live.get('last_status') or '').lower()
-    icon = {'online': '\u2705', 'idle': '\U0001f4a4', 'offline': '\U0001f311'}.get(last, '\u2754')
-    seen = live.get('last_ts')
-    if last in ('idle', 'offline') and seen:
-        details.append(f'seen <t:{int(seen)}:R>')
-    return ('\U0001f3e5' if hosp else icon), details
+    state = live.get('state') or ''
+    if state == 'Hospital' and until > now:
+        return '\U0001f3e5', [f'out <t:{int(until)}:R>']
+    if state in ('Jail', 'Federal') and until > now:
+        return '\u26d3\ufe0f', [f'out <t:{int(until)}:R>'] if state == 'Jail' else ['federal jail']
+    return '\u2705', []
 
 
 def build_flight_board(players: Dict, early_for, ff: Dict, own: Optional[Dict],
@@ -351,7 +348,7 @@ def build_flight_board(players: Dict, early_for, ff: Dict, own: Optional[Dict],
         rec = ff.get(str(tid)) or {}
         stats = rec.get('bs_estimate_human') if rec.get('bs_estimate') else None
         flag = COUNTRY_FLAGS.get(dest, '\U0001f3f3\ufe0f')
-        icon, details = status_bits((live or {}).get(str(tid)), now or 0)
+        icon, details = status_bits((live or {}).get(str(tid)), now or 0, flying=phase != PHASE_ABROAD)
         # Fixed-width bits first (flag, status icon, stats in a code box),
         # the name and the variable bits after, so the left edge reads as
         # columns; Discord can't align text any other way and keep links.
@@ -411,7 +408,7 @@ def build_flight_board(players: Dict, early_for, ff: Dict, own: Optional[Dict],
 
     heading = BOARD_TITLE + (f' \u00b7 {enemy_name}' if enemy_name else '')
     embeds[0].set_author(name=heading[:256])
-    footer = ('\u2705 online \u00b7 \U0001f4a4 idle \u00b7 \U0001f311 offline \u00b7 \U0001f3e5 hospital \u00b7 '
+    footer = ('\u2705 can hit \u00b7 \U0001f3e5 hospital \u00b7 \u26d3\ufe0f jail \u00b7 \u2708\ufe0f in the air \u00b7 '
               '\u26a0\ufe0f2 = 2 of ours in that country\n'
               'nearest country first, coming home by landing time \u00b7 tap a name to attack \u00b7 '
               'landing times are estimates \u00b7 stats are FFScouter, a rough guide')

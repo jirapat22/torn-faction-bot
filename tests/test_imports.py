@@ -9680,27 +9680,25 @@ def test_war_tracker_board_like_the_target_board():
     assert out.index('Fab') < out.index('Jet'), 'nearer country first'
     # Fixed-width bits first so the rows line up (Pat, 23/11/2026)
     assert out.splitlines()[0].startswith(
-        '\U0001f1ec\U0001f1e7 \u2754 `510.6m` [Fab](https://www.torn.com/page.php?sid=attack&user2ID=1)')
+        '\U0001f1ec\U0001f1e7 \u2708\ufe0f `510.6m` [Fab](https://www.torn.com/page.php?sid=attack&user2ID=1)')
     assert 'lands <t:1900:R> (<t:1900:t>-<t:2000:t>)' in d, 'countdown tracks the early edge, window as clock times'
     assert '\u26a0\ufe0f**3**' in out and 'Homebody' not in d
     assert len(out.splitlines()) == 2, 'no country heading lines'
     assert '`?`' in d, 'unknown stats'
 
-    # Status (Pat, 23/11/2026): hosp countdown, online icons that don't clash
-    # with the red/green section dots, last seen; nothing known = no guess
+    # Status (Pat, 23/11/2026): only "can I hit them": hosp / jail with
+    # time out, in the air, else can hit; nothing read = no guess
     from features.flytrack import status_bits
     assert status_bits(None, 100) == ('\u2754', [])
-    assert status_bits({'state': 'Hospital', 'until': 700, 'last_status': 'Online'}, 100) == \
-        ('\U0001f3e5', ['out <t:700:R>'])
-    assert status_bits({'state': 'Hospital', 'until': 50, 'last_status': 'Idle', 'last_ts': 40}, 100) == \
-        ('\U0001f4a4', ['seen <t:40:R>']), 'a hosp time already past is not shown'
-    assert status_bits({'state': 'Abroad', 'last_status': 'Offline', 'last_ts': 5}, 100) == \
-        ('\U0001f311', ['seen <t:5:R>'])
-    row = build_flight_board({'1': players['1']}, lambda t, p: None, {}, None, '',
-                             {'1': {'state': 'Hospital', 'until': 900, 'last_status': 'Offline', 'last_ts': 3}},
-                             100)[0].description
-    assert row.startswith('\U0001f1ec\U0001f1e7 \U0001f3e5 `?` [Fab]')
-    assert 'out <t:900:R> \u00b7 seen <t:3:R>' in row
+    assert status_bits({'state': 'Hospital', 'until': 700}, 100) == ('\U0001f3e5', ['out <t:700:R>'])
+    assert status_bits({'state': 'Jail', 'until': 700}, 100) == ('\u26d3\ufe0f', ['out <t:700:R>'])
+    assert status_bits({'state': 'Hospital', 'until': 50}, 100) == ('\u2705', []), 'hosp time past = can hit'
+    assert status_bits({'state': 'Abroad', 'until': 0}, 100) == ('\u2705', [])
+    assert status_bits({'state': 'Hospital', 'until': 700}, 100, flying=True) == ('\u2708\ufe0f', [])
+    row = build_flight_board({'3': players['3']}, lambda t, p: None, {}, None, '',
+                             {'3': {'state': 'Hospital', 'until': 900}}, 100)[1].description
+    assert row.startswith('\U0001f1e6\U0001f1ea \U0001f3e5 `?` [K4den]') and 'out <t:900:R>' in row
+    assert 'seen' not in row and '\U0001f311' not in row
     home = build_flight_board({'a': {'name': 'Far', 'phase': 'returning', 'dest': 'South Africa', 'eta': 100},
                                'b': {'name': 'Near', 'phase': 'returning', 'dest': 'Mexico', 'eta': 900}},
                               lambda t, p: None, {}, {})[2].description
