@@ -8800,7 +8800,7 @@ def test_live_lookups_reuse_the_commands_and_drop_forbidden_lines():
     e = discord.Embed(title='War', description=f'Score 10-4, ends <t:{now + 90}:R>')
     e.add_field(name='Xan', value='20 xanax')
     e.add_field(name='Top', value='Bob 4')
-    assert embed_text(e, now) == 'War\nScore 10-4, ends in 1m\nTop:\nBob 4'
+    assert embed_text(e, now) == 'War\nScore 10-4, ends in 1m\nTop: Bob 4'   # short fields on one line
 
     class FakeWar:
         async def get_current_war(self):
@@ -10628,6 +10628,64 @@ def test_two_questions_in_one_message_both_get_answered():
     assert ans.text.count('📋') == 2 and 'Ellanna' in ans.text.split('\n\n')[1], ans.text
 
 
+def test_status_now_and_faction_size_are_answered_from_the_roster():
+    """
+    Live 24/11/2026, mid-war: "any1 hosp atm?" got the revive list after 75
+    seconds, and "how many ppl r in the faction" got "the bot does not keep
+    a record of the total number of members". Both come from the roster the
+    bot already fetched, so the bot answers them itself.
+    """
+    import asyncio
+    from features.ask_ai import (STATUS_NOW_RX, STATUS_PAST_RX, FACTION_SIZE_RX, status_now_answer,
+                                 answer_question)
+    now = 1000000
+    roster = {'1': {'name': 'Blazingdragon6', 'status': {'state': 'Hospital', 'until': now + 17 * 60,
+                                                          'description': 'In a British hospital for 17 mins'}},
+              '2': {'name': 'yoang', 'status': {'state': 'Hospital', 'until': now + 2 * 3600 + 5 * 60}},
+              '3': {'name': 'Ellanna', 'status': {'state': 'Traveling', 'description': 'Traveling to Japan'}},
+              '4': {'name': 'Ikaros22', 'status': {'state': 'Okay'}}}
+    status_q = lambda q: bool(STATUS_NOW_RX.search(q)) and not STATUS_PAST_RX.search(q)
+    for q in ['any1 hosp atm?', "who's in hospital", 'who is in jail rn', 'whos abroad', 'anyone flying?',
+              'how many in hosp']:
+        assert status_q(q), q
+    for q in ['who hosped us?', 'who gave the most friendly hosps last war?', 'who can be revived?',
+              'what is the hospital rule?', 'how long is hosp in Torn?']:
+        assert not status_q(q), q
+    hosp = status_now_answer('any1 hosp atm?', roster, now)
+    assert hosp.startswith('🏥 In hospital right now (2 of 4)') and 'Blazingdragon6 (out in 17m)' in hosp
+    assert hosp.index('Blazingdragon6') < hosp.index('yoang (out in 2h 5m)'), hosp   # soonest out first
+    assert 'Ellanna (Traveling to Japan)' in status_now_answer('anyone flying?', roster, now)
+    assert 'nobody right now' in status_now_answer('who is in jail', roster, now)
+    assert "Torn isn't answering" in status_now_answer('who is in hosp', None, now)    # never "nobody"
+
+    for q in ['how many ppl r in the faction', 'how many members do we have?', 'how big is our faction']:
+        assert FACTION_SIZE_RX.search(q), q
+    for q in ['how many members are online?', 'how many members are in an OC?', 'how many people hit us?']:
+        assert not FACTION_SIZE_RX.search(q), q
+
+    class Facts:
+        def __init__(self, r):
+            self.roster, self.now, self.live_tools = r, now, None
+        def _known_names(self):
+            return {k: v['name'] for k, v in roster.items()}
+
+    async def no_ai(session, messages, f, used):
+        raise AssertionError('the AI should not be asked')
+    ans = asyncio.run(answer_question(None, 'how many ppl r in the faction', Facts(roster), [],
+                                      providers=[('x', no_ai)]))
+    assert '**4** members' in ans.text and ans.provider == 'bot'
+    ans = asyncio.run(answer_question(None, 'how many ppl r in the faction', Facts(None), [],
+                                      providers=[('x', no_ai)]))
+    assert "can't count" in ans.text
+    ans = asyncio.run(answer_question(None, 'any1 hosp atm?', Facts(roster), [], providers=[('x', no_ai)]))
+    assert 'Blazingdragon6 (out in 17m)' in ans.text
+    # Slang about our war right now is a records question, not a wiki one.
+    from features.ask_ai import _records_cue
+    for q in ['whats up with the war', "what's going on with the chain", 'r we at war?', 'wats the chain at rn']:
+        assert _records_cue(q), q
+    assert not _records_cue('how long can a ranked war last?')
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -10818,4 +10876,5 @@ if __name__ == '__main__':
     test_greetings_and_thanks_are_answered_by_the_bot()
     test_member_overview_is_a_short_card_built_by_the_bot()
     test_two_questions_in_one_message_both_get_answered()
+    test_status_now_and_faction_size_are_answered_from_the_roster()
     print('All smoke tests passed.')

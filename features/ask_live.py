@@ -111,7 +111,11 @@ def embed_text(embed, now=None, names=None):
         return '\n\n'.join(embed_text(e, now, names) for e in embed)
     parts = [embed.title or '', embed.description or '']
     for f in embed.fields:
-        parts.append(f'{f.name}:\n{f.value}')
+        # Short single-line fields on one line: "Breaks: in 3m". As two lines
+        # each ("Breaks:" / "in 3m"), the live chain read as a jumble on a
+        # phone (live 24/11/2026).
+        value = str(f.value or '')
+        parts.append(f'{f.name}: {value}' if '\n' not in value and len(value) <= 60 else f'{f.name}:\n{value}')
     footer = getattr(embed.footer, 'text', None)
     if footer:
         parts.append(footer)

@@ -1932,7 +1932,9 @@ RECORDS_RX = re.compile(r"\b(?:our|ours|we|us|they|them|their|latest|current(?:l
                         r"tonight|yesterday|this week|did|was|were|who|score|status|report|left|going|"
                         r"next|upcoming|coming|happening|soon|events?|leaderboard|most|least|top|"
                         # "what's on the target BOARD?" got the ranked war target-score page (22/11/2026)
-                        r"board|watchlist|poll)\b|\bat\s*\??\s*$|"
+                        r"board|watchlist|poll|"
+                        # "whats up with the war" got a wiki essay on ranked war (live 24/11/2026)
+                        r"up with|going on|goin on|sitrep|rn|atm|r we|are we)\b|\bat\s*\??\s*$|"
                         r"\blast (?:wars?|chains?|ocs?|week|night|time|one|month|days?|few|\d+)\b", re.I)
 # Torn topics with no saved page yet: the link beats an AI guess
 # ("travel becomes available once you reach the required level", wrong).
@@ -2441,6 +2443,58 @@ HELP_WORDS = re.compile(r'^\s*(help|commands?|what can you do|what can i ask(?: 
                         r'how do i use you|\?)\s*[?!.]*\s*$', re.I)
 
 
+# "any1 hosp atm?", "who's in jail?", "who's abroad rn": our members' Torn
+# status right now, read from the roster the bot already fetched for this
+# question. Live 24/11/2026, mid-war, the AI answered "any1 hosp atm?" with
+# the revive list, after 75 seconds.
+STATUS_NOW_RX = re.compile(
+    r"\b(?:who(?:'s| is| are|s)?|any ?(?:one|1|body)|anybody|how many|which|list)\b[^?\n]{0,30}?"
+    r"\b(hosp(?:ital)?(?:i[sz]ed)?|in hosp\w*|jail\w*|abroad|overseas|travell?ing|flying|in the air)\b", re.I)
+STATUS_PAST_RX = re.compile(r"\b(?:given|friendly|last|ago|yesterday|week|most|least|revives?|rules?|hit|"
+                            r"hits|attack\w*|hosped|by)\b", re.I)
+# "how many ppl r in the faction?" got "the bot does not keep a record of
+# the total number of members" (live 24/11/2026): the roster IS that count.
+FACTION_SIZE_RX = re.compile(r"\bhow many (?:members|ppl|people|players|peeps|punks|of us)\b(?![^?\n]*\b(?:"
+                             r"online|offline|hosp\w*|jail\w*|abroad|oc|ocs|crime|war|hits?|chain|strike\w*|"
+                             r"discord|linked|left|joined|notice\w*)\b)|\bhow big is (?:the|our) faction\b|"
+                             r"\bfaction size\b", re.I)
+
+
+def _mins(sec):
+    sec = max(0, int(sec))
+    return f'{sec // 60}m' if sec < 3600 else f'{sec // 3600}h {sec % 3600 // 60}m'
+
+
+def status_now_answer(question, roster, now):
+    """Who is in hospital / jail / abroad / flying right now, from the roster."""
+    if roster is None:
+        return "Torn isn't answering right now, so I can't see anyone's status 🤷 Try again in a minute."
+    m = STATUS_NOW_RX.search(question or '')
+    word = (m.group(1) if m else '').lower()
+    if word.startswith(('hosp', 'in hosp')):
+        states, label = ('Hospital',), '🏥 In hospital'
+    elif word.startswith('jail'):
+        states, label = ('Jail',), '⛓️ In jail'
+    elif word in ('abroad', 'overseas'):
+        states, label = ('Abroad',), '🌴 Abroad'
+    else:
+        states, label = ('Traveling',), '✈️ Flying'
+    rows = []
+    for v in roster.values():
+        st = v.get('status') or {}
+        if st.get('state') not in states:
+            continue
+        until = st.get('until') or 0
+        desc = re.sub(r'\s+', ' ', st.get('description') or '').strip()
+        extra = f'out in {_mins(until - now)}' if until and until > now and states[0] in ('Hospital', 'Jail') \
+            else desc
+        rows.append((until or 0, f"- {v.get('name', '?')}" + (f' ({extra})' if extra else '')))
+    if not rows:
+        return f'{label}: nobody right now ✅'
+    rows.sort()
+    return f'{label} right now ({len(rows)} of {len(roster)}):\n' + '\n'.join(r for _, r in rows)
+
+
 # Two questions in one message: "who's in an OC and what's the war score?".
 # The bot's own shortcuts (live OC list, revives, notices, hits on us, the
 # member card) each answer ONE thing, so the other half used to vanish.
@@ -2465,7 +2519,9 @@ def _has_shortcut(part, facts, history=None):
                 or (REVIVE_RX.search(part) and not RULES_CUE.search(part))
                 or (NOTICE_RX.search(part) and not NOTICE_RULE_RX.search(part))
                 or is_incoming_question(part, lower)
-                or (len(names) == 1 and is_overview(part, names[0])))
+                or (len(names) == 1 and is_overview(part, names[0]))
+                or (STATUS_NOW_RX.search(part) and not STATUS_PAST_RX.search(part))
+                or FACTION_SIZE_RX.search(part))
 
 
 async def answer_question(session, question, facts, history=None, earlier_facts='', providers=None,
@@ -2605,6 +2661,15 @@ async def _answer_question(session, question, facts, history=None, earlier_facts
             and getattr(facts, 'live_tools', None) is not None:
         raw = await facts.live_tools.live_status('revives')
         return Answer(raw, 'bot', raw, True, 0)
+    roster = getattr(facts, 'roster', None)
+    if STATUS_NOW_RX.search(question) and not STATUS_PAST_RX.search(question) and not names_in(question, facts) \
+            and hasattr(facts, 'roster'):
+        text = status_now_answer(question, roster, facts.now)
+        return Answer('Checked Torn just now 👀\n\n' + text if roster is not None else text, 'bot', text, True, 0)
+    if FACTION_SIZE_RX.search(question) and hasattr(facts, 'roster'):
+        text = (f"We've got **{len(roster)}** members in the faction right now 🤘" if roster is not None else
+                "Torn isn't answering right now, so I can't count heads 🤷 Try again in a minute.")
+        return Answer(text, 'bot', text, True, 0)
     if (OC_NOW_RX.search(question) or (OC_ONE_RX.search(question) and names_in(question, facts)
                                        and not OC_PAST_RX.search(question))) \
             and not OC_HISTORY_RX.search(question) and getattr(facts, 'live_tools', None) is not None:
