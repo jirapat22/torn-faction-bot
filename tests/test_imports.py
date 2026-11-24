@@ -10981,7 +10981,7 @@ def test_about_the_bot_and_fun_are_bot_made_and_never_aim_at_others():
 
     assert re.search(r'\*\*(Heads|Tails)\*\*', fun_reply('flip a coin', 'u', mem, rng))
     assert '🎱' in fun_reply('8ball will I get lucky?', 'u', mem, rng)
-    assert fun_reply('8ball', 'u', mem, rng) is None
+    assert 'yes or no' in fun_reply('8ball', 'u', mem, rng)       # a nudge, not the AI
     n = int(re.search(r'\*\*(\d+)\*\*', fun_reply('pick a number between 5 and 7', 'u', mem, rng)).group(1))
     assert 5 <= n <= 7
     assert '/10' in fun_reply('rate my outfit', 'u', mem, rng)
@@ -11010,6 +11010,14 @@ def test_about_the_bot_and_fun_are_bot_made_and_never_aim_at_others():
     # "roast Ellanna" never gets a roast (existing judging path, AI stub).
     async def stub(session, messages, f, used):
         return 'Nope.', list(messages)
+    # "...and tell me a joke" is a part the bot answers itself, so the
+    # message is split and the joke never reaches the AI (audit 25/11/2026:
+    # joke + a member name read as judging).
+    from features.ask_ai import _has_shortcut
+    assert _has_shortcut('and tell me a joke', Facts())
+    two = asyncio.run(answer_question(None, 'who made you? and tell me a joke', Facts(), [],
+                                      providers=[('x', no_ai)]))
+    assert 'Ikaros22' in two.text and any(j in two.text for j in JOKES)
     from features.ask_chat import ROAST_REFUSALS
     for mgmt in (True, False):
         for q in ['roast Ellanna', 'say something mean about Ellanna']:

@@ -246,7 +246,7 @@ FACTION_RX = re.compile(
     r"\bwhen was (?:the |our |this )?faction (?:made|founded|created|started)\b|"
     r"\b(?:what(?:'s| is)|whats) (?:our|the) (?:faction )?(?:rank|respect|tag|best chain|capacity)\b|"
     r"\bfaction (?:rank|respect|tag|capacity)\b|\bhow much respect (?:do we|does (?:the|our) faction)\b|"
-    r"\bwhat rank (?:are we|is (?:the|our) faction)\b|\bare we recruiting\b|\bis (?:the |our )?faction full\b|"
+    r"\bwhat rank (?:are we|is (?:the|our) faction)\b|\bare we (?:recruiting|full|hiring)\b|\bis (?:the |our )?faction full\b|"
     r"\bhow many (?:spots|places|spaces) (?:are )?(?:left|open|free)\b|\bour best chain\b|"
     r"\bwhat'?s (?:our|the faction'?s?) (?:ranked )?war record\b|\bhow many (?:ranked )?wars? have we won\b",
     re.I)

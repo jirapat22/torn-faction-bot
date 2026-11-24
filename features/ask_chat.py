@@ -632,6 +632,7 @@ def chat_kind(question):
 
 def casual_reply(question, uid=None, mem=None, rng=None):
     """The bot's own line for a casual message, or None if it isn't one."""
+    question = strip_join(question)
     kind = chat_kind(question)
     if not kind:
         return None
@@ -741,7 +742,7 @@ for _spec in ABOUT.values():
 
 def about_reply(question, uid=None, mem=None, rng=None, help_url=None):
     """Who/what the bot is, who made it, what it can do. None if not that."""
-    q = (question or '').strip()
+    q = strip_join(question).strip()
     if len(q) > 90:
         return None
     rng = rng or random
@@ -1004,7 +1005,7 @@ def fun_reply(question, uid=None, mem=None, rng=None, others=()):
     Y". `others` = members named in the message who aren't the asker: a
     joke or roast never goes near them (Pat's hard line). None if not fun.
     """
-    q = (question or '').strip()
+    q = strip_join(question).strip()
     if not q or len(q) > 160:
         return None
     rng = rng or random
@@ -1047,6 +1048,8 @@ def fun_reply(question, uid=None, mem=None, rng=None, others=()):
         intro = pick_part(BALL_INTROS, 'ball:o', uid, mem, rng)
         ans = pick_part(EIGHT_BALL, 'ball', uid, mem, rng)
         return _remembered(uid, mem, {'ball:o': intro, 'ball': ans}, f'{intro} **{ans}**')
+    if m:
+        return "🎱 Ask me a yes or no question, like `8ball will I land a bonus hit?`"
     if ROLL_RX.match(q):
         m = ROLL_RX.match(q)
         n = int(m.group(1) or 1) if m.group(2) else 1
@@ -1095,3 +1098,30 @@ def all_fun_parts():
     for spec in ABOUT.values():
         out += spec['openers'] + spec['core']
     return out
+
+
+# "and tell me a joke", "also flip a coin": the second part of a two-part
+# message starts with a joining word the patterns above don't expect.
+JOIN_RX = re.compile(r"^\s*(?:and|also|plus|oh and|and also|then|&)\s+", re.I)
+
+
+def strip_join(question):
+    return JOIN_RX.sub('', question or '', count=1)
+
+
+def is_canned(question):
+    """True when chat_kind / fun / about would answer this (no side effects)."""
+    q = strip_join(question).strip()
+    if not q:
+        return False
+    if chat_kind(q):
+        return True
+    for rx in (JOKE_RX, ROAST_ME_RX, ROAST_SELF_RX, COIN_RX, WHAT_CAN_RX):
+        if rx.match(q):
+            return True
+    if any(spec['rx'].match(q) for spec in ABOUT.values()):
+        return True
+    m = BALL_RX.match(q)
+    if m and (m.group(1) or m.group(2) or '').strip():
+        return True
+    return bool(ROLL_RX.match(q) or NUMBER_RX.match(q) or RPS_RX.match(q))

@@ -1801,6 +1801,8 @@ _OVERVIEW_WORDS = {
     'record', 'records', 'summary', 'summarise', 'summarize', 'overall', 'and', 'his', 'her', 'their', 'war',
     'wars', 'hits', 'chain', 'chains', 'quick', 'give', 'show', 'pull', 'files', 'file', 'pls', 'please',
     'what', 'whats', "what's", 'about', 'x', 's', 'any', 'good', 'a', 'an', 'he', 'she', 'they', 'them', 'him',
+    # A greeting in front ("yo, how active is X?") is still an overview.
+    'yo', 'hey', 'hi', 'hello', 'so', 'ok', 'okay', 'oi', 'also', 'plus',
 }
 
 
@@ -2662,7 +2664,17 @@ def _has_shortcut(part, facts, history=None):
                 or (STATUS_NOW_RX.search(part) and not STATUS_PAST_RX.search(part))
                 or FACTION_SIZE_RX.search(part)
                 or (WAR_NOW_RX.search(part) and not WAR_PAST_RX.search(part))
-                or (STRIKES_LIST_RX.search(part) and not names_in(part, facts)))
+                or (STRIKES_LIST_RX.search(part) and not names_in(part, facts))
+                or _is_canned(part))
+
+
+def _is_canned(part):
+    """A part the bot answers from its own lines (features/ask_chat.py,
+    ask_basics.py): "...and tell me a joke" got the whole message sent to
+    the AI, which read joke + member name as judging (audit 25/11/2026)."""
+    from features.ask_chat import is_canned
+    from features.ask_basics import basics_reply, faction_question
+    return is_canned(part) or bool(basics_reply(part)) or faction_question(part)
 
 
 async def answer_question(session, question, facts, history=None, earlier_facts='', providers=None,
