@@ -11011,6 +11011,78 @@ def test_about_the_bot_and_fun_are_bot_made_and_never_aim_at_others():
     assert not any(r in ans.text for r in ROASTS)
 
 
+def test_new_member_basics_and_faction_facts_are_quoted_not_invented():
+    """
+    Pat (23/11/2026): "I'm new", "how do I get verified", "which channels
+    matter", "how do chains work HERE" and faction facts (leader, age, rank,
+    respect, size) are answered by the bot: quoted from the rulebook, linked
+    to real channels, read live from Torn. No AI, nothing made up.
+    """
+    import asyncio
+    from features import ask_basics as b
+    from features.ask_ai import answer_question
+
+    class C:
+        def __init__(self, i, n):
+            self.id, self.name = i, n
+
+    class G:
+        channels = [C(1, '📜-faction-edicts'), C(2, '📝-leave-notices'), C(3, '🗓️-war-availability'),
+                    C(4, '⚔️-war-room'), C(6, '❓-ask-a-punk'), C(7, '📚-guides-hub')]
+        members = []
+
+    g = G()
+    new = b.basics_reply("hey I'm new, what do I do first?", g)
+    assert '/register' in new and '<#1>' in new and '<#6>' in new and 'Joining' not in new.split('\n')[0]
+    assert b.basics_reply('how do I get verified?', g) == b.VERIFY_TEXT
+    assert '<#2>' in b.basics_reply('where do I post leave notices?', g)
+    assert '<#4>' in b.basics_reply('which channels matter?', g)
+    oc = b.basics_reply('how do OCs work in this faction?', g)
+    assert oc and 'rulebook' in oc and '24 hours' in oc and '<#1>' in oc
+    chains = b.basics_reply('how do chains work here?', g)
+    assert chains and 'Chains' in chains and 'Xanax' not in chains and 'reimburs' not in chains.lower()
+    # Not basics: live/records wording, plain game questions, counting people.
+    for q in ["what's the war score in the faction?", 'how do chains work?', 'how many new members joined?',
+              'who is new here?', 'how did my last chain go here?']:
+        assert b.basics_reply(q, g) is None, q
+
+    data = {'ID': 45635, 'name': 'Ascended Punks', 'tag': 'AP', 'leader': 9, 'co-leader': 0, 'respect': 498843,
+            'age': 2338, 'capacity': 40, 'best_chain': 500, 'members': {str(i): {'name': f'M{i}'} for i in range(10)},
+            'rank': {'name': 'Silver', 'division': 3, 'wins': 28},
+            'ranked_wars': {'1': {'factions': {'45635': {'name': 'Ascended Punks', 'score': 5377},
+                                               '2': {'name': 'Phantom Force', 'score': 2731}},
+                                  'war': {'end': 5, 'winner': 45635}}}}
+
+    async def fetch(sel):
+        return data
+
+    card = asyncio.run(b.faction_reply('tell me about the faction', None, fetch))
+    for bit in ['Ascended Punks', '[AP]', 'M9', 'Silver III', '498,843', '10 / 40', '30 open', 'beat Phantom Force',
+                '5,377 to 2,731']:
+        assert bit in card, bit
+    assert 'Co-leader' not in card            # 0 = none, never "[0]"
+    assert asyncio.run(b.faction_reply('who is our leader?', None, fetch)).startswith('👑 Leader: **M9**')
+    assert asyncio.run(b.faction_reply('whats our tag', None, fetch)) == '🏷️ Our tag is **AP**'
+    async def down(sel):
+        return None
+    assert "isn't answering" in asyncio.run(b.faction_reply('faction info', None, down))
+    assert asyncio.run(b.faction_reply('what is the faction doing in the war', None, fetch)) is None
+
+    class Facts:
+        now = 0
+        live_tools = None
+        asker = None
+        faction_fetch = staticmethod(fetch)
+        def _known_names(self):
+            return {}
+
+    async def no_ai(session, messages, f, used):
+        raise AssertionError('the AI should not be asked')
+    for q in ['how old is the faction?', 'how do I get verified?']:
+        ans = asyncio.run(answer_question(None, q, Facts(), [], providers=[('x', no_ai)], management=False))
+        assert ans.provider == 'none' and ans.text, q
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -11207,4 +11279,5 @@ if __name__ == '__main__':
     test_who_has_strikes_is_a_short_card_for_management()
     test_casual_chat_mixes_parts_and_never_repeats_for_a_person()
     test_about_the_bot_and_fun_are_bot_made_and_never_aim_at_others()
+    test_new_member_basics_and_faction_facts_are_quoted_not_invented()
     print('All smoke tests passed.')

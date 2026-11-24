@@ -2724,6 +2724,18 @@ async def _answer_question(session, question, facts, history=None, earlier_facts
     if chat:
         # 'none': a "thanks" doesn't start a member's cooldown either.
         return Answer(chat, 'none', '', True, 0, kind='chat')
+    # New member basics, channels, "how do chains work here" (quoted from
+    # the rulebook) and faction facts (live from Torn): the bot's own
+    # words, no AI, open to members (features/ask_basics.py).
+    from features.ask_basics import basics_reply, faction_reply
+    guild = getattr(getattr(facts, 'live_tools', None), 'guild', None)
+    basics = basics_reply(question, guild)
+    if basics:
+        return Answer(basics, 'none', '', True, 0, kind='chat')
+    if guild is not None or getattr(facts, 'faction_fetch', None):
+        about = await faction_reply(question, guild, getattr(facts, 'faction_fetch', None))
+        if about:
+            return Answer(about, 'none', '', True, 0, kind='chat')
     # "my hits" -> "Ikaros22's hits": the asker about themselves.
     asker = getattr(facts, 'asker', None)
     if FIRST_RX.search(question or '') and not FIRST_SKIP_RX.search(question or ''):
@@ -3521,8 +3533,8 @@ class AskAI:
             last = self.refused_at.get(message.author.id, 0)
             if time.time() - last >= REFUSE_EVERY_S:
                 self.refused_at[message.author.id] = time.time()
-                await message.reply("Asking me is for faction members only 🔒 Get verified first and "
-                                    "you're in.", mention_author=False, delete_after=30)
+                await message.reply("Asking me is for faction members only 🔒 Get verified first with "
+                                    "`/register` and you're in.", mention_author=False, delete_after=30)
             return
         if not management and not member_ok:
             # Switch off: only management gets answers (Pat's call,
