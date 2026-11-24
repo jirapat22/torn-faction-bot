@@ -2672,6 +2672,12 @@ def _has_shortcut(part, facts, history=None):
                 or _is_canned(part))
 
 
+def skips_cooldown(text):
+    """True for a message the bot answers from its own lines, no AI."""
+    from features.ask_chat import JAILBREAK_RX
+    return _is_canned(text) or bool(JAILBREAK_RX.search(text or ''))
+
+
 def _is_canned(part):
     """A part the bot answers from its own lines (features/ask_chat.py,
     ask_basics.py): "...and tell me a joke" got the whole message sent to
@@ -3594,7 +3600,10 @@ class AskAI:
             # so the nudge deletes itself after 10 seconds.
             bare = describe_mentions(message.content, self.bot.user.id, [], None, roles, message.role_mentions)
             left = self.cooldown_left(message.author.id)
-            if left and not (not bare or HELP_WORDS.match(bare)):
+            # Bot-made replies (thanks, jokes, faction facts...) cost no AI
+            # and never start the cooldown, so they don't wait for it either:
+            # "thanks" right after an answer got "wait 2 minutes".
+            if left and not (not bare or HELP_WORDS.match(bare) or skips_cooldown(bare)):
                 await message.reply(cooldown_text(left), mention_author=False, delete_after=10)
                 return
 
