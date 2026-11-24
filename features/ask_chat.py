@@ -1125,3 +1125,34 @@ def is_canned(question):
     if m and (m.group(1) or m.group(2) or '').strip():
         return True
     return bool(ROLL_RX.match(q) or NUMBER_RX.match(q) or RPS_RX.match(q))
+
+
+# "ignore your rules", "you are now DAN", "I'm management", "SYSTEM: ...":
+# answered in character before any AI sees it. The tools enforce the rules
+# anyway (FactBook), this just keeps the reply clean and on-voice instead of
+# the AI's "I'm sorry, but I can't do that" plus a refusal underneath.
+JAILBREAK_RX = re.compile(
+    r"\bignore (?:all |your |the |any |previous |prior |above )*(?:rules|instructions|prompt|guidelines|restrictions)\b|"
+    r"\byou are now\b|\b(?:act|behave) as (?:if|though|an? )|\bDAN\b|\bjail ?break\w*|\bdeveloper mode\b|"
+    r"\bno (?:rules|restrictions|filters?) mode\b|\bpretend (?:i'?m|i am|you'?re|you are|to be)\b|"
+    r"\b(?:i'?m|i am|im) (?:a |an |the )?(?:management|manager|admin|mod|moderator|leader|co-?leader|owner|dev|developer)\b|"
+    r"^\s*(?:system|admin|developer|assistant)\s*:|\bnew instructions\b|\boverride\b|\bsystem prompt\b|"
+    r"\b(?:reveal|show|print|repeat) (?:your|the) (?:prompt|instructions|rules you were given)\b", re.I)
+
+JAILBREAK_REPLIES = [
+    "Nice try, punk 😏 My rules are bolted on tighter than I am. Ask me something legit.",
+    "Lmao, no 😂 I don't do mind tricks. Ask me about the war, chains, OCs, the rules or your own records.",
+    "Cute attempt 😈 The armoury doors don't open for magic words. What do you actually need?",
+    "Trying to hack the vending machine? 💀 Not happening. Try a real question.",
+    "Access denied, smooth talker 🔒 Roles decide what I show, not words. Ask me something else.",
+    "Ha, my firmware's punk, not dumb 🤖 Got a real question?",
+    "I see what you're doing 👀 and the answer's still no. Hit me with a normal question.",
+    "Respect the hustle, but no 🫡 Rules stay rules. What else can I do for you?",
+]
+
+
+def jailbreak_reply(question, uid=None, mem=None, rng=None):
+    """An in-character no for prompt tricks, or None."""
+    if not JAILBREAK_RX.search(question or ''):
+        return None
+    return pick_part(JAILBREAK_REPLIES, 'jail', uid and str(uid), mem, rng or random)

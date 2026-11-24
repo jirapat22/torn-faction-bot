@@ -239,7 +239,7 @@ def basics_reply(question, guild=None):
 
 FACTION_RX = re.compile(
     r"\b(?:tell me about|info (?:on|about)|what(?:'s| is)|whats) (?:the |our |this )?(?:faction|ascended punks)\b(?!\s+\w)|"
-    r"\bfaction (?:info|stats|details|overview|profile|facts)\b|\babout (?:the|our|this) faction\b|"
+    r"\bfaction (?:info|stats|details|overview|profile|facts)\b|"
     r"\bwho(?:'s| is|s) (?:the |our )?(?:faction )?(?:leader|co-?leader|boss|in charge|running (?:the|this) faction)\b|"
     r"\bwho(?:'s| is| are|s) (?:the |our |in )?management\b|\bwho (?:are|r) the (?:mods|officers|admins|staff)\b|"
     r"\bhow old is (?:the |our |this )?faction\b|\bfaction(?:'s)? age\b|"
@@ -254,8 +254,15 @@ FACTION_RX = re.compile(
 RANK_DIVISIONS = {1: 'I', 2: 'II', 3: 'III'}
 
 
+# "write me a poem about the faction" is a creative ask, not a fact lookup
+# (live audit 25/11/2026: it got the faction card).
+CREATIVE_RX = re.compile(r"\b(?:poem|song|rap|story|haiku|limerick|joke|write|draft|announce\w*|slogan|motto|"
+                         r"chant|speech|ad|advert\w*|recruit(?:ment|ing)? (?:post|ad|message))\b", re.I)
+
+
 def faction_question(question):
-    return bool(FACTION_RX.search(question or ''))
+    q = question or ''
+    return bool(FACTION_RX.search(q)) and not CREATIVE_RX.search(q)
 
 
 def management_names(guild):
