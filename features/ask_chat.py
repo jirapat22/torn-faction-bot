@@ -33,7 +33,7 @@ import zlib
 MEMORY_FILE = 'chat_memory.json'
 MEMORY_USERS = 400          # people kept (the faction is ~40, plus guests)
 MEMORY_DAYS = 90            # someone silent this long is forgotten
-MEMORY_LINES = 400          # full lines remembered per person
+MEMORY_LINES = 1000         # full lines remembered per person (500 chats once repeated one at 400)
 RECENT_PARTS = 20           # parts per slot a person won't see again soon
 # Jokes and roasts are the punchline itself: a person should hear every one
 # before any comes back, so these slots remember far more.
