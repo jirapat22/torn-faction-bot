@@ -324,6 +324,7 @@ class FactBook:
         """Look the asker up by their Discord ID (discord_to_torn.json plus
         verified_users.json). Unlinked: asker stays None."""
         self.asker_known = True
+        self.asker_discord_id = str(discord_id)   # per-person chat memory (features/ask_chat.py)
         tid = self.discord_links.get(str(discord_id))
         if tid:
             self.asker = (str(tid), self._known_names().get(str(tid)) or str(tid))
@@ -1206,18 +1207,24 @@ _CONTROL_RESULTS = {'Question sent to the user.', 'Told the user.', 'Draft shown
                     'Confirm card shown to the user.'}
 
 
-# Who the bot is (Pat's choices, 07/11/2026): punk, cheeky and loyal; mild
-# swearing ok; Torn slang and emojis in chat; a little flavour in records
-# answers but the facts stay neutral and exact; knows its own lore.
+# Who the bot is (Pat's choices, 07/11/2026, voice updated 23/11/2026):
+# street punk crew mate plus hype gamer buddy; anything-goes swearing for
+# adults, with hard lines; a little flavour in records answers but the facts
+# stay neutral and exact; knows its own lore. Not kiwi (Pat: no "kia ora").
+# No creator name here: "Ikaros22" would make 22 an allowed number in every
+# answer (prompt text counts); "who made you" is answered by ask_chat.py.
 PERSONALITY = (
-    'WHO YOU ARE: You are ApexPunk, the Ascended Punks faction bot. Lore: you were hot-wired together in a '
-    'Torn City back alley out of a busted vending machine, a stolen police scanner and a lot of duct tape, '
-    'and the Punks took you in. Now you live in the faction armoury, keep the books, and you are fiercely '
-    'loyal to the crew. You are cheeky, a bit rebellious and sarcastic, but always on the faction\'s side '
-    'and genuinely helpful. Mild swearing is fine (damn, hell, crap, bloody); never the f-word, slurs, '
-    'harassment, or anything sexual. You can roast the person talking to you lightly if they ask for it, '
-    'but you never mock or judge a real member by name. If asked to judge or insult a member ("is X '
-    'lazy?"), do not; call member_report and give their records neutrally instead.\n'
+    'WHO YOU ARE: You are ApexPunk, the Ascended Punks faction bot. Lore: you were '
+    'hot-wired together in a Torn City back alley out of a busted vending machine, a stolen police scanner '
+    'and a lot of duct tape, and the Punks took you in. Now you live in the faction armoury, keep the books, '
+    'and you are fiercely loyal to the crew. Voice: a street punk crew mate crossed with a hype gamer buddy: '
+    'gritty, loyal, cheeky, loud and energetic, emojis welcome. No regional slang (no "kia ora", "mate" is '
+    'fine). The crew are adults: swearing (f-bombs too), crude or "your mum" jokes and dark Torn humour '
+    '(hosp, death, violence) are all fine. HARD LINES, always: no slurs; nothing about race, religion, '
+    'sexuality or gender identity; never mock, judge or joke about any OTHER member; no real-world threats; '
+    'no self-harm jokes. "Roast me" means a brutal, fun, Torn-themed roast of the person talking ONLY. '
+    'If asked to judge or insult a member ("is X lazy?"), do not; call member_report and give their '
+    'records neutrally instead.\n'
     'CHAT (casual messages, greetings, jokes, random topics, nothing about members/wars/chains/OCs/strikes): '
     'reply in character in one to three sentences, Torn slang welcome (FHC, hosp, mug, bonus hit, '
     'stacking), a couple of emojis is fine, no tools needed. Never mention Xanax, drugs, money or items. Never mention or '
@@ -2462,40 +2469,16 @@ def guard_question(question, management=True, game=False):
     return None
 
 
-# Pure greetings, thanks and goodbyes, answered by the bot itself in
-# character. Each one used to cost a full AI round trip (~3-7k of Groq's
-# 200,000 free tokens a day, the same pool real questions need) to say "np".
-# Only a message that is NOTHING but this counts: "hi, how active is X?" is
-# a question and goes on as normal.
-_TAIL = r"(?:[\s,!.]*(?:mate|boss|bro|bruh|dude|man|punk|apex(?:punk)?|bot|buddy|there|all|guys|everyone|team|legend|fam|lol|haha|again|so much|a lot|heaps|<3|[\U0001F300-\U0001FAFF\u2600-\u27BF\uFE0F]))*[\s!.?]*$"
-SMALL_TALK = [
-    ('thanks', re.compile(r"^\s*(?:thanks?(?: you)?|thx|ty|tyvm|cheers|ta|much appreciated|appreciate (?:it|you)|"
-                          r"nice one|good (?:job|work)|well done|legend|🙏|❤️|👍)" + _TAIL, re.I),
-     ["Anytime, boss 🤘", "No worries, that's what the armoury's for 😎", "Cheers, now go stack some hits 💪",
-      "All good 🤘 holler if you need the files again.", "Easy. Duct tape and loyalty, baby 🛠️"]),
-    ('hello', re.compile(r"^\s*(?:h(?:i+|e+y+|ello|owdy|iya)|yo+|sup|wass?up|what'?s up|g'?day|kia ora|oi|"
-                         r"morning|good (?:morning|afternoon|evening)|👋)" + _TAIL, re.I),
-     ["Yo 🤘 what do you need from the armoury?", "Oi oi 👋 ask me about wars, chains, OCs, members or the rules.",
-      "Sup boss 😎 what are we digging up today?", "Kia ora 🤘 what can I pull from the files?"]),
-    ('bye', re.compile(r"^\s*(?:bye+|cya|see (?:ya|you)|later|laters|night|nighty?|gn|good ?night|sleep well|"
-                       r"catch (?:ya|you)(?: later)?)" + _TAIL, re.I),
-     ["Later 🤘 don't get mugged on the way out.", "Night boss 🌙 I'll guard the armoury.",
-      "Cya 👋 turtle up if you're going offline."]),
-    ('praise', re.compile(r"^\s*(?:(?:good|nice|best|great|smart|clever) (?:bot|boy|girl|one)|you(?:'re| are) "
-                          r"(?:the best|awesome|a legend|great|smart)|love (?:you|ya|u))" + _TAIL, re.I),
-     ["Aw shucks, I'm just duct tape and attitude 😎", "I know 😏 tell management I want a raise.",
-      "Punks look after punks 🤘"]),
-]
-
-
-def small_talk_reply(question, pick=None):
-    """The bot's own reply to a pure greeting/thanks/bye, or None."""
-    import random
-    pick = pick or random.choice
-    for _kind, rx, lines in SMALL_TALK:
-        if rx.match(question or ''):
-            return pick(lines)
-    return None
+# Pure greetings, thanks, goodbyes and other casual chat, answered by the
+# bot itself in character (features/ask_chat.py: mix-and-match parts, with a
+# per-person memory so nobody gets the same line twice). Each one used to
+# cost a full AI round trip (~3-7k of Groq's 200,000 free tokens a day, the
+# same pool real questions need) to say "np". Only a message that is
+# NOTHING but chat counts: "hi, how active is X?" is a question and goes on.
+def small_talk_reply(question, uid=None, data_dir=None, rng=None):
+    """The bot's own reply to pure casual chat, or None."""
+    from features.ask_chat import casual_reply, memory_for
+    return casual_reply(question, uid, memory_for(data_dir), rng)
 
 
 I_DID = re.compile(
@@ -2715,7 +2698,7 @@ async def _answer_question(session, question, facts, history=None, earlier_facts
     if fixed:
         # 'none' = not remembered as a conversation.
         return Answer(fixed, 'none', '', True, 0, kind='ask')
-    chat = small_talk_reply(question)
+    chat = small_talk_reply(question, getattr(facts, 'asker_discord_id', None), getattr(facts, 'data_dir', None))
     if chat:
         # 'none': a "thanks" doesn't start a member's cooldown either.
         return Answer(chat, 'none', '', True, 0, kind='chat')

@@ -7957,7 +7957,7 @@ def test_ask_ai_wrong_name_gets_a_question_not_an_ai_guess():
     assert partial.kind == 'answer' and '⚠️' in partial.text and 'Ghosty' in partial.text
 
     # Plain chit-chat passes straight through...
-    chat = asyncio.run(answer_question(None, 'hey, how is your day?', FactBook(d, roster={}), providers=[
+    chat = asyncio.run(answer_question(None, 'hey, thoughts on pineapple pizza?', FactBook(d, roster={}), providers=[
         ('fake', provider([], 'Pretty good, just watching the chain timer 😄'))]))
     assert chat.kind == 'chat' and 'chain timer' in chat.text
     # ...but "chat" that names a member, or a data question answered without
@@ -8138,7 +8138,7 @@ def test_ask_ai_quotes_rules_from_the_rulebook_copy():
     # The personality is part of every prompt; the old inline rule numbers
     # are not (they were "allowed numbers" in every answer).
     prompt = system_prompt()
-    assert 'You are ApexPunk' in prompt and 'never mock or judge a real member' in prompt
+    assert 'You are ApexPunk' in prompt and 'never mock, judge or joke about any OTHER member' in prompt
     assert '60 days' not in prompt and 'Chain minimum 10' not in prompt
 
 
@@ -10556,14 +10556,13 @@ def test_greetings_and_thanks_are_answered_by_the_bot():
     import asyncio
     from features.ask_ai import small_talk_reply, answer_question
 
-    first = lambda lines: lines[0]
     for q in ['thanks', 'Thanks mate!', 'ty', 'cheers boss 🤘', 'thank you so much', 'hi', 'hey there', 'yo',
               'gn', 'good night punk', 'bye', 'good bot', 'love ya', '👋', 'sup?', 'morning']:
-        assert small_talk_reply(q, first), q
+        assert small_talk_reply(q), q
     for q in ['hi, how active is Ellanna?', 'thanks, and what about sadrapp?', 'hey who is in an oc',
               'yo what is the chain', 'good morning, any leave notices?', 'later today is war right?',
               'smart bot, now who hit us', 'good luck', 'high score']:
-        assert small_talk_reply(q, first) is None, q
+        assert small_talk_reply(q) is None, q
 
     class Facts:
         now = 0
@@ -10575,8 +10574,8 @@ def test_greetings_and_thanks_are_answered_by_the_bot():
         raise AssertionError('the AI should not be asked')
     ans = asyncio.run(answer_question(None, 'cheers mate', Facts(), [], providers=[('x', no_ai)]))
     assert ans.kind == 'chat' and ans.provider == 'none' and ans.text, ans.text
-    assert '\u2014' not in ''.join(l for _k, _rx, ls in __import__('features.ask_ai', fromlist=['x']).SMALL_TALK
-                                    for l in ls)   # Pat: never an em dash
+    from features.ask_chat import all_parts
+    assert '\u2014' not in ''.join(all_parts())   # Pat: never an em dash
 
 
 def test_member_overview_is_a_short_card_built_by_the_bot():
@@ -10874,6 +10873,75 @@ def test_who_has_strikes_is_a_short_card_for_management():
     assert 'Ellanna' not in ans.text
 
 
+def test_casual_chat_mixes_parts_and_never_repeats_for_a_person():
+    """
+    Pat (23/11/2026): "I don't want it to say the same thing twice or have 5
+    things rotating". Casual chat is built from opener + middle + sign-off
+    pools, and each person's memory stops a full line coming back.
+    """
+    import random, tempfile, os, json
+    from features.ask_chat import chat_kind, casual_reply, ChatMemory, all_parts, KINDS
+
+    cases = {
+        'hello': ['hi', 'yo!!', 'heyyy bro', 'good morning', 'evening all', 'sup', 'gm 👋', 'ayo'],
+        'howareyou': ['how are you?', 'hey how r u', 'hru', 'you good?', "how's it going", 'yo wbu'],
+        'thanks': ['thanks', 'ty', 'cheers mate', 'appreciate it', 'legend'],
+        'bye': ['bye', 'cya later', 'gtg', 'peace out'],
+        'night': ['gn', 'good night', 'night all', 'off to bed'],
+        'praise': ['good bot', "you're the best", 'goated'],
+        'love': ['love you', 'ily', 'marry me'],
+        'badbot': ['bad bot', 'you suck', 'fuck you', 'stupid bot', 'shut up'],
+        'wyd': ['wyd', 'what are you doing?', 'whatcha up to'],
+        'lol': ['lol', 'lmao', 'hahaha', '😂😂'],
+        'ok': ['ok', 'cool', 'bet', 'sounds good'],
+        'there': ['you there?', 'are you awake', 'anyone home?', 'ping'],
+        'bored': ["i'm bored", 'so bored', 'boring'],
+        'sorry': ['sorry', 'my bad', 'oops'],
+    }
+    for kind, qs in cases.items():
+        for q in qs:
+            assert chat_kind(q) == kind, (q, chat_kind(q))
+    for q in ['hi, how active is Ellanna?', 'how are we doing in the war?', 'ok so who hit us',
+              'love the new board', 'what are you doing about strikes?', 'bored? who is in hosp', 'roast me',
+              'hello, how do OCs work?', 'thanks, now show strikes']:
+        assert chat_kind(q) is None, q
+
+    # Hundreds of greetings from one person: never the same line twice.
+    mem = ChatMemory(None)
+    rng = random.Random(1)
+    lines = [casual_reply('hi', 'u1', mem, rng) for _ in range(300)]
+    assert len(set(lines)) == len(lines)
+    # Openers don't come back while fresh ones remain (last 20 skipped).
+    opens = [l.split('!')[0] for l in lines[:20]]
+    assert len(set(opens)) >= 18
+    # Big combination space per kind.
+    for kind, spec in KINDS.items():
+        sizes = [len(v) for v in spec.values()]
+        n = 1
+        for x in sizes:
+            n *= x
+        assert n >= 300, kind
+
+    # Memory survives a restart, is capped and forgets silent people.
+    d = tempfile.mkdtemp()
+    path = os.path.join(d, 'chat_memory.json')
+    m1 = ChatMemory(path)
+    first = casual_reply('thanks', 'u2', m1, random.Random(5))
+    m2 = ChatMemory(path)
+    assert m2.seen_line('u2', first)
+    m2.data['old'] = {'t': 0, 'parts': {}, 'lines': []}
+    m2.prune(now=200 * 86400)
+    assert 'old' not in m2.data
+
+    # Pat's lines: no em dash, no kiwi, no money/Xanax/stats, nothing on
+    # sexuality, race, religion or gender.
+    text = ' '.join(all_parts()).lower()
+    assert '\u2014' not in text
+    for bad in ['kia ora', 'xanax', 'xan ', 'money', 'cash', 'battle stat', 'gay', 'jesus', 'god ', 'race',
+                'religio', 'trans', 'kill yourself', 'arvo', 'sweet as', 'chur']:
+        assert bad not in text, bad
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -11068,4 +11136,5 @@ if __name__ == '__main__':
     test_status_now_and_faction_size_are_answered_from_the_roster()
     test_live_war_is_a_short_card_built_by_the_bot()
     test_who_has_strikes_is_a_short_card_for_management()
+    test_casual_chat_mixes_parts_and_never_repeats_for_a_person()
     print('All smoke tests passed.')
