@@ -8202,7 +8202,7 @@ def test_ask_ai_audit_fixes_chat_numbers_war_order_and_groq_hiccups():
 
     # Cerebras and Gemini: same code path, skipped instantly with no key, in
     # the chain after Groq's big model and before its small one.
-    assert [n for n, _ in a.PROVIDERS] == ['Groq', 'Cerebras', 'Gemini', 'Mistral', 'NVIDIA', 'OpenRouter',
+    assert [n for n, _ in a.PROVIDERS] == ['Groq', 'Cerebras', 'Gemini', 'Mistral', 'OpenRouter', 'NVIDIA',
                                           'Gemini lite', 'Groq small', 'local AI']
     # Mistral and OpenRouter (free backups, Pat 24/11/2026): skipped
     # instantly while no key is set, like Cerebras

@@ -1408,12 +1408,16 @@ CLOUD = {
     'Mistral': ('https://api.mistral.ai/v1/chat/completions', 'MISTRAL_API_KEY',
                 os.getenv('MISTRAL_MODEL', 'mistral-small-latest')),
     'OpenRouter': ('https://openrouter.ai/api/v1/chat/completions', 'OPENROUTER_API_KEY',
-                   os.getenv('OPENROUTER_MODEL', 'openai/gpt-oss-120b:free')),
+                   os.getenv('OPENROUTER_MODEL', 'nvidia/nemotron-3-ultra-550b-a55b:free')),
     # NVIDIA NIM: free through the NVIDIA Developer Program (~40 requests a
     # minute reported, "for prototyping"), fine as a backup for one faction.
-    # Not every NIM model does tool calls, so pick one that does.
+    # Tested 24/11/2026 with a real lookup: Mistral Large 4 called the tool
+    # in 1.9s; GLM 5.3 flash took 30s, Kimi timed out, Llama 3.3 is retired.
+    # OpenRouter: gpt-oss-120b:free stopped being free; Nemotron 3 Ultra
+    # (free) called the tool in 1.8s. Free models come and go, so both are
+    # changeable in the env file.
     'NVIDIA': ('https://integrate.api.nvidia.com/v1/chat/completions', 'NVIDIA_API_KEY',
-               os.getenv('NVIDIA_MODEL', 'meta/llama-3.3-70b-instruct')),
+               os.getenv('NVIDIA_MODEL', 'mistralai/mistral-large-4-1t-a52b')),
 }
 
 
@@ -1529,7 +1533,10 @@ async def _ask_gemini_lite(session, messages, facts, used):
 # small model, then the Mac (chat only; it never words records). A provider
 # with no key set is skipped instantly.
 PROVIDERS = [('Groq', _ask_groq_big), ('Cerebras', _ask_cerebras), ('Gemini', _ask_gemini),
-             ('Mistral', _ask_mistral), ('NVIDIA', _ask_nvidia), ('OpenRouter', _ask_openrouter),
+             # OpenRouter before NVIDIA: measured 24/11/2026, both right, but
+             # NVIDIA took 52s on a follow-up and timed out once (OpenRouter
+             # 7-13s). Mistral answers 429 at once until its free plan is on.
+             ('Mistral', _ask_mistral), ('OpenRouter', _ask_openrouter), ('NVIDIA', _ask_nvidia),
              ('Gemini lite', _ask_gemini_lite), ('Groq small', _ask_groq_small), ('local AI', _ask_local)]
 # Up to a minute: measured, the Mac's AI takes 40-90s AND is weaker (it once
 # quoted the wrong war's hits for "Ikaros vs Kaos Korner"), so waiting out
