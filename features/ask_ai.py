@@ -1409,6 +1409,11 @@ CLOUD = {
                 os.getenv('MISTRAL_MODEL', 'mistral-small-latest')),
     'OpenRouter': ('https://openrouter.ai/api/v1/chat/completions', 'OPENROUTER_API_KEY',
                    os.getenv('OPENROUTER_MODEL', 'openai/gpt-oss-120b:free')),
+    # NVIDIA NIM: free through the NVIDIA Developer Program (~40 requests a
+    # minute reported, "for prototyping"), fine as a backup for one faction.
+    # Not every NIM model does tool calls, so pick one that does.
+    'NVIDIA': ('https://integrate.api.nvidia.com/v1/chat/completions', 'NVIDIA_API_KEY',
+               os.getenv('NVIDIA_MODEL', 'meta/llama-3.3-70b-instruct')),
 }
 
 
@@ -1508,6 +1513,10 @@ async def _ask_mistral(session, messages, facts, used):
     return await _ask_groq(session, messages, facts, used, max_wait=5, provider='Mistral')
 
 
+async def _ask_nvidia(session, messages, facts, used):
+    return await _ask_groq(session, messages, facts, used, max_wait=5, provider='NVIDIA')
+
+
 async def _ask_openrouter(session, messages, facts, used):
     return await _ask_groq(session, messages, facts, used, max_wait=5, provider='OpenRouter')
 
@@ -1520,7 +1529,7 @@ async def _ask_gemini_lite(session, messages, facts, used):
 # small model, then the Mac (chat only; it never words records). A provider
 # with no key set is skipped instantly.
 PROVIDERS = [('Groq', _ask_groq_big), ('Cerebras', _ask_cerebras), ('Gemini', _ask_gemini),
-             ('Mistral', _ask_mistral), ('OpenRouter', _ask_openrouter),
+             ('Mistral', _ask_mistral), ('NVIDIA', _ask_nvidia), ('OpenRouter', _ask_openrouter),
              ('Gemini lite', _ask_gemini_lite), ('Groq small', _ask_groq_small), ('local AI', _ask_local)]
 # Up to a minute: measured, the Mac's AI takes 40-90s AND is weaker (it once
 # quoted the wrong war's hits for "Ikaros vs Kaos Korner"), so waiting out
