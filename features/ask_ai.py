@@ -2732,7 +2732,7 @@ async def _answer_question(session, question, facts, history=None, earlier_facts
     basics = basics_reply(question, guild)
     if basics:
         return Answer(basics, 'none', '', True, 0, kind='chat')
-    if guild is not None or getattr(facts, 'faction_fetch', None):
+    if guild is not None or getattr(facts, 'live_tools', None) is not None or getattr(facts, 'faction_fetch', None):
         about = await faction_reply(question, guild, getattr(facts, 'faction_fetch', None))
         if about:
             return Answer(about, 'none', '', True, 0, kind='chat')
