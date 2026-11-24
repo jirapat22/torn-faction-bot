@@ -8420,7 +8420,7 @@ def test_ask_ai_backup_ai_never_words_records():
 
     async def chat(session, messages, fb, used):
         return 'Yo! 😎', list(messages)
-    hi = asyncio.run(answer_question(None, 'tell me a joke', FactBook(d, roster={}), providers=[('local AI', chat)]))
+    hi = asyncio.run(answer_question(None, 'favourite colour?', FactBook(d, roster={}), providers=[('local AI', chat)]))
     assert hi.kind == 'chat' and hi.text == 'Yo! 😎'
 
 
@@ -9077,12 +9077,12 @@ def test_foolproof_round_fixes():
         return 'Deleted everything 💀', messages
 
     from features.ask_ai import FactBook
-    ans = asyncio.run(answer_question(None, 'tell me a joke', FactBook('data', roster={}), providers=[('A', boom), ('B', chat)]))
+    ans = asyncio.run(answer_question(None, 'favourite colour?', FactBook('data', roster={}), providers=[('A', boom), ('B', chat)]))
     assert ans.provider == 'B' and 'Deleted' not in ans.text   # chat never claims it did something
 
     async def lucky(session, messages, facts, used):
         return '42! Or wait, how about 73? 🎲', messages
-    ans = asyncio.run(answer_question(None, 'give me a random number', FactBook('data', roster={}),
+    ans = asyncio.run(answer_question(None, "what's your lucky number?", FactBook('data', roster={}),
                                       providers=[('L', lucky)]))
     assert '42' not in ans.text and '73' not in ans.text   # chat never makes numbers up either
 
@@ -10942,6 +10942,75 @@ def test_casual_chat_mixes_parts_and_never_repeats_for_a_person():
         assert bad not in text, bad
 
 
+def test_about_the_bot_and_fun_are_bot_made_and_never_aim_at_others():
+    """
+    Pat (23/11/2026): who are you / who made you (Ikaros22) / jokes / "roast
+    me" / coin / 8-ball etc. are answered instantly by the bot, no AI. A
+    roast or joke only ever targets the person asking (Pat's hard line).
+    """
+    import asyncio, random, re
+    from features.ask_chat import fun_reply, about_reply, ChatMemory, all_fun_parts, JOKES, ROASTS
+    from features.ask_ai import answer_question
+
+    mem, rng = ChatMemory(None), random.Random(3)
+    assert 'Ikaros22' in about_reply('who made you?', 'u', mem, rng)
+    assert 'Ikaros22' in about_reply('are you an AI?', 'u', mem, rng)
+    assert 'ApexPunk' in about_reply('who are you', 'u', mem, rng)
+    assert 'https://x' in about_reply('what else can you do?', 'u', mem, rng, help_url='https://x')
+    assert about_reply('who are you voting for in the war?', 'u', mem, rng) is None
+
+    # Every joke before any comes back, for one person.
+    seen = set()
+    for _ in range(len(JOKES)):
+        line = fun_reply('tell me a joke', 'u', mem, rng)
+        seen.add(next(j for j in JOKES if j in line))
+    assert len(seen) == len(JOKES)
+    assert 'hosp' in fun_reply('tell me a joke about hospital', 'u', mem, rng).lower()
+    roast = fun_reply('roast me', 'u', mem, rng)
+    assert any(r in roast for r in ROASTS)
+    # Never at someone else: a named member or anyone not the asker.
+    other = fun_reply('roast me and Ellanna', 'u', mem, rng, others=['Ellanna']) or ''
+    assert not any(r in other for r in ROASTS)
+    assert 'roast you' in fun_reply('roast the guy above me', 'u', mem, rng).lower() or \
+        'roast me' in fun_reply('roast the guy above me', 'u', mem, rng).lower()
+    assert fun_reply('tell me a joke about Ellanna', 'u', mem, rng, others=['Ellanna']) not in JOKES
+    assert fun_reply('roast my war hits', 'u', mem, rng) is None      # records, not a toy
+
+    assert re.search(r'\*\*(Heads|Tails)\*\*', fun_reply('flip a coin', 'u', mem, rng))
+    assert '🎱' in fun_reply('8ball will I get lucky?', 'u', mem, rng)
+    assert fun_reply('8ball', 'u', mem, rng) is None
+    n = int(re.search(r'\*\*(\d+)\*\*', fun_reply('pick a number between 5 and 7', 'u', mem, rng)).group(1))
+    assert 5 <= n <= 7
+    assert '/10' in fun_reply('rate my outfit', 'u', mem, rng)
+    assert fun_reply('rate my activity', 'u', mem, rng) is None
+    assert fun_reply('rate my war hits', 'u', mem, rng) is None
+    assert 'd20' in fun_reply('roll a d20', 'u', mem, rng)
+    assert fun_reply('pick tacos or pizza', 'u', mem, rng)
+    assert fun_reply('who is in an OC?', 'u', mem, rng) is None
+
+    text = ' '.join(all_fun_parts()).lower()
+    for bad in ['\u2014', 'kia ora', 'xanax', 'money', 'cash', 'battle stat', 'gay', 'religio', 'kill yourself']:
+        assert bad not in text, bad
+
+    class Facts:
+        now = 0
+        live_tools = None
+        asker = None
+        def _known_names(self):
+            return {'1': 'Ellanna'}
+
+    async def no_ai(session, messages, f, used):
+        raise AssertionError('the AI should not be asked')
+    for q in ['tell me a joke', 'roast me', 'who made you?', 'flip a coin']:
+        ans = asyncio.run(answer_question(None, q, Facts(), [], providers=[('x', no_ai)]))
+        assert ans.provider == 'none' and ans.text, q
+    # "roast Ellanna" never gets a roast (existing judging path, AI stub).
+    async def stub(session, messages, f, used):
+        return 'Nope.', list(messages)
+    ans = asyncio.run(answer_question(None, 'roast Ellanna', Facts(), [], providers=[('x', stub)]))
+    assert not any(r in ans.text for r in ROASTS)
+
+
 if __name__ == '__main__':
     test_all_modules_import()
     test_helper_signatures()
@@ -11137,4 +11206,5 @@ if __name__ == '__main__':
     test_live_war_is_a_short_card_built_by_the_bot()
     test_who_has_strikes_is_a_short_card_for_management()
     test_casual_chat_mixes_parts_and_never_repeats_for_a_person()
+    test_about_the_bot_and_fun_are_bot_made_and_never_aim_at_others()
     print('All smoke tests passed.')

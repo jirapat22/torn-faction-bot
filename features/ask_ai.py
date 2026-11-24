@@ -2481,6 +2481,28 @@ def small_talk_reply(question, uid=None, data_dir=None, rng=None):
     return casual_reply(question, uid, memory_for(data_dir), rng)
 
 
+def canned_reply(question, facts):
+    """
+    The bot's own instant line (features/ask_chat.py), or None: casual chat,
+    who the bot is / who made it, and the fun stuff (jokes, "roast me",
+    coin, 8-ball, dice, "rate my X"). Open to members too: none of it
+    touches anyone's records. A joke or roast never names another member:
+    `others` (members named who aren't the asker) turns those away.
+    """
+    from features.ask_chat import about_reply, fun_reply, memory_for
+    uid = getattr(facts, 'asker_discord_id', None)
+    mem = memory_for(getattr(facts, 'data_dir', None))
+    try:
+        named = names_in(question, facts)
+    except Exception:
+        named = []
+    asker = getattr(facts, 'asker', None)
+    others = [n for n in named if not asker or n.lower() != asker[1].lower()]
+    return (fun_reply(question, uid, mem, others=others)
+            or about_reply(question, uid, mem, help_url=getattr(facts, 'help_url', None))
+            or small_talk_reply(question, uid, getattr(facts, 'data_dir', None)))
+
+
 I_DID = re.compile(
     r"\b(?:i'?ve|i have|i|we'?ve|we have)\s+(?:just\s+|now\s+|already\s+|gone and\s+)?"
     r"(?:deleted|removed|added|started|ended|cancell?ed|created|posted|scheduled|kicked|banned|booted|issued|"
@@ -2698,7 +2720,7 @@ async def _answer_question(session, question, facts, history=None, earlier_facts
     if fixed:
         # 'none' = not remembered as a conversation.
         return Answer(fixed, 'none', '', True, 0, kind='ask')
-    chat = small_talk_reply(question, getattr(facts, 'asker_discord_id', None), getattr(facts, 'data_dir', None))
+    chat = canned_reply(question, facts)
     if chat:
         # 'none': a "thanks" doesn't start a member's cooldown either.
         return Answer(chat, 'none', '', True, 0, kind='chat')
@@ -3573,6 +3595,7 @@ class AskAI:
                                         allowed_mentions=discord.AllowedMentions.none())
                     return
                 facts.set_asker(message.author.id)
+                facts.help_url = self._jump_url()   # "what can you do?" links the posted guide
                 # management=False limits members to their own records, both
                 # before the AI and inside every tool (FactBook.run).
                 ans = await answer_question(await self.session(), question, facts, history, earlier,

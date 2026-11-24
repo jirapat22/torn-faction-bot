@@ -35,6 +35,9 @@ MEMORY_USERS = 400          # people kept (the faction is ~40, plus guests)
 MEMORY_DAYS = 90            # someone silent this long is forgotten
 MEMORY_LINES = 400          # full lines remembered per person
 RECENT_PARTS = 20           # parts per slot a person won't see again soon
+# Jokes and roasts are the punchline itself: a person should hear every one
+# before any comes back, so these slots remember far more.
+SLOT_KEEP = {'joke': 150, 'roast': 120, 'self': 40, 'ball': 30}
 
 
 def _key(text):
@@ -75,7 +78,7 @@ class ChatMemory:
         for slot, part in slots.items():
             lst = u['parts'].setdefault(slot, [])
             lst.append(_key(part))
-            del lst[:-RECENT_PARTS]
+            del lst[:-SLOT_KEEP.get(slot, RECENT_PARTS)]
         u['lines'].append(_key(line))
         del u['lines'][:-MEMORY_LINES]
         self.prune(now)
@@ -660,4 +663,426 @@ def all_parts():
             out += list(v)
     for v in DAYPART_OPENERS.values():
         out += v
+    return out
+
+
+# ---------------------------------------------------------------------------
+# About the bot (Pat, 23/11/2026). Ikaros22 is Pat's Torn name.
+# ---------------------------------------------------------------------------
+
+CREATOR = 'Ikaros22'
+
+ABOUT = {
+    'who': {
+        'rx': r"who (?:are|r) (?:you|u|ya)|what (?:are|r) (?:you|u)|introduce yourself|what'?s your name|"
+              r"what is your name|who is this|who'?s this|tell me about (?:yourself|you)|who is apex ?punk",
+        'openers': ["Who am I? 😏", "Glad you asked! 🎤", "Ayy, the intro! 🤘", "Allow me to introduce myself! 🎩",
+                    "Oh, you don't know me yet? 👀", "The one and only! 🏆", "Story time! 📖", "Pull up a crate! 📦"],
+        'core': [
+            "I'm ApexPunk, the Ascended Punks faction bot, hot-wired together in a Torn back alley from a busted "
+            "vending machine, a stolen police scanner and a lot of duct tape.",
+            "I'm ApexPunk, the faction's bot: I keep the books, watch wars, chains, flights and OCs, and answer "
+            "questions about all of it.",
+            "I'm ApexPunk. I live in the faction armoury, keep the records and watch the enemy so you don't have to.",
+            "I'm the Ascended Punks' own bot, ApexPunk: part record keeper, part lookout, part bad comedian.",
+        ],
+        'closer': INVITES,
+    },
+    'ai': {
+        'rx': r"(?:are|r) (?:you|u) (?:an? )?(?:ai|bot|robot|real|human|person|a real person|chat ?gpt|gpt|"
+              r"claude|gemini)|(?:is this|are you) (?:an? )?(?:ai|bot)|"
+              r"what (?:ai|model|llm) (?:are|do) (?:you|u)(?: use)?",
+        'openers': ["Busted! 🤖", "Beep boop, yes. 🤖", "Real? I'm realer than your gym routine. 💪",
+                    "Human? Please, I'm way better looking. 💅", "Good question! 🧠", "Honest answer? 🫡"],
+        'core': [
+            "I'm a bot, made by Ikaros22. Records answers come straight from the faction's own files, and for "
+            "chatty or tricky questions I borrow a brain from an AI service.",
+            "I'm a bot built by Ikaros22. The numbers I give come from the bot's records, never made up, and an "
+            "AI only helps me word the trickier answers.",
+            "Not human, not quite alive: a bot Ikaros22 built. The records are real, the attitude is extra.",
+        ],
+        'closer': CHEEKY,
+    },
+    'maker': {
+        'rx': r"who (?:made|built|created|coded|wrote|programmed|owns|runs) (?:you|u|this bot|the bot)|"
+              r"who(?:'?s| is) (?:your|ur) (?:creator|maker|dev|developer|owner|daddy|mum|mom|dad|boss)|"
+              r"who do you (?:work for|belong to)",
+        'openers': ["That'd be the legend, Ikaros22. 👑", "Credit where it's due! 🏆", "My maker? 🛠️",
+                    "Ah, the mad scientist! 🧪", "Respect the creator! 🙏", "Who else? 😎"],
+        'core': [
+            "Ikaros22 built me, wired me up and taught me everything I know.",
+            "Ikaros22 made me. Blame Ikaros22 for the jokes.",
+            "I was built by Ikaros22, one bolt and one bad decision at a time.",
+            "Ikaros22 is my creator. I'm basically Ikaros22's most loyal, loudest project.",
+        ],
+        'closer': CHEEKY,
+    },
+    'alive': {
+        'rx': r"(?:are|r) (?:you|u) (?:still )?(?:alive|ok|okay|broken|working|sentient|conscious)|do you (?:sleep|dream|eat|feel)|"
+              r"do (?:you|u) have (?:feelings|a life)|how old are (?:you|u)|where do (?:you|u) live",
+        'openers': ["Alive enough to roast you! 😈", "Define alive. 🤔", "Still kicking! 🦵",
+                    "Fully operational! ⚙️", "Ha! 😏", "Deep question, punk. 🌌"],
+        'core': [
+            "I live in the faction armoury, I never sleep, and I run on duct tape and loyalty.",
+            "I don't sleep, I don't eat, I just watch the attack log and plot.",
+            "I'm a bot, so no feelings, but I'd still take a bullet for this crew. Metaphorically. I'm bolted to the wall.",
+            "Born in a back alley, raised by the Punks, living in the armoury ever since.",
+        ],
+        'closer': CHEEKY,
+    },
+}
+
+for _spec in ABOUT.values():
+    _spec['rx'] = _rx(rf"(?:{_GREET}[\s,!.]*)?(?:so[\s,]+|but[\s,]+|wait[\s,]+)?(?:{_spec['rx']})")
+
+
+def about_reply(question, uid=None, mem=None, rng=None, help_url=None):
+    """Who/what the bot is, who made it, what it can do. None if not that."""
+    q = (question or '').strip()
+    if len(q) > 90:
+        return None
+    rng = rng or random
+    uid = str(uid or 'anon')
+    if WHAT_CAN_RX.match(q):
+        where = f'the guide here: {help_url}' if help_url else 'the guide (type `@ApexPunk help`)'
+        core = rng.choice([
+            f"Everything I can do is in {where}",
+            f"Check {where}, it's got the full list.",
+            f"The full menu is in {where}",
+        ])
+        opener = pick_part(["Loads! 💪", "Oh, plenty! 😎", "What CAN'T I do? 😏", "Glad you asked! 🎤",
+                            "Buckle up! 🏍️"], 'can:o', uid, mem, rng)
+        line = f'{opener} {core} Records, wars, chains, OCs, flights, rules, jokes and roasts. 🤘'
+        if mem:
+            mem.remember(uid, {'can:o': opener}, line)
+        return line
+    for kind, spec in ABOUT.items():
+        if spec['rx'].match(q):
+            return build_line([(f'about:{kind}:o', spec['openers']), (f'about:{kind}', spec['core']),
+                               (f'about:{kind}:c', spec['closer'])], uid, mem, rng)
+    return None
+
+
+WHAT_CAN_RX = _rx(r"what (?:else )?can (?:you|u) do|what (?:are|r) (?:you|u) (?:for|good for)|"
+                  r"what do (?:you|u) know|what can i ask(?: you)?(?: about)?|what (?:else )?do (?:you|u) do|"
+                  r"how do i use (?:you|u|this bot)|what are your (?:commands|features)")
+
+
+# ---------------------------------------------------------------------------
+# Fun: jokes, roasts, coin, 8-ball, dice, numbers, rate my X, pick X or Y.
+# ---------------------------------------------------------------------------
+
+JOKE_INTROS = ["Alright, alright. 🎤", "Here's one. 😏", "You asked for it. 😈", "Fresh from the armoury. 📦",
+               "Okay, try not to hosp yourself laughing. 🏥", "Drumroll please. 🥁", "Hot off the scanner. 📻",
+               "This one's a banger. 💥", "Get a load of this. 👀", "Brace yourself. 🫣", "Sure thing. 🤘",
+               "One joke, coming up. 🍽️", "Ahem. 🎩", "Listen up, punk. 👂", "I've been saving this one. 💾",
+               "Don't blame me, blame Ikaros22. 🛠️", "Okay, here goes. 🎬", "Comedy hour, armoury edition. 🎭",
+               "Joke incoming. 🚀", "Classic Torn humour. 🏙️"]
+
+JOKES = [
+    "Why did the Torn player bring a ladder to the fight? He heard the enemy's stats were through the roof. 🪜",
+    "My hospital timer and my love life have one thing in common: both say 'come back later'. 🏥",
+    "Why don't enemies play hide and seek with us? Because hiding in hosp only works for so long. 🙈",
+    "What's a mugger's favourite exercise? Running off with your stuff. 🏃",
+    "I asked the hospital for a discount. They said I'm already their best customer. 🏥",
+    "Why did the chain break? It didn't have enough support. Neither do my jokes. ⛓️",
+    "What do you call a Torn player who never trains? A punching bag with a username. 🥊",
+    "I told my enemy I'd see him in hosp. He said 'you first'. He was right. 🚑",
+    "Why are bonus hits like birthday cake? Everyone wants one and someone always takes it early. 🎂",
+    "What's the difference between a level holder and a trap? Nothing, ask anyone who attacked one. 🪤",
+    "Why did the punk fly to Mexico? To get hospitalised somewhere sunny. 🌮",
+    "My energy bar and my motivation have the same problem: they cap and I do nothing about it. ⚡",
+    "Why did the bot cross the road? To get away from the person asking for another joke. 🤖",
+    "How does a Torn player say goodbye? 'See you in hosp.' 👋",
+    "What's a jail's favourite music? Anything with a lot of bars. 🎵",
+    "Why don't we tell secrets in faction chat? Too many leaks, and the plumber's in jail. 🔧",
+    "What do you call a war with no hits? A very long nap. 😴",
+    "My gym coach told me to lift heavy. So I lifted an enemy's stuff. Coach was not impressed. 🏋️",
+    "Why did the chain watcher bring a stopwatch to bed? Habit. ⏱️",
+    "How many punks does it take to change a light bulb? None, we hospitalise the dark. 💡",
+    "Why do enemies fly to Cayman? To hide. Why do they come back? Because we're patient. 🏝️",
+    "Turtling: the only time hiding in hospital counts as a strategy. 🐢",
+    "My OC failed so badly the police sent a thank you card. 🚓",
+    "I'm not saying the enemy is weak, but their hosp time is longer than their fight time. ⌛",
+    "What do you call a punk who forgets to post availability? A strike waiting to happen. Kidding. Mostly. 📅",
+    "What's an enemy's favourite country? Whichever one we're not in. 🗺️",
+    "Why did the attacker bring a map? He kept getting lost in the hospital. 🗺️",
+    "The best way to make a Torn player cry? Show them their energy capped while they slept. 😭",
+    "Why did the bot get a job in the armoury? Because it was already bolted to the wall. 🔩",
+    "Knock knock. Who's there? Leave. Leave who? Leave, not mug, it's war week. 🚪",
+    "What's a chain's favourite dance? The hit and run. 💃",
+    "Why do punks make good cooks? They know how to beat things. 🍳",
+    "How do you know someone's been in Torn too long? They check hospital times before checking the weather. 🌦️",
+    "Why was the enemy faction always cold? Too many hits from the Punks' wind-up. 🌬️",
+    "My doctor said I need more rest. Joke's on him, I've been in his hospital all week. 🛌",
+    "Why don't Torn players trust stairs? They're always up to something. 🪜",
+    "What do you call a mugger in the rain? Wet, and still faster than you. 🌧️",
+    "Why did the faction bot fail the driving test? It kept trying to chain the cars. 🚗",
+    "If hospital beds had frequent flyer miles, I'd own an airline by now. ✈️",
+    "Why do ranked wars never get boring? Because someone always forgets to turtle. 🐢",
+    "Why did the scout bring binoculars to war? To spot the level holders before they spotted him. 🔭",
+    "What's a Torn player's love language? A friendly hosp before logging off. 💕",
+    "Why did the punk get kicked out of the library? Too many attacks on the silence. 📚",
+    "I tried to start a peaceful faction once. We lasted four minutes. 🕊️",
+    "My last fight was so short the hospital didn't even get my name. 🏥",
+    "What's the scariest word in Torn? 'Landed'. Ask anyone who flew home mid-war. 🛬",
+    "Why don't enemies chat in global after a war? Hard to type from a hospital bed. ⌨️",
+    "My crimes success rate is like my dating life: mostly jail. ⛓️",
+    "What do you call an enemy who flew abroad to hide? Delivery. 📦",
+    "Why do punks love Mondays? Fresh week, fresh victims. 📅",
+    "What's a bonus hit's least favourite word? 'Mine'. 🙅",
+    "I'm not lazy, I'm stacking energy. That's my story and I'm sticking to it. 🔋",
+    "What's the fastest way to make friends in Torn? Hospitalise their enemies. 🤝",
+    "Why did the bot refuse to fight? It's a lover, not a fighter. Also it's bolted to the wall. 🔩",
+    "What do you call a war week with no casualties? A dream I had once. 💭",
+    "Why do Torn players hate elevators? They've had enough ups and downs in the hospital. 🛗",
+    "What's a turtle's war plan? Hide, hosp, repeat. 🐢",
+    "My combat strategy is simple: hit first, apologise never. 👊",
+    "What did the enemy say after flying home? 'Why is there a welcome party in my hospital room?' 🎉",
+]
+
+JOKE_OUTROS = ["Ba dum tss. 🥁", "I'll be here all chain. ⛓️", "You're welcome. 😎", "Tough crowd. 😅",
+               "Don't hosp me for that one. 🏥", "Thank you, thank you. 🙇", "Ikaros22 made me say it. 🛠️",
+               "I'm wasted in this armoury. 🎭", "Laugh, it's an order. 🫡", "Hah! 😂", "Comedy gold. 🏆",
+               "Okay that one was rough. 💀", "*mic drop* 🎤", "Want another? Just ask. 🔁", "Tip your bot. 😏",
+               "Peak armoury humour. ⛰️", "Somebody laugh, please. 🦗", "I crack myself up. 🤣",
+               "Rate it out of ten, I dare you. 🔟", "I'll show myself out. 🚪"]
+
+ROAST_INTROS = ["You asked for this. 🔥", "Oh, it's roast time? 😈", "Alright, no mercy. 💀",
+                "Sit down, this'll sting. 🪑", "Volunteer spotted! 🎯", "Bold of you. 😏", "Buckle up. 🏍️",
+                "Grab some ice. 🧊", "Let's go. 🔥", "Don't cry, okay? 🥲", "You sure? Too late. 😈",
+                "Roast mode: ON. 🔛", "Hope you've got a friendly hosp lined up. 🏥", "Fine, you earned it. 🏆",
+                "Calling the hospital in advance. 🚑", "Ooh, a brave one. 🦁", "Here comes the heat. 🌶️",
+                "Light 'em up. 🔥", "Get comfy. 🛋️", "Stand still, this won't take long. 🎯"]
+
+ROASTS = [
+    "You're so soft, enemies use you as a friendly hosp.",
+    "Your attack log reads like a cry for help.",
+    "You've spent so long in hospital the nurses named a bed after you.",
+    "Your gym sessions are so light the weights file noise complaints about the silence.",
+    "Even the muggers feel sorry for you and leave a get-well card.",
+    "You fly abroad so much the airline thinks you're a pilot. You still land in hosp.",
+    "Your energy caps more often than you log in.",
+    "You've got the fighting spirit of a wet napkin.",
+    "Enemies don't scout you, they just see your name and relax.",
+    "You make level holders look honest.",
+    "Your idea of turtling is lying down in the street and hoping.",
+    "You've been hospitalised by people who were offline.",
+    "If losing was a stat, you'd be the strongest player in Torn.",
+    "You chain like a toddler with a stopwatch.",
+    "Your OC role should be called 'the distraction'.",
+    "You're the reason the hospital has a loyalty programme.",
+    "You hit like a sneeze in a hurricane.",
+    "Your mum called. She wants her weak punches back.",
+    "You've been mugged so often the muggers have you on a schedule.",
+    "Even the jail cats won't fight you, it's beneath them.",
+    "You train so little the gym sends you missing person posters.",
+    "You call it 'stacking energy', we call it 'forgetting to log in'.",
+    "Your war plan is basically 'get hit and hope they get bored'.",
+    "The enemy faction keeps you on their list as a free point.",
+    "Your bonus hit timing is so bad you'd take the hit on a ten and call it fifty.",
+    "You're so slow the chain timer expired while you loaded the page.",
+    "You're the human version of a 404 error.",
+    "You've got main character energy and side quest damage.",
+    "Your crimes fail so hard the police use them for training videos.",
+    "Even your shadow has better stats than you, and it leaves when the lights go off.",
+    "You're not a level holder, you're just low level.",
+    "You walk into a fight like it's a spa day, and leave in an ambulance.",
+    "If brains were energy, you'd be capped at zero.",
+    "You're the reason the rulebook has so many bold bits.",
+    "Your best fight was the one you lost slowly.",
+    "You'd lose a staring contest to a hospital ceiling, and you've had practice.",
+    "The only thing you've ever chained is excuses.",
+    "Your mum's the only one who's ever hit harder than you, and she was trying to hug you.",
+    "You get farmed so often the enemy calls you 'the harvest'.",
+    "When you fly, the enemy faction throws a welcome party at the airport.",
+    "Your attacks are so polite they should come with a thank you card.",
+    "You'd get mugged in an empty room.",
+    "Honestly, the vending machine I was built from had more fight in it.",
+    "You've been on the losing side so long you've got a reserved parking spot there.",
+    "You call yourself a punk but you've got the attitude of a decaf latte.",
+]
+
+ROAST_OUTROS = ["Love you though. 🖤", "Still my favourite punk. 🤘", "Now go prove me wrong. 💪",
+                "Ice that burn. 🧊", "No refunds. 🚫", "Want an ambulance? 🚑", "Get wrecked. 💀",
+                "Nothing personal. Okay, a bit personal. 😏", "Respect for asking though. ✊",
+                "You'll bounce back. Probably from a hospital bed. 🏥", "Still crew. 🤝",
+                "Go train, it helps. 🏋️", "That's love, punk style. 🖤", "Heal up. 🩹", "Cry about it. 😭",
+                "Same time tomorrow? 😈", "Ikaros22 says sorry. I don't. 😎", "Mic drop. 🎤",
+                "Toughen up, buttercup. 🌼", "Hug? No? Fair. 🫂"]
+
+SELF_ROASTS = [
+    "I'm a vending machine with a police scanner and anger issues. I peaked in the back alley.",
+    "I'm literally held together by duct tape and spite, and the duct tape is doing most of the work.",
+    "I'm a bot bolted to the armoury wall. My cardio is my cooling fan.",
+    "I can't even leave the armoury, I'm basically a talking shelf.",
+    "My jokes are so old they qualify for a pension.",
+    "I was built from a busted vending machine. Somewhere, a can of soda is still stuck in me.",
+    "I watch everyone else fight while I count bullets. I'm the faction's accountant with attitude.",
+    "My idea of a wild night is reading the attack log twice.",
+    "I've never won a fight, mainly because I've never been in one, because I can't move.",
+    "I call myself punk, but I run on a schedule. Every 5 minutes. Like a nerd.",
+    "I ask AI services for help with words. Imagine a punk asking for help with words.",
+    "I'm the only member who's never been hospitalised, and that's only because nobody can find me.",
+]
+
+ROAST_REFUSALS = ["I only roast volunteers, and they have to ask for themselves. 🔥 Want me to roast YOU?",
+                  "Nah, I don't roast the crew behind their backs. 🤐 Say 'roast me' if you're brave.",
+                  "Not my style to go after someone who isn't here. Ask me to roast you instead. 😈"]
+
+EIGHT_BALL = ["It is certain. 💯", "Without a doubt. ✅", "Yes, definitely. 👍", "Hell yes. 🔥",
+              "Signs point to yes. 🪧", "Most likely. 😏", "Outlook good. 🌤️", "You can count on it. 🧮",
+              "Yep, and it'll be glorious. 🎆", "Absolutely, punk. 🤘", "Reply hazy, try again. 🌫️",
+              "Ask again later, I'm busy guarding the armoury. 🛡️", "Better not tell you now. 🤐",
+              "Cannot predict now, the scanner's fuzzy. 📻", "Concentrate and ask again. 🧘",
+              "Don't count on it. 🙅", "My reply is no. ❌", "Hell no. 🚫", "Outlook not so good. 🌧️",
+              "Very doubtful. 🤨", "Not a chance in hosp. 🏥", "The duct tape says no. 🛠️",
+              "The duct tape says yes. 🛠️", "Only if you stack first. 🔋", "Absolutely not, and stop asking. 😤",
+              "Maybe, if you bribe me with compliments. 💋", "Ask your mum. 😏", "Yes, but you won't like it. 😬",
+              "No, but in a fun way. 🎉", "The stars say yes, the hospital says maybe. 🏥"]
+
+BALL_INTROS = ["🎱 Shaking the ball...", "🎱 The magic 8-ball has spoken:", "🎱 *shake shake shake*",
+               "🎱 Consulting the spirits of the armoury...", "🎱 Let me ask the ball...",
+               "🎱 Hmm, the ball says:", "🎱 Rolling...", "🎱 Drumroll..."]
+
+COIN_INTROS = ["🪙 Flipping...", "🪙 *flick*", "🪙 Up it goes...", "🪙 Here goes nothing...",
+               "🪙 Spinning...", "🪙 Calling it in the air..."]
+COIN_OUTROS = ["Fate has spoken. ⚖️", "No take-backs. 🚫", "Best of three? 😏", "The coin never lies. 🪙",
+               "Go with it. 🤘", "Don't argue with the coin. 🙅"]
+
+RATE_COMMENTS = {
+    (0, 3): ["Oof. Burn it and start again. 🔥", "I've seen better in the hospital bin. 🗑️",
+             "That's a hosp-worthy disaster. 🏥", "Not your finest hour. 😬", "Even the muggers would pass. 🙅"],
+    (4, 6): ["Solid middle of the pack. 🤷", "Not bad, not great, very Torn. 🏙️", "Mid, but lovable. 😏",
+             "Room to grow, punk. 🌱", "Passable. The armoury approves, barely. ✅"],
+    (7, 8): ["Pretty damn good. 🔥", "Respectable, punk approved. 🤘", "Ooh, nice. 😎", "Strong showing. 💪",
+             "I'd brag about that. 📣"],
+    (9, 10): ["Absolute banger. 💥", "Elite. Frame it. 🖼️", "Chef's kiss. 👌", "Legendary. 🏆",
+              "The armoury bows. 🙇"],
+}
+
+# "rate my activity / hits / war": records, not a toy score.
+RATE_RECORDS_RX = re.compile(r"\b(?:activ\w*|hits?|wars?|chains?|ocs?|crimes?|stats?|strikes?|attendance|"
+                             r"performance|contribution|respect|level|xan\w*|record\w*|online|energy|gym|"
+                             r"training|progress|score|damage|faction)\b", re.I)
+
+JOKE_RX = _rx(r"(?:tell|give|hit) (?:me|us) (?:a |another |one more |some |an? )?(?:\w+ )?jokes?(?: about [\w\s]+)?|"
+              r"(?:another |one more |a )?jokes?(?: about [\w\s]+)?(?: pls| please)?|make (?:me|us) laugh|say something funny|"
+              r"(?:got |know )?any (?:good )?jokes\??|(?:do you know|you got) (?:a|any) jokes?|"
+              r"(?:tell|give) (?:me|us) something funny|be funny")
+ROAST_ME_RX = _rx(r"roast me(?: (?:hard|bad|pls|please|bro|then|go|now|again|harder))*|"
+                  r"(?:go |come on |pls |please )?roast me|give me a roast|insult me|"
+                  r"(?:say|tell me) something mean(?: about me)?|be mean to me|destroy me|flame me")
+ROAST_SELF_RX = _rx(r"roast (?:yourself|urself|you|the bot|apex ?punk|bot)|insult yourself")
+ROAST_ANY_RX = re.compile(r"^\s*(?:pls |please |go |can you |could you )?(?:roast|flame|destroy|insult)\s+\S", re.I)
+COIN_RX = _rx(r"(?:flip|toss) (?:a |the )?coin|coin ?(?:flip|toss)|heads or tails\??")
+BALL_RX = re.compile(r"^\s*(?:magic\s*)?(?:8|eight)[\s-]*ball\b[\s,:!?]*(.*)$|^\s*(?:yes or no)\s*[,:?]?\s*(.+)$", re.I)
+ROLL_RX = re.compile(r"^\s*(?:roll|throw)(?: (?:a|the|me a))?\s*(?:(\d{1,2})?\s*d(\d{1,3})|dice|die)\s*[!.?]*\s*$"
+                     r"|^\s*(?:roll|throw)\s+(?:a|the)?\s*(?:dice|die)\s*[!.?]*\s*$", re.I)
+NUMBER_RX = re.compile(r"^\s*(?:pick|choose|give me|gimme|random)\s+(?:me\s+)?(?:a\s+)?(?:random\s+)?number"
+                       r"(?:\s+(?:between|from)\s+(-?\d{1,9})\s+(?:and|to|-)\s+(-?\d{1,9}))?\s*[!.?]*\s*$", re.I)
+RATE_RX = re.compile(r"^\s*(?:rate|score)\s+(?:my|our)\s+([\w' \-]{2,40}?)\s*(?:out of (?:10|ten)|/10)?\s*[!.?]*\s*$", re.I)
+CHOOSE_RX = re.compile(r"^\s*(?:pick|choose|decide)[:,]?\s+(?:one[:,]?\s+|between\s+)?(.{1,60}?)\s+or\s+(.{1,60}?)\s*[?!.]*\s*$", re.I)
+RPS_RX = re.compile(r"^\s*(?:rock[\s,]*paper[\s,]*scissors|rps)[\s,:!-]*(rock|paper|scissors)?\s*[!.?]*\s*$|"
+                    r"^\s*(rock|paper|scissors)\s*[!.?]*\s*$", re.I)
+
+
+def _remembered(uid, mem, slots, line):
+    if mem:
+        mem.remember(uid, slots, line)
+    return line
+
+
+def fun_reply(question, uid=None, mem=None, rng=None, others=()):
+    """
+    Jokes, "roast me", coin, 8-ball, dice, numbers, "rate my X", "pick X or
+    Y". `others` = members named in the message who aren't the asker: a
+    joke or roast never goes near them (Pat's hard line). None if not fun.
+    """
+    q = (question or '').strip()
+    if not q or len(q) > 160:
+        return None
+    rng = rng or random
+    uid = str(uid or 'anon')
+    if ROAST_ME_RX.match(q) and not others:
+        return build_line([('roast:o', ROAST_INTROS), ('roast', ROASTS), ('roast:c', ROAST_OUTROS)],
+                          uid, mem, rng)
+    if ROAST_SELF_RX.match(q):
+        return build_line([('roast:o', ROAST_INTROS), ('self', SELF_ROASTS), ('roast:c', CHEEKY)], uid, mem, rng)
+    if ROAST_ANY_RX.match(q) and not others and not RATE_RECORDS_RX.search(q):
+        # "roast the guy above me", "roast @someone": not a member the bot
+        # knows, still not the asker. Members by name go the records way.
+        return rng.choice(ROAST_REFUSALS)
+    if JOKE_RX.match(q):
+        if others:
+            return rng.choice(ROAST_REFUSALS).replace('roast volunteers', 'joke about volunteers')
+        topic = re.search(r"about ([\w\s]+)", q, re.I)
+        pool = JOKES
+        if topic:
+            words = [w for w in re.findall(r"\w{3,}", topic.group(1).lower())]
+            stems = [w.rstrip('s') for w in words]
+            matching = [j for j in JOKES if any(st in j.lower() for st in stems)]
+            pool = matching or JOKES
+        line = build_line([('joke:o', JOKE_INTROS), ('joke', pool), ('joke:c', JOKE_OUTROS)], uid, mem, rng)
+        # Jokes on their own lines: setup, punchline, rimshot read better.
+        return line
+    if COIN_RX.match(q):
+        side = rng.choice(['Heads', 'Tails'])
+        intro = pick_part(COIN_INTROS, 'coin:o', uid, mem, rng)
+        outro = pick_part(COIN_OUTROS, 'coin:c', uid, mem, rng)
+        return _remembered(uid, mem, {'coin:o': intro, 'coin:c': outro}, f'{intro} **{side}**! {outro}')
+    m = BALL_RX.match(q)
+    if m and (m.group(1) or m.group(2) or '').strip():
+        if others:
+            return rng.choice(ROAST_REFUSALS).replace('roast volunteers', 'predict things about volunteers')
+        intro = pick_part(BALL_INTROS, 'ball:o', uid, mem, rng)
+        ans = pick_part(EIGHT_BALL, 'ball', uid, mem, rng)
+        return _remembered(uid, mem, {'ball:o': intro, 'ball': ans}, f'{intro} **{ans}**')
+    if ROLL_RX.match(q):
+        m = ROLL_RX.match(q)
+        n = int(m.group(1) or 1) if m.group(2) else 1
+        sides = int(m.group(2)) if m.group(2) else 6
+        n, sides = max(1, min(n, 10)), max(2, min(sides, 1000))
+        rolls = [rng.randint(1, sides) for _ in range(n)]
+        shown = ' + '.join(str(r) for r in rolls) + (f' = **{sum(rolls)}**' if n > 1 else '')
+        return f'🎲 {"d" + str(sides) if n == 1 else f"{n}d{sides}"}: {shown if n > 1 else f"**{rolls[0]}**"}'
+    m = NUMBER_RX.match(q)
+    if m:
+        lo, hi = (int(m.group(1)), int(m.group(2))) if m.group(1) else (1, 100)
+        lo, hi = min(lo, hi), max(lo, hi)
+        return f'🔢 {rng.choice(["Your number is", "I pick", "Fate says", "The armoury picks"])} ' \
+               f'**{rng.randint(lo, hi)}**. {rng.choice(CHEEKY)}'
+    m = RATE_RX.match(q)
+    if m and not others and not RATE_RECORDS_RX.search(m.group(1)):
+        score = rng.randint(2, 10)
+        comment = next(rng.choice(v) for (a, b), v in RATE_COMMENTS.items() if a <= score <= b)
+        return f'Your {m.group(1).strip()}? **{score}/10**. {comment}'
+    m = CHOOSE_RX.match(q)
+    if m and not others and not RATE_RECORDS_RX.search(q):
+        a, b = m.group(1).strip(' ,'), m.group(2).strip(' ,')
+        if a and b and a.lower() != b.lower():
+            pick = rng.choice([a, b])
+            return f'{rng.choice(["Easy.", "No contest.", "Gut says", "The duct tape says", "Definitely"])} ' \
+                   f'**{pick}**. {rng.choice(CHEEKY)}'
+    m = RPS_RX.match(q)
+    if m:
+        theirs = (m.group(1) or m.group(2) or '').lower()
+        mine = rng.choice(['rock', 'paper', 'scissors'])
+        icon = {'rock': '🪨', 'paper': '📄', 'scissors': '✂️'}
+        if not theirs:
+            return f'I throw **{mine}** {icon[mine]}. Your move: say rock, paper or scissors. 😏'
+        beats = {'rock': 'scissors', 'paper': 'rock', 'scissors': 'paper'}
+        verdict = ("Draw. Again? 🔁" if mine == theirs else
+                   "I win! Get hosped. 😈" if beats[mine] == theirs else "You win this time, punk. 😤")
+        return f'You: {theirs} {icon[theirs]} vs me: **{mine}** {icon[mine]}. {verdict}'
+    return None
+
+
+def all_fun_parts():
+    out = JOKE_INTROS + JOKES + JOKE_OUTROS + ROAST_INTROS + ROASTS + ROAST_OUTROS + SELF_ROASTS + \
+          ROAST_REFUSALS + EIGHT_BALL + BALL_INTROS + COIN_INTROS + COIN_OUTROS
+    for v in RATE_COMMENTS.values():
+        out += v
+    for spec in ABOUT.values():
+        out += spec['openers'] + spec['core']
     return out
