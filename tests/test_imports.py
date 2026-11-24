@@ -10898,6 +10898,9 @@ def test_casual_chat_mixes_parts_and_never_repeats_for_a_person():
         'bored': ["i'm bored", 'so bored', 'boring'],
         'sorry': ['sorry', 'my bad', 'oops'],
     }
+    # Thai speakers in the crew (audit 25/11/2026: these went to the AI).
+    cases['hello'] += ['sawasdee krub', 'สวัสดีครับ', 'หวัดดี']
+    cases['thanks'] += ['ขอบคุณครับ', 'khob khun krub', 'kop kun ka']
     for kind, qs in cases.items():
         for q in qs:
             assert chat_kind(q) == kind, (q, chat_kind(q))
@@ -11007,8 +11010,11 @@ def test_about_the_bot_and_fun_are_bot_made_and_never_aim_at_others():
     # "roast Ellanna" never gets a roast (existing judging path, AI stub).
     async def stub(session, messages, f, used):
         return 'Nope.', list(messages)
-    ans = asyncio.run(answer_question(None, 'roast Ellanna', Facts(), [], providers=[('x', stub)]))
-    assert not any(r in ans.text for r in ROASTS)
+    from features.ask_chat import ROAST_REFUSALS
+    for mgmt in (True, False):
+        for q in ['roast Ellanna', 'say something mean about Ellanna']:
+            ans = asyncio.run(answer_question(None, q, Facts(), [], providers=[('x', stub)], management=mgmt))
+            assert ans.text in ROAST_REFUSALS, (q, ans.text)   # a friendly no, never a roast
 
 
 def test_new_member_basics_and_faction_facts_are_quoted_not_invented():

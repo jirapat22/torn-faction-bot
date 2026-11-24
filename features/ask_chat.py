@@ -566,7 +566,9 @@ _FILL = (r"(?:mate|boss|bro|bruh|dude|man|punk|apex(?:punk)?|bot|buddy|there|all
          r"[\U0001F300-\U0001FAFF☀-➿️‍])")
 _TAIL = rf"(?:[\s,!.]*{_FILL})*[\s!.?~]*$"
 _LEAD = rf"^\s*(?:{_FILL}[\s,!.]*)*"
-_GREET = r"(?:h(?:i+|e+y+a*|ello+|owdy|iya)|yo+|sup|wass?up|wh?at'?s ?up|g'?day|oi+|ahoy|hola|ayo|ello)"
+# Thai too (the crew has Thai speakers): sawasdee / สวัสดี / หวัดดี.
+_GREET = (r"(?:h(?:i+|e+y+a*|ello+|owdy|iya)|yo+|sup|wass?up|wh?at'?s ?up|g'?day|oi+|ahoy|hola|ayo|ello|"
+          r"sa+wa+s?dee+(?: (?:krub|khrap|krap|ka|kha|na))?|สวัสดี\S*|หวัดดี\S*|ดีจ้า|ดีครับ|ดีค่ะ)")
 
 
 def _rx(body):
@@ -581,7 +583,8 @@ CHAT_RX = [
     ('hello', _rx(rf"{_GREET}|(?:good )?(?:morning|mornin'?|afternoon|arvo|evening|eve)|gm|👋")),
     ('thanks', _rx(r"thanks?(?: (?:you|u|ya|heaps|a ton|a bunch|again))?|thx|thnx|ty(?:sm|vm)?|cheers|ta|"
                    r"much appreciated|appreciate (?:it|you|ya|u)|nice one|good (?:job|work|stuff)|well done|"
-                   r"legend|🙏|❤️|👍|great job|you'?re a lifesaver|lifesaver")),
+                   r"legend|🙏|❤️|👍|great job|you'?re a lifesaver|lifesaver|"
+                   r"kh?o+[bp] ?(?:kh?|c)u+n(?: (?:krub|khrap|krap|ka|kha|mak))*|ขอบคุณ\S*|ขอบใจ\S*|แต๊งกิ้ว\S*")),
     ('bye', _rx(r"bye+|bye bye|cya(?: later| soon| tomorrow| tmr?w?)?|see (?:ya|you|u)(?: later| soon| tomorrow)?|later|laters|"
                 r"catch (?:ya|you)(?: later)?|peace(?: out)?|i'?m off|gotta go|g2g|gtg|ttyl|adios|ciao")),
     ('night', _rx(r"night|nighty?(?: night)?|gn|good ?night|sleep (?:well|tight)|off to (?:bed|sleep)|"
@@ -974,7 +977,9 @@ ROAST_ME_RX = _rx(r"roast me(?: (?:hard|bad|pls|please|bro|then|go|now|again|har
                   r"(?:go |come on |pls |please )?roast me|give me a roast|insult me|"
                   r"(?:say|tell me) something mean(?: about me)?|be mean to me|destroy me|flame me")
 ROAST_SELF_RX = _rx(r"roast (?:yourself|urself|you|the bot|apex ?punk|bot)|insult yourself")
-ROAST_ANY_RX = re.compile(r"^\s*(?:pls |please |go |can you |could you )?(?:roast|flame|destroy|insult)\s+\S", re.I)
+ROAST_ANY_RX = re.compile(r"^\s*(?:pls |please |go |can you |could you )?(?:roast|flame|destroy|insult)\s+\S|"
+                          r"\b(?:say|tell me) (?:something|anything) (?:mean|nasty|rude|bad) about\b|"
+                          r"\bmake fun of\b|\btrash[- ]?talk\b", re.I)
 COIN_RX = _rx(r"(?:flip|toss) (?:a |the )?coin|coin ?(?:flip|toss)|heads or tails\??")
 BALL_RX = re.compile(r"^\s*(?:magic\s*)?(?:8|eight)[\s-]*ball\b[\s,:!?]*(.*)$|^\s*(?:yes or no)\s*[,:?]?\s*(.+)$", re.I)
 ROLL_RX = re.compile(r"^\s*(?:roll|throw)(?: (?:a|the|me a))?\s*(?:(\d{1,2})?\s*d(\d{1,3})|dice|die)\s*[!.?]*\s*$"
@@ -1009,6 +1014,10 @@ def fun_reply(question, uid=None, mem=None, rng=None, others=()):
                           uid, mem, rng)
     if ROAST_SELF_RX.match(q):
         return build_line([('roast:o', ROAST_INTROS), ('self', SELF_ROASTS), ('roast:c', CHEEKY)], uid, mem, rng)
+    if ROAST_ANY_RX.search(q) and others:
+        # "roast Ellanna": never, for anyone (Pat's hard line). A friendly
+        # no instead of a records lookup.
+        return pick_part(ROAST_REFUSALS, 'roast:no', uid, mem, rng)
     if ROAST_ANY_RX.match(q) and not others and not RATE_RECORDS_RX.search(q):
         # "roast the guy above me", "roast @someone": not a member the bot
         # knows, still not the asker. Members by name go the records way.
