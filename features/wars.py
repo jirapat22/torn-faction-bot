@@ -1053,6 +1053,24 @@ class WarTracker:
 
         return '\n\n'.join(lines) if lines else None
 
+    async def _war_attack_stats_for(self, war_info, enemy_faction_id, war_start, war_end):
+        """The attacks-log stats behind the board and the Xanax report.
+
+        war_info may carry 'attack_stats' already worked out (the war-end
+        flow reads the log once and hands it on, so the war-end posts can't
+        disagree). Otherwise the log is read for [war_start, war_end].
+
+        No war start means the window is unknown, so the answer is None
+        ("unknown", the reports label it), never {}: {} rendered as a
+        confident 0 Chn / 0 Hsp for everyone. That happened on war 52994
+        (24/11/2026), when the war-end flow passed no start time at all."""
+        if 'attack_stats' in war_info:
+            return war_info['attack_stats']
+        if not war_start:
+            logger.error(f"War {war_info.get('war_id')}: no war start time, attacks log stats unknown")
+            return None
+        return await self._get_war_attack_stats(enemy_faction_id, war_start, war_end)
+
     async def format_warboard_embed(self, war_info):
         """
         Create Discord embeds for war participation leaderboard.
@@ -1134,11 +1152,7 @@ class WarTracker:
         data_source = 'report'
 
         # Always fetch attacks log for outside hits and incoming split
-        if not war_start:
-            attack_stats = {}
-        else:
-            attack_stats = await self._get_war_attack_stats(
-                enemy_faction_id, war_start, war_end)
+        attack_stats = await self._war_attack_stats_for(war_info, enemy_faction_id, war_start, war_end)
         # None means the log couldn't be read in full. Render the report from
         # what the war report alone provides and label the gap, rather than
         # printing zeros that read as "nobody was hit".
@@ -1427,11 +1441,7 @@ class WarTracker:
                         enemy_faction_data = fdata
 
         # Fetch attacks log for chain outside hits
-        if not war_start:
-            attack_stats = {}
-        else:
-            attack_stats = await self._get_war_attack_stats(
-                enemy_faction_id, war_start, war_end)
+        attack_stats = await self._war_attack_stats_for(war_info, enemy_faction_id, war_start, war_end)
         xan_log_ok = attack_stats is not None
         if not attack_stats:
             attack_stats = {}
@@ -3027,8 +3037,16 @@ class WarTracker:
                 # Each is wrapped separately: a failure in one must not cost
                 # the other, or the strike candidates that follow.
                 if management_channel:
+                    # The war is over: give the board and the Xanax report its
+                    # window and the attacks-log stats already read above.
+                    # Without them both showed 0 outside hits / 0 friendly
+                    # hosps for everyone and "In Progress" (war 52994,
+                    # 24/11/2026: 49 friendly hosps were in the log).
                     mgmt_war = {'war_id': self.current_war_id,
-                                'data': {'factions': mgmt_factions}}
+                                'data': {'factions': mgmt_factions,
+                                         'war': {'start': war_start_ts, 'end': war_end_ts}},
+                                'is_active': False,
+                                'attack_stats': attack_stats}
                     try:
                         board = await self.format_warboard_embed(mgmt_war)
                         board = [b for b in (board if isinstance(board, list)

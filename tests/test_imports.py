@@ -1720,6 +1720,50 @@ def test_finished_war_stats_stop_at_the_war_end():
         wars_mod.fetch_faction_attacks = orig
 
 
+def test_war_end_xan_and_board_get_the_window_and_log():
+    """
+    War 52994 (24/11/2026): the Xanax report posted at war end showed 0
+    outside hits and 0 friendly hosps for everyone, and "In Progress". The
+    war-end flow handed it no start time and no finished flag, and a missing
+    start was read as {} (confident zeros) instead of "unknown". The log had
+    49 friendly hosps.
+    """
+    import asyncio
+    import utils.torn_api as torn_api_mod
+    import features.wars as wars_mod
+    from features.wars import WarTracker
+    from config import TORN_FACTION_ID
+
+    ours = str(TORN_FACTION_ID)
+    mgr = WarTracker(bot=None)
+    async def no_report(war_id=None): return None
+    mgr._fetch_rankedwarreport = no_report
+    async def members(*a, **k): return {'7': {'name': 'Hosper'}}
+    orig = torn_api_mod.fetch_faction_members
+    torn_api_mod.fetch_faction_members = members
+    factions = {ours: {'name': 'Us', 'score': 5377}, '999': {'name': 'Them', 'score': 2731}}
+    stats = {'7': {'war_hits': 20, 'chain_outside_hits': 3, 'hosps_given': 5}}
+    try:
+        war = {'war_id': 52994, 'data': {'factions': factions, 'war': {'start': 1, 'end': 2}},
+               'is_active': False, 'attack_stats': stats}
+        out = asyncio.run(mgr.format_xan_embed(war))
+        text = ' '.join((e.description or '') + ' '.join(f.value for f in e.fields)
+                        for e in (out if isinstance(out, list) else [out]))
+        assert 'VICTORY' in text and 'In Progress' not in text
+        assert 'Hosper' in text and '28' in text, 'war 20 + chain 3 + hosps 5'
+
+        # No start time and no stats handed over: unknown, never zeros
+        called = []
+        async def never(*a, **k):
+            called.append(a)
+            return {}
+        mgr._get_war_attack_stats = never
+        got = asyncio.run(mgr._war_attack_stats_for({'war_id': 1}, '999', 0, None))
+        assert got is None and not called
+    finally:
+        torn_api_mod.fetch_faction_members = orig
+
+
 def test_attacks_shape_change_is_not_read_as_no_attacks():
     """
     The outage door closed, so this checks the shape door. The paginator stops
@@ -8158,7 +8202,20 @@ def test_ask_ai_audit_fixes_chat_numbers_war_order_and_groq_hiccups():
 
     # Cerebras and Gemini: same code path, skipped instantly with no key, in
     # the chain after Groq's big model and before its small one.
-    assert [n for n, _ in a.PROVIDERS] == ['Groq', 'Cerebras', 'Gemini', 'Gemini lite', 'Groq small', 'local AI']
+    assert [n for n, _ in a.PROVIDERS] == ['Groq', 'Cerebras', 'Gemini', 'Mistral', 'OpenRouter',
+                                          'Gemini lite', 'Groq small', 'local AI']
+    # Mistral and OpenRouter (free backups, Pat 24/11/2026): skipped
+    # instantly while no key is set, like Cerebras
+    for key, fn in (('MISTRAL_API_KEY', a._ask_mistral), ('OPENROUTER_API_KEY', a._ask_openrouter)):
+        saved_k = os.environ.pop(key, None)
+        try:
+            asyncio.run(fn(Session([]), [], fb, []))
+            assert False, f'no {key} must raise NotCapable'
+        except a.NotCapable as e:
+            assert 'no ' in str(e) and 'key set' in str(e)
+        finally:
+            if saved_k is not None:
+                os.environ[key] = saved_k
     saved = os.environ.pop('CEREBRAS_API_KEY', None)
     try:
         asyncio.run(a._ask_cerebras(Session([]), [], fb, []))
@@ -10845,6 +10902,7 @@ if __name__ == '__main__':
     test_saved_war_history_records_real_hits_taken()
     test_fetch_faction_attacks_reports_outage_as_none()
     test_finished_war_stats_stop_at_the_war_end()
+    test_war_end_xan_and_board_get_the_window_and_log()
     test_attacks_shape_change_is_not_read_as_no_attacks()
     test_attack_log_outage_is_not_a_quiet_war()
     test_attack_log_paging_does_not_skip_the_boundary_second()

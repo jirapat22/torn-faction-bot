@@ -1401,6 +1401,14 @@ CLOUD = {
                os.getenv('GEMINI_MODEL', 'gemini-3.5-flash')),
     'Gemini lite': ('https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', 'GEMINI_API_KEY',
                     os.getenv('GEMINI_LITE_MODEL', 'gemini-flash-lite-latest')),
+    # Extra free backups (Pat, 24/11/2026; Cerebras became paid). Both speak
+    # the same OpenAI-style API with tool calls. Skipped instantly while no
+    # key is set; the model can be changed in the env file without a deploy
+    # of new code.
+    'Mistral': ('https://api.mistral.ai/v1/chat/completions', 'MISTRAL_API_KEY',
+                os.getenv('MISTRAL_MODEL', 'mistral-small-latest')),
+    'OpenRouter': ('https://openrouter.ai/api/v1/chat/completions', 'OPENROUTER_API_KEY',
+                   os.getenv('OPENROUTER_MODEL', 'openai/gpt-oss-120b:free')),
 }
 
 
@@ -1481,10 +1489,11 @@ async def _ask_groq_small(session, messages, facts, used):
 
 
 async def _ask_groq_big(session, messages, facts, used):
-    # Wait only briefly for the big model: the small one is a better next
-    # step than a long wait (measured: a faction-wide question uses ~7,000 of
-    # the 8,000 tokens/min, so two in a minute hit the limit).
-    return await _ask_groq(session, messages, facts, used, max_wait=15)
+    # Wait only briefly for the big model: Gemini answered in 2-3s when Groq
+    # was busy (real log, 24/11/2026), so a 15s wait only made a busy moment
+    # slower (Pat: shorten it). A faction-wide question uses ~7,000 of the
+    # 8,000 tokens/min, so two in a minute hit the limit.
+    return await _ask_groq(session, messages, facts, used, max_wait=5)
 
 
 async def _ask_cerebras(session, messages, facts, used):
@@ -1495,6 +1504,14 @@ async def _ask_gemini(session, messages, facts, used):
     return await _ask_groq(session, messages, facts, used, max_wait=15, provider='Gemini')
 
 
+async def _ask_mistral(session, messages, facts, used):
+    return await _ask_groq(session, messages, facts, used, max_wait=5, provider='Mistral')
+
+
+async def _ask_openrouter(session, messages, facts, used):
+    return await _ask_groq(session, messages, facts, used, max_wait=5, provider='OpenRouter')
+
+
 async def _ask_gemini_lite(session, messages, facts, used):
     return await _ask_groq(session, messages, facts, used, max_wait=15, provider='Gemini lite')
 
@@ -1503,6 +1520,7 @@ async def _ask_gemini_lite(session, messages, facts, used):
 # small model, then the Mac (chat only; it never words records). A provider
 # with no key set is skipped instantly.
 PROVIDERS = [('Groq', _ask_groq_big), ('Cerebras', _ask_cerebras), ('Gemini', _ask_gemini),
+             ('Mistral', _ask_mistral), ('OpenRouter', _ask_openrouter),
              ('Gemini lite', _ask_gemini_lite), ('Groq small', _ask_groq_small), ('local AI', _ask_local)]
 # Up to a minute: measured, the Mac's AI takes 40-90s AND is weaker (it once
 # quoted the wrong war's hits for "Ikaros vs Kaos Korner"), so waiting out

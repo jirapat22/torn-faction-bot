@@ -7,7 +7,7 @@ A Discord bot for a Torn.com faction (Ascended Punks), running on Pat's home Mac
 ## Commands
 
 ```bash
-<py> -m pytest -q tests/          # full suite (196 tests), the one to trust
+<py> -m pytest -q tests/          # full suite (197 tests), the one to trust
 <py> -m pytest -q tests/test_imports.py::test_flytrack_logic   # single test
 <py> tests/test_imports.py        # runs test_imports.py ONLY, see note below
 <py> bot.py                       # run locally (needs .env)
@@ -88,6 +88,8 @@ A related trap: an endpoint can return HTTP 200 and still be useless. Torn's v1 
 
 ### The war attacks log
 
+**War-end posts get the window and the log** (war 52994, 24/11/2026): the auto-posted board and Xanax report were handed a war record with no start/end and no finished flag, so they showed 0 outside hits / 0 friendly hosps for everyone (the log had 49) and "In Progress". The war-end flow now passes `war: {start, end}`, `is_active: False` and the `attack_stats` it already read (`_war_attack_stats_for` reuses them, so the war-end posts can't disagree), and a missing start time means "unknown" (None), never {}.
+
 `_fetch_all_attacks_since` pages Torn's faction attacks log, and everything the war reports say about **hits taken, outside hits and friendly hosps** comes from it, the v2 war report supplies only attacks and score. At war end those numbers are **archived permanently**, so a partial read is not a cosmetic problem.
 
 Two things it must not do, both of which it used to:
@@ -138,7 +140,7 @@ The cooldown is stamped only when a warning actually goes out, so an outage or a
 
 ### Asking the bot (`features/ask_ai.py`)
 
-Management `@mention`s the bot (any channel; everyone else is told they lack permission) with a plain-English question; an AI answers from the bot's own records. Groq (`GROQ_API_KEY`, free plan: 1,000 requests/day, 8,000 tokens/min) first, about 1s, then Cerebras (`CEREBRAS_API_KEY`, same gpt-oss-120b) and Gemini (`GEMINI_API_KEY`) via the shared OpenAI-style `CLOUD` table, then Groq small; local Ollama (`qwen3.5:9b` on the Mac, `host.docker.internal:11434`, about 40s) as the backup when Groq fails or rate-limits. The backup only ever words CHAT: its records answers are replaced by the raw records (`raw_records_text`), because it twice quoted a real number from the wrong row. Only a typed `@ApexPunk` (bot or role) triggers an answer; a bare reply to an answer does not, since people reply to show answers to each other. The bot has the Message Content intent (on in the portal since 07/11/2026; `intents.message_content = True`), so role pings and ping-less replies are readable too. Turning it off in the portal without removing that line stops the bot connecting at all.
+Management `@mention`s the bot (any channel; everyone else is told they lack permission) with a plain-English question; an AI answers from the bot's own records. Groq (`GROQ_API_KEY`, free plan: 1,000 requests/day, 8,000 tokens/min) first, about 1s, then Cerebras (`CEREBRAS_API_KEY`, same gpt-oss-120b; paid now, so unset), Gemini (`GEMINI_API_KEY`), Mistral (`MISTRAL_API_KEY`, free Experiment plan, `MISTRAL_MODEL`) and OpenRouter (`OPENROUTER_API_KEY`, free `:free` models, `OPENROUTER_MODEL`) via the shared OpenAI-style `CLOUD` table (a provider with no key is skipped instantly), then Gemini lite, Groq small; Groq's big model waits at most 5s on a per-minute 429 (Gemini answered in 2-3s when Groq was busy, so waiting longer only slowed busy moments); local Ollama (`qwen3.5:9b` on the Mac, `host.docker.internal:11434`, about 40s) as the backup when Groq fails or rate-limits. The backup only ever words CHAT: its records answers are replaced by the raw records (`raw_records_text`), because it twice quoted a real number from the wrong row. Only a typed `@ApexPunk` (bot or role) triggers an answer; a bare reply to an answer does not, since people reply to show answers to each other. The bot has the Message Content intent (on in the portal since 07/11/2026; `intents.message_content = True`), so role pings and ping-less replies are readable too. Turning it off in the portal without removing that line stops the bot connecting at all.
 
 The design rule is **the AI must not make up numbers**, because strikes get decided on these answers:
 
@@ -181,7 +183,7 @@ Announcement layout (Pat's picks): bold emoji headings + bullets, blank line bet
 - Live war (`WAR_NOW_RX`: "war score", "r we winning", "how's the war going"; not past/trend/"vs X" wording `WAR_PAST_RX`) is a bot card (`war_answer`) from `live_status('war')`, with the lead against the target worked out in Python (a ranked war is won when the lead reaches the target). "who's online rn" reads `last_action.status` from the roster. Multi-part answers keep one "Checked Torn just now 👀".
 - The announcement tools are only offered in an announcement conversation (token budget).
 - "who has strikes" (`STRIKES_LIST_RX`, nobody named, management only) is `FactBook.strikes_card()`: one line per member, candidates below, read-only (points to `/strikes`).
-- No `CEREBRAS_API_KEY` is set (24/11/2026), so a Groq per-minute 429 waits up to 60s then goes to Gemini: two questions close together measured 60-90s.
+- No `CEREBRAS_API_KEY` is set (Cerebras went paid). Real answers (log, 24/11/2026) took 1-5s on Groq and 2-3s on Gemini; the 60-90s seen overnight came from back-to-back test bursts.
 
 Every answer is also written to `data/logs/ask_ai.jsonl` (question, answer, provider, data used; 2 MB, one old copy) so odd answers can be traced. When the AI gives up, the bot itself tries "did you mean <close name>?" (`near_names`) and, for rules-ish questions (`RULES_CUE`), quotes the rulebook directly.
 
