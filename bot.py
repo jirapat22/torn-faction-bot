@@ -382,6 +382,8 @@ async def on_ready():
         ask_ai = AskAI(bot, strike_manager=strike_manager)
         # The members switch needs the Ascended Punks role id (verification config).
         ask_ai.verification_system = verification_system
+        # The launch loop needs it, and ask_ai is local to on_ready.
+        bot.ask_ai = ask_ai
         # Hits ON our members, kept 90 days, for "who hit us?" (features/incoming_attacks.py).
         from features.incoming_attacks import IncomingAttacks
         incoming_attacks = IncomingAttacks()
@@ -1005,7 +1007,9 @@ async def member_launch_check():
     launch announcement posted, once (features/member_launch.py)."""
     try:
         from features.member_launch import launch_tick
-        result = await launch_tick(bot, ask_ai, GUILD_ID)
+        # bot.ask_ai, not ask_ai: that name only exists inside on_ready
+        # (the first deploy logged NameError every minute).
+        result = await launch_tick(bot, getattr(bot, 'ask_ai', None), GUILD_ID)
         if result:
             logger.info(f'Member launch: {result}')
     except Exception as e:
