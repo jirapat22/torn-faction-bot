@@ -11118,7 +11118,44 @@ def test_new_member_basics_and_faction_facts_are_quoted_not_invented():
         assert ans.provider == 'none' and ans.text, q
 
 
+def test_faction_facts_from_pat():
+    """
+    Pat, 25/11/2026: no written history or motto, goal "improving as a
+    faction and individually", join = message management or the leader, no
+    co-leader. Live bits (age, leader, days) stay from Torn; "longer than
+    anyone" only when it is true.
+    """
+    import asyncio
+    from features.ask_basics import faction_question, faction_reply, basics_reply
+    data = {'ID': 45635, 'name': 'Ascended Punks', 'tag': 'AP', 'leader': 1, 'co-leader': 0, 'age': 900,
+            'capacity': 40, 'members': {'1': {'name': 'Boss', 'days_in_faction': 841},
+                                        '2': {'name': 'Newbie', 'days_in_faction': 5}}}
+
+    async def fetch(sel):
+        return data
+
+    def ask(q):
+        assert faction_question(q), q
+        return asyncio.run(faction_reply(q, None, fetch))
+
+    story = ask('how did the faction start?')
+    assert 'No official origin story' in story and '900 days ago' in story
+    assert '841 days, longer than anyone' in story
+    data['members']['2']['days_in_faction'] = 999
+    assert 'longer than anyone' not in ask('who started the faction'), 'only when true'
+    assert 'No official motto' in ask("what's our motto")
+    assert not faction_question('write us a motto'), 'creative, not a lookup'
+    assert 'as a faction and every one of us' in ask('what are our goals')
+    assert 'management or the leader' in ask('how can my friend join')
+    assert 'management or the leader' in ask('how do i join the faction')
+    assert 'No co-leader right now' in ask('who is the co-leader')
+    card = ask('tell me about the faction')
+    assert 'no co-leader' in card and 'Goal:' in card and 'Want in?' in card
+    assert 'Welcome to the Punks' in basics_reply("i'm new here")
+
+
 if __name__ == '__main__':
+    test_faction_facts_from_pat()
     test_all_modules_import()
     test_helper_signatures()
     test_torn_api_helpers()

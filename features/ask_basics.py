@@ -161,7 +161,7 @@ def how_here_topic(question):
 NEW_RX = re.compile(
     r"\b(?:i'?m|i am|im) (?:brand )?new\b|\bnew (?:here|to (?:the )?(?:faction|punks|ap|torn|this))\b|"
     r"\bjust joined\b|\bwhat (?:do|should) i do (?:first|now|next)\b|\bwhere (?:do|should) i (?:start|begin)\b|"
-    r"\bgetting started\b|\bfirst steps?\b|\bnew (?:member|player)s? guide\b|\bhow do i (?:join|start|begin)\b|"
+    r"\bgetting started\b|\bfirst steps?\b|\bnew (?:member|player)s? guide\b|\bhow do i (?:start|begin)\b|"
     r"\bonboarding\b|\bwhat do new (?:members|people|players) (?:do|need)\b", re.I)
 VERIFY_RX = re.compile(
     r"\bhow (?:do|can|should) i (?:get )?(?:verif\w*|regist\w*|link (?:my )?(?:account|torn|discord))\b|"
@@ -192,6 +192,7 @@ def new_member_text(guild):
         parts.append('**Channels to know:**\n' + '\n'.join(chans))
     ask = find_channels(guild).get('ask-a-punk') if guild is not None else None
     parts.append(f'Stuck? Ask in <#{ask}> or @ me. 💪' if ask else 'Stuck? Ask management or @ me. 💪')
+    parts.append(f'🎯 What we\'re about: {FACTION_GOALS}')
     return '\n\n'.join(parts)
 
 
@@ -253,6 +254,34 @@ FACTION_RX = re.compile(
 
 RANK_DIVISIONS = {1: 'I', 2: 'II', 3: 'III'}
 
+# Pat's own answers (25/11/2026) for what Torn and the rulebook can't say.
+# Everything else on the card stays live from Torn, so nothing here goes
+# stale: the age, the leader and how long they've been with us are read
+# fresh every time.
+FACTION_GOALS = 'Getting better every day, as a faction and every one of us on our own. 📈'
+FACTION_JOIN = 'Message any of management or the leader and they\'ll sort you out. 📩'
+# No written history and no motto (Pat): say so instead of inventing one.
+
+GOALS_RX = re.compile(
+    r"\b(?:what(?:'s| is| are|re)|whats) (?:our|the) (?:faction(?:'s)? )?(?:goals?|aims?|mission|purpose|plans?)\b|"
+    r"\bwhat(?:'s| is|s) (?:the |this |our )?faction (?:about|for)\b|\bfaction(?:'s)? (?:goals?|aims?|mission)\b|"
+    r"\bwhat (?:are|r) we (?:aiming|going) for\b", re.I)
+JOIN_RX = re.compile(
+    r"\bhow (?:can|do|does|could|would|should) (?:my (?:friend|mate|buddy|bro|irl friend)s?|someone|somebody|"
+    r"people|others|outsiders|they|a (?:friend|mate)|friends|new people|new players) (?:join|apply|get in)\b|"
+    r"\bhow (?:to|do you|do i|can i) (?:join|apply (?:to|for)|get into) (?:the |our |this )?"
+    r"(?:faction|punks|ascended punks)\b|\bcan (?:my (?:friend|mate)|someone|people) (?:join|apply)\b|"
+    r"\bhow (?:do|does) (?:joining|recruiting|recruitment) work\b(?! here)|\bwho do i (?:message|talk to|ask) to join\b",
+    re.I)
+HISTORY_RX = re.compile(
+    r"\bhow did (?:the |our |this )?(?:faction|punks) (?:start|begin|get started|come about)\b|"
+    r"\b(?:faction|punks)(?:'s)? (?:history|story|origins?|backstory)\b|"
+    r"\bwho (?:started|founded|made|created) (?:the |our |this )?(?:faction|punks)\b|"
+    r"\b(?:history|story|origin) of (?:the |our |this )?(?:faction|punks)\b", re.I)
+MOTTO_RX = re.compile(r"\b(?:what(?:'s| is)|whats) (?:our|the) (?:faction(?:'s)? )?(?:motto|slogan|catchphrase)\b|"
+                      r"\bdo we (?:have|got) a (?:motto|slogan|catchphrase)\b", re.I)
+MAKE_RX = re.compile(r"\b(?:write|make|come up with|create|invent|give us|think of|suggest)\b", re.I)
+
 
 # "write me a poem about the faction" is a creative ask, not a fact lookup
 # (live audit 25/11/2026: it got the faction card).
@@ -262,7 +291,12 @@ CREATIVE_RX = re.compile(r"\b(?:poem|song|rap|story|haiku|limerick|joke|write|dr
 
 def faction_question(question):
     q = question or ''
-    return bool(FACTION_RX.search(q)) and not CREATIVE_RX.search(q)
+    # "what's our motto?" is a question; "write us a motto" is creative.
+    if MOTTO_RX.search(q) and not MAKE_RX.search(q):
+        return True
+    if CREATIVE_RX.search(q):
+        return False
+    return bool(FACTION_RX.search(q) or GOALS_RX.search(q) or JOIN_RX.search(q) or HISTORY_RX.search(q))
 
 
 def management_names(guild):
@@ -300,7 +334,11 @@ def faction_card(data, question='', guild=None, now=None):
     lines = []
     lead_line = None
     if leader:
-        lead_line = f'👑 Leader: **{leader}**' + (f' · Co-leader: **{co}**' if co else '')
+        lead_line = f'👑 Leader: **{leader}**' + (f' · Co-leader: **{co}**' if co else ' · no co-leader')
+    lead_days = (members.get(str(data.get('leader'))) or {}).get('days_in_faction')
+    goal_line = f'🎯 Goal: {FACTION_GOALS}'
+    join_line = f'🚪 Want in? {FACTION_JOIN}'
+
     mgmt = management_names(guild) if guild is not None else []
     mgmt_line = f'🛡️ Management on Discord: {", ".join(mgmt)}' if mgmt else None
     age = data.get('age')
@@ -334,7 +372,31 @@ def faction_card(data, question='', guild=None, now=None):
         return '\n'.join(got) if got else None
 
     focused = None
-    if re.search(r'\bleader|co-?leader|boss|in charge|running\b', q):
+    if HISTORY_RX.search(q):
+        # No written history (Pat), so the bot says so and gives what Torn
+        # knows: when it was founded and how long the leader has been here.
+        bits = ["No official origin story on file, it's before my time 🤷"]
+        if age_line:
+            bits.append(age_line)
+        if leader:
+            longest = isinstance(lead_days, int) and lead_days >= max(
+                (m.get('days_in_faction') or 0 for m in members.values() if isinstance(m.get('days_in_faction'), int)),
+                default=0)
+            bits.append(f'👑 **{leader}** leads us' + (
+                f' and has been here {lead_days:,} days' + (', longer than anyone' if longest else '')
+                if isinstance(lead_days, int) and lead_days > 0 else ''))
+        focused = '\n'.join(bits)
+    elif MOTTO_RX.search(q):
+        focused = ("No official motto 🤷 If you want one, \"hit hard, hit often\" has a ring to it. "
+                   "Pitch something better to management. 😏")
+    elif GOALS_RX.search(q):
+        focused = goal_line
+    elif JOIN_RX.search(q):
+        focused = only(join_line, mgmt_line, size_line)
+    elif re.search(r'\bco-?leader\b', q):
+        focused = (f'👑 No co-leader right now. **{leader}** runs the show.' if leader and not co
+                   else only(lead_line, mgmt_line))
+    elif re.search(r'\bleader|boss|in charge|running\b', q):
         focused = only(lead_line, mgmt_line)
     elif re.search(r'\bmanagement|mods|officers|admins|staff\b', q):
         focused = only(mgmt_line, lead_line)
@@ -357,7 +419,7 @@ def faction_card(data, question='', guild=None, now=None):
         return focused
     header = f'**{name}**' + (f' [{tag}]' if tag else '') + ' 🤘'
     lines = [header] + [l for l in (lead_line, mgmt_line, age_line, rank_line, respect_line, size_line,
-                                     chain_line, war_line) if l]
+                                     chain_line, war_line, goal_line, join_line) if l]
     return '\n'.join(lines)
 
 
