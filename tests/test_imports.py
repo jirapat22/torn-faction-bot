@@ -11143,14 +11143,26 @@ def test_faction_facts_from_pat():
     assert '841 days, longer than anyone' in story
     data['members']['2']['days_in_faction'] = 999
     assert 'longer than anyone' not in ask('who started the faction'), 'only when true'
-    assert 'No official motto' in ask("what's our motto")
+    # Motto + tagline + a hype line (Pat's picks, 25/11/2026)
+    motto = ask("what's our motto")
+    assert motto.startswith('**Punks up, enemies down.**') and len(motto) > 30
     assert not faction_question('write us a motto'), 'creative, not a lookup'
-    assert 'as a faction and every one of us' in ask('what are our goals')
+    assert "on our way up" in ask('what are our goals') and 'nobody gets left behind' in ask('what are our goals')
     assert 'management or the leader' in ask('how can my friend join')
     assert 'management or the leader' in ask('how do i join the faction')
     assert 'No co-leader right now' in ask('who is the co-leader')
     card = ask('tell me about the faction')
     assert 'no co-leader' in card and 'Goal:' in card and 'Want in?' in card
+    assert card.splitlines()[1] == '🔥 Motto: **Punks up, enemies down.** From the gutter, to the top.'
+    # Mix and match (Pat: "mix and match more"): thousands of combos, no
+    # duplicates in a pool, no em dashes, no money/Xanax words
+    from features.ask_basics import MOTTO_OPEN, MOTTO_MIDDLE, MOTTO_CLOSE, motto_hype
+    pools = (MOTTO_OPEN, MOTTO_MIDDLE, MOTTO_CLOSE)
+    assert all(len(set(p)) == len(p) for p in pools)
+    assert len(MOTTO_OPEN) * len(MOTTO_MIDDLE) * len(MOTTO_CLOSE) >= 3000
+    assert not any('\u2014' in x or 'xanax' in x.lower() or '$' in x for p in pools for x in p)
+    seen = {motto_hype() for _ in range(200)}
+    assert len(seen) > 150, 'should rarely repeat'
     assert 'Welcome to the Punks' in basics_reply("i'm new here")
 
 

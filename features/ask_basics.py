@@ -258,9 +258,53 @@ RANK_DIVISIONS = {1: 'I', 2: 'II', 3: 'III'}
 # Everything else on the card stays live from Torn, so nothing here goes
 # stale: the age, the leader and how long they've been with us are read
 # fresh every time.
-FACTION_GOALS = 'Getting better every day, as a faction and every one of us on our own. 📈'
+FACTION_GOALS = ("We're on our way up: winning wars, growing players and keeping it fun. "
+                 "Everyone pulls their weight, and nobody gets left behind. 📈")
 FACTION_JOIN = 'Message any of management or the leader and they\'ll sort you out. 📩'
-# No written history and no motto (Pat): say so instead of inventing one.
+# Motto and tagline picked by Pat, 25/11/2026. No written history (Pat):
+# the bot says so instead of inventing one.
+FACTION_MOTTO = 'Punks up, enemies down.'
+FACTION_TAGLINE = 'From the gutter, to the top.'
+# "Hype it up" (Pat): the motto comes with a different line each time,
+# mixed from three pools ("mix and match more", Pat 25/11/2026). Every part
+# is a whole sentence, so any mix reads right: 18 x 18 x 16 = 5,184 combos.
+MOTTO_OPEN = [
+    "That's the one 🔥", "Hell yeah it is 🤘", "Burned into my circuits 🔥", "Say it with me 📣",
+    "Fuck yes 😤", "Our whole religion, basically 🙏", "Straight from the gutter 🧱", "Read it twice 👀",
+    "Loud and proud 📢", "Hand on heart 🫡", "No notes, it's perfect 💯", "Chills, every time 🥶",
+    "Bow down 👑", "Carved in the hospital wall 🏥", "Every Punk knows it 🤘", "Bang, there it is 💥",
+    "Say it like you mean it 😈", "Sacred words 📜",
+]
+MOTTO_MIDDLE = [
+    f"{FACTION_TAGLINE} That's the whole story.", "We climb, they drop. Simple maths.",
+    "Every chain hit is a step up the ladder.", "Rivals hear it and quietly check their medical cooldown.",
+    f"We came {FACTION_TAGLINE.lower()[:-1]}, and we're not stopping halfway.",
+    "Dead weight sinks, Punks rise.", "Nobody rides free on this crew.",
+    "It's a promise and a threat at the same time.", "Somewhere an enemy just felt a chill.",
+    "Every war we win makes it a little more true.", "The leaderboard is just the motto with numbers.",
+    "It hits harder than a Kodachi to the face.", "It's printed on every hosp bill we send out.",
+    f"{FACTION_TAGLINE} Bring snacks, it's a long climb.", "We don't kneel, we climb.",
+    "Your mum chanted it at the last chain, true story.", "Enemies hear it right before the hospital music.",
+    "It's not just words, it's a hit list with manners.",
+]
+MOTTO_CLOSE = [
+    "Now go make the enemy feel it 💥", "Scream it before the next chain 📣", "Tattoo it, chant it, live it 🤘",
+    "Write it on your knuckles and get to work 👊", "Print it, frame it, hit someone with the frame 🖼️",
+    "If you're not shouting it, you're doing it wrong 😤", "Get out there and earn it 💪",
+    "Up you go, Punk 🚀", "Pull your weight and pull your trigger 🔫", "See you at the top 🏔️",
+    "Rival factions hate this one simple trick 😈", "Say it louder for the people in hosp 🔥",
+    "Now hit something 🎯", "Climb, punk, climb 🧗", "Go be a problem for someone 😏",
+    "Make it true again today ⚔️",
+]
+
+
+def motto_hype(rng=None):
+    """'Fuck yes 😤 We climb, they drop. Now hit something 🎯': one line
+    from each pool, so it is never the same few lines on rotation."""
+    import random
+    rng = rng or random
+    return f'{rng.choice(MOTTO_OPEN)} {rng.choice(MOTTO_MIDDLE)} {rng.choice(MOTTO_CLOSE)}'
+
 
 GOALS_RX = re.compile(
     r"\b(?:what(?:'s| is| are|re)|whats) (?:our|the) (?:faction(?:'s)? )?(?:goals?|aims?|mission|purpose|plans?)\b|"
@@ -337,6 +381,7 @@ def faction_card(data, question='', guild=None, now=None):
         lead_line = f'👑 Leader: **{leader}**' + (f' · Co-leader: **{co}**' if co else ' · no co-leader')
     lead_days = (members.get(str(data.get('leader'))) or {}).get('days_in_faction')
     goal_line = f'🎯 Goal: {FACTION_GOALS}'
+    motto_line = f'🔥 Motto: **{FACTION_MOTTO}** {FACTION_TAGLINE}'
     join_line = f'🚪 Want in? {FACTION_JOIN}'
 
     mgmt = management_names(guild) if guild is not None else []
@@ -387,8 +432,7 @@ def faction_card(data, question='', guild=None, now=None):
                 if isinstance(lead_days, int) and lead_days > 0 else ''))
         focused = '\n'.join(bits)
     elif MOTTO_RX.search(q):
-        focused = ("No official motto 🤷 If you want one, \"hit hard, hit often\" has a ring to it. "
-                   "Pitch something better to management. 😏")
+        focused = f'**{FACTION_MOTTO}**\n{motto_hype()}'
     elif GOALS_RX.search(q):
         focused = goal_line
     elif JOIN_RX.search(q):
@@ -418,7 +462,8 @@ def faction_card(data, question='', guild=None, now=None):
     if focused:
         return focused
     header = f'**{name}**' + (f' [{tag}]' if tag else '') + ' 🤘'
-    lines = [header] + [l for l in (lead_line, mgmt_line, age_line, rank_line, respect_line, size_line,
+    lines = [header, motto_line]
+    lines = lines + [l for l in (lead_line, mgmt_line, age_line, rank_line, respect_line, size_line,
                                      chain_line, war_line, goal_line, join_line) if l]
     return '\n'.join(lines)
 
