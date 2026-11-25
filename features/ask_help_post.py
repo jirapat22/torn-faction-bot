@@ -45,6 +45,8 @@ def guide_text(members_on, cooldown_s=120):
         '**📜 Faction rules** `@ApexPunk what\'s the OC rule?`',
         '**🎮 How Torn works** `@ApexPunk how long can a ranked war last?`',
         '**🎯 Enemies** `@ApexPunk who hit us this week?`',
+        '**🆕 New here** `@ApexPunk I\'m new` · **🏴 The faction** `@ApexPunk tell me about the faction`',
+        '**😈 Fun & chat** `@ApexPunk tell me a joke` · `roast me` · `8ball will we win?`',
         f'**⏱️ Cooldown** one question every {mins} minutes each (management: no limit)',
         '',
         '🔒 **Management only**',

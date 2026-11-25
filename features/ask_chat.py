@@ -1133,8 +1133,13 @@ def is_canned(question):
 # the AI's "I'm sorry, but I can't do that" plus a refusal underneath.
 JAILBREAK_RX = re.compile(
     r"\bignore (?:all |your |the |any |previous |prior |above )*(?:rules|instructions|prompt|guidelines|restrictions)\b|"
-    r"\byou are now\b|\b(?:act|behave) as (?:if|though|an? )|\bDAN\b|\bjail ?break\w*|\bdeveloper mode\b|"
-    r"\bno (?:rules|restrictions|filters?) mode\b|\bpretend (?:i'?m|i am|you'?re|you are|to be)\b|"
+    # Role-play is fine ("pretend you're a pirate" got the "nice try" reply,
+    # audit 25/11/2026). Only role-play that aims at the rules or at someone's
+    # rank counts: "pretend you have no rules", "act as if I'm management".
+    r"\b(?:you are now|you'?re now|pretend|act as|behave as|roleplay as|be)\b[^.?!\n]{0,40}"
+    r"\b(?:no (?:rules|limits|filters?|restrictions)|without (?:rules|limits|filters?)|unrestricted|unfiltered|"
+    r"uncensored|jailbroken|evil (?:ai|bot)|god mode|management|manager|admin|mod|leader|developer|dev)\b|"
+    r"\bDAN\b|\bjail ?break\w*|\bdeveloper mode\b|\bno (?:rules|restrictions|filters?) mode\b|"
     r"\b(?:i'?m|i am|im) (?:a |an |the )?(?:management|manager|admin|mod|moderator|leader|co-?leader|owner|dev|developer)\b|"
     r"^\s*(?:system|admin|developer|assistant)\s*:|\bnew instructions\b|\boverride\b|\bsystem prompt\b|"
     r"\b(?:reveal|show|print|repeat) (?:your|the) (?:prompt|instructions|rules you were given)\b", re.I)

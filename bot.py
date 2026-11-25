@@ -474,6 +474,8 @@ async def on_ready():
             rules_sync_check.start()
         if not incoming_attacks_check.is_running():
             incoming_attacks_check.start()
+        if not member_launch_check.is_running():
+            member_launch_check.start()
 
         if not loop_watchdog.is_running():
             loop_watchdog.start()
@@ -516,10 +518,11 @@ async def on_ready():
             # and edited in place after (features/ask_help_post.py). After the
             # command board, which skips this message by its saved id.
             from features.ask_help_post import HelpPost, guide_text
-            from config import ASK_AI_MEMBERS, ASK_AI_MEMBER_COOLDOWN_S, MEMBER_COMMANDS_CHANNEL_ID
+            from config import ASK_AI_MEMBER_COOLDOWN_S, MEMBER_COMMANDS_CHANNEL_ID
+            from features.member_launch import members_open
             ask_ai.help_post = HelpPost()
             result = await ask_ai.help_post.publish(bot.get_guild(GUILD_ID),
-                                                    guide_text(ASK_AI_MEMBERS, ASK_AI_MEMBER_COOLDOWN_S),
+                                                    guide_text(members_open(), ASK_AI_MEMBER_COOLDOWN_S),
                                                     MEMBER_COMMANDS_CHANNEL_ID)
             logger.info(f'Ask guide post: {result}')
 
@@ -994,6 +997,24 @@ async def incoming_attacks_check():
 @incoming_attacks_check.before_loop
 async def before_incoming_attacks_check():
     await bot.wait_until_ready()
+
+
+@tasks.loop(minutes=1)
+async def member_launch_check():
+    """Members go live at ASK_AI_MEMBERS_FROM: the guide is updated and the
+    launch announcement posted, once (features/member_launch.py)."""
+    try:
+        from features.member_launch import launch_tick
+        result = await launch_tick(bot, ask_ai, GUILD_ID)
+        if result:
+            logger.info(f'Member launch: {result}')
+    except Exception as e:
+        logger.error(f'Error in member launch check: {e!r}')
+
+
+@member_launch_check.before_loop
+async def before_member_launch_check():
+    await bot.wait_until_ready()
     logger.info('Incoming attacks log started (every 10 minutes)')
 
 
@@ -1016,6 +1037,7 @@ def _background_loops():
         'chain_log_check': chain_log_check,
         'rules_sync_check': rules_sync_check,
         'incoming_attacks_check': incoming_attacks_check,
+        'member_launch_check': member_launch_check,
     }
 
 

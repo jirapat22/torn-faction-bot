@@ -3487,6 +3487,11 @@ class ShowDataView(discord.ui.View):
             await interaction.followup.send(embed=e, ephemeral=True)
 
 
+# Said once when a member goes over the fun/chat cap (then silence for the
+# rest of the minute). Deletes itself after 10 seconds.
+FUN_CAP_TEXT = "Easy, spam lord 😅 I'm a bot, not a jukebox. Give me a minute and go again. 🤘"
+
+
 class AskAI:
     """Listens for @mentions of the bot and answers management's questions."""
 
@@ -3511,6 +3516,30 @@ class AskAI:
         self.verification_system = None
         self.help_post = None          # features/ask_help_post.HelpPost, for "@ApexPunk help"
         self.last_answered = {}        # discord user id -> when a member last got an answer
+        self.fun_times = {}            # discord user id -> recent bot-made reply times (spam cap)
+        self.fun_warned = {}           # discord user id -> when they were last told to chill
+
+    def fun_capped(self, user_id, now=None):
+        """The spam cap on bot-made replies (jokes, greetings, 8-ball...):
+        ASK_AI_FUN_PER_MIN a minute per member (Pat, 25/11/2026). They skip
+        the 2 minute cooldown because they cost nothing, so without this one
+        person could flood a channel. Returns None (go ahead, counted),
+        'warn' (over: say chill once) or 'quiet' (over, already told)."""
+        from config import ASK_AI_FUN_PER_MIN
+        now = now or time.time()
+        recent = [t for t in self.fun_times.get(user_id, []) if now - t < 60]
+        if len(recent) >= ASK_AI_FUN_PER_MIN:
+            self.fun_times[user_id] = recent
+            if now - self.fun_warned.get(user_id, 0) >= 60:
+                self.fun_warned[user_id] = now
+                return 'warn'
+            return 'quiet'
+        recent.append(now)
+        self.fun_times[user_id] = recent
+        # Forget people with nothing recent, so the dict can't grow forever.
+        if len(self.fun_times) > 500:
+            self.fun_times = {k: v for k, v in self.fun_times.items() if v and now - v[-1] < 60}
+        return None
 
     def is_member(self, author):
         """Holder of the Ascended Punks role (verified_role_id, else its name)."""
@@ -3556,7 +3585,8 @@ class AskAI:
         if not explicit and not drafting:
             return
 
-        from config import ASK_AI_MEMBERS
+        from features.member_launch import members_open
+        ASK_AI_MEMBERS = members_open()   # the switch, or the launch time has passed
         management = member_is_management(message.author)
         member_ok = not management and ASK_AI_MEMBERS and self.is_member(message.author)
         if not management and ASK_AI_MEMBERS and not member_ok:
@@ -3606,6 +3636,12 @@ class AskAI:
             if left and not (not bare or HELP_WORDS.match(bare) or skips_cooldown(bare)):
                 await message.reply(cooldown_text(left), mention_author=False, delete_after=10)
                 return
+            if bare and skips_cooldown(bare):
+                capped = self.fun_capped(message.author.id)
+                if capped == 'warn':
+                    await message.reply(FUN_CAP_TEXT, mention_author=False, delete_after=10)
+                if capped:
+                    return
 
         history, earlier = [], ''
         if is_followup:

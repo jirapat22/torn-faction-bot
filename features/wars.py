@@ -133,6 +133,49 @@ def _score(x):
     except (TypeError, ValueError):
         return str(x)
 
+LEFT_MARK = ' (L)'
+LEFT_LEGEND = '(L) = left the faction since, still counted'
+
+
+def fit_name(name, width):
+    """Cut a name to the table width, keeping the (L) mark visible."""
+    if name.endswith(LEFT_MARK):
+        return name[:-len(LEFT_MARK)][:max(1, width - len(LEFT_MARK))] + LEFT_MARK
+    return name[:width]
+
+
+def result_icon(result):
+    """✅ win, ❌ loss, ❔ no result on record (never shown as a loss)."""
+    return {'victory': '✅', 'defeat': '❌'}.get(result, '❔')
+
+
+def war_roster(faction_members, war_members=None, attack_stats=None):
+    """(user_id, name) for everyone a war report should list: today's roster,
+    plus anyone who LEFT the faction but did something in the war, marked
+    "(left)". The reports used to walk today's roster only, so a member who
+    made 40 war hits and then left vanished from the Xanax report and missed
+    reimbursement (Pat, 25/11/2026). Leavers come from Torn's war report
+    (which keeps their name) and from the attacks log (id only). Marked
+    LEFT_MARK, short because the tables cut names at 15 characters."""
+    out = [(uid, (m or {}).get('name', f'ID:{uid}')) for uid, m in (faction_members or {}).items()]
+    have = {str(uid) for uid, _ in out}
+
+    def busy(st):
+        return any((st or {}).get(k, 0) for k in ('attacks', 'score', 'war_hits', 'outside_hits',
+                                                    'chain_outside_hits', 'hosps_given'))
+    for uid, m in (war_members or {}).items():
+        if str(uid) not in have and busy(m):
+            out.append((str(uid), f"{(m or {}).get('name') or f'ID:{uid}'}{LEFT_MARK}"))
+            have.add(str(uid))
+    for uid, st in (attack_stats or {}).items():
+        if str(uid).startswith('_') or str(uid) in have or not isinstance(st, dict):
+            continue
+        if busy(st):
+            out.append((str(uid), f'ID:{uid}{LEFT_MARK}'))
+            have.add(str(uid))
+    return out
+
+
 class WarTracker:
     """Tracks faction wars and provides statistics"""
 
@@ -1163,8 +1206,7 @@ class WarTracker:
         if our_war_members:
             logger.info(f'War: Using rankedwarreport data ({len(our_war_members)} members)')
             # Use rankedwarreport data (accurate and complete)
-            for user_id, member_data in faction_members.items():
-                member_name = member_data.get('name', f'ID:{user_id}')
+            for user_id, member_name in war_roster(faction_members, our_war_members, attack_stats):
                 war_stats = our_war_members.get(user_id, {})
                 log_stats = attack_stats.get(user_id, {})
 
@@ -1183,8 +1225,7 @@ class WarTracker:
             logger.info('War: rankedwarreport not available, falling back to attacks log')
             data_source = 'attacks'
             # Fall back to attacks log (paginated to fetch all war attacks)
-            for user_id, member_data in faction_members.items():
-                member_name = member_data.get('name', f'ID:{user_id}')
+            for user_id, member_name in war_roster(faction_members, None, attack_stats):
                 stats = attack_stats.get(user_id, {})
 
                 member_list.append({
@@ -1309,7 +1350,7 @@ class WarTracker:
         table_lines = [header, separator]
 
         for i, m in enumerate(sorted_members):
-            name = m['name'][:max_name]
+            name = fit_name(m['name'], max_name)
             line = (
                 f'{i+1:>2}  {name:<{max_name}}  '
                 f'{_war_cell(m["war_hits"])}  {m["outside_hits"]:>3}  '
@@ -1317,6 +1358,8 @@ class WarTracker:
                 f'{m["hosps_given"]:>3}'
             )
             table_lines.append(line)
+        if any(m['name'].endswith(LEFT_MARK) for m in sorted_members):
+            table_lines.append(LEFT_LEGEND)
 
         # Split table into ansi code-block chunks that fit Discord's 1024 char field limit.
         # ```ansi ... ``` lets Discord render the embedded ANSI colour escapes.
@@ -1448,8 +1491,7 @@ class WarTracker:
 
         # Build member list
         member_list = []
-        for user_id, member_data in faction_members.items():
-            member_name = member_data.get('name', f'ID:{user_id}')
+        for user_id, member_name in war_roster(faction_members, our_war_members, attack_stats):
             log_stats = attack_stats.get(user_id, {})
             chain_outside = log_stats.get('chain_outside_hits', 0)
             # Always from the attacks log: the ranked war report only counts
@@ -1531,13 +1573,15 @@ class WarTracker:
         table_lines = [header, separator]
 
         for i, m in enumerate(sorted_members):
-            name = m['name'][:max_name]
+            name = fit_name(m['name'], max_name)
             # A tick beats a number nobody reads: the whole question anyone
             # asks of this report is "who gets paid back".
             ok = '*' if m['total'] >= XAN_REIMBURSE_MIN_HITS else ' '
             line = (f'{i+1:>2} {ok} {name:<{max_name}}  {m["war_hits"]:>3}  '
                     f'{m["chain_outside"]:>3}  {m["friendly_hosps"]:>3}  {m["total"]:>3}')
             table_lines.append(line)
+        if any(m['name'].endswith(LEFT_MARK) for m in sorted_members):
+            table_lines.append(LEFT_LEGEND)
 
         # Split into chunks for Discord field limits
         table_chunks = []
@@ -1808,7 +1852,7 @@ class WarTracker:
         # War summary - annotate each with friendly-hosp count when present
         war_lines = []
         for w in reversed(last_5):
-            icon = '✅' if w['result'] == 'victory' else '❌'
+            icon = result_icon(w.get('result'))
             hosp_n = len(w.get('friendly_hosps', []))
             hosp_tag = f' · 🏥 {hosp_n}' if hosp_n else ''
             war_lines.append(
@@ -1888,15 +1932,19 @@ class WarTracker:
                 color=EMBED_COLOR_INFO
             )
 
+        # Only real results count: a war archived 0-0 with result "unknown"
+        # (two old ones were) read as a loss, so Trends said 0W 5L.
         total = len(wars)
-        wins = sum(1 for w in wars if w['result'] == 'victory')
-        losses = total - wins
-        win_rate = (wins / total * 100) if total > 0 else 0
+        wins = sum(1 for w in wars if w.get('result') == 'victory')
+        losses = sum(1 for w in wars if w.get('result') == 'defeat')
+        unknown = total - wins - losses
+        decided = wins + losses
+        win_rate = (wins / decided * 100) if decided > 0 else 0
 
         # All wars listed (most recent first, up to 10)
         war_lines = []
         for w in reversed(wars[-10:]):
-            icon = '✅' if w['result'] == 'victory' else '❌'
+            icon = result_icon(w.get('result'))
             war_lines.append(
                 f'{icon} vs **{w["enemy_name"]}** · {w["our_score"]}-{w["enemy_score"]}'
                 f' ({format_timestamp(w["timestamp"], "R")})'
@@ -1928,7 +1976,8 @@ class WarTracker:
         ]) or 'No data'
 
         description = (
-            f'**Record:** {wins}W · {losses}L ({win_rate:.0f}% win rate)\n'
+            f'**Record:** {wins}W · {losses}L ({win_rate:.0f}% win rate)'
+            + (f' · {unknown} with no result on record' if unknown else '') + '\n'
             f'**Wars tracked:** {total}\n\n'
             + '\n'.join(war_lines)
         )
@@ -1986,7 +2035,7 @@ class WarTracker:
 
         lines = []
         for w in reversed(last_5):
-            icon = '✅' if w['result'] == 'victory' else '❌'
+            icon = result_icon(w.get('result'))
             hosp_tag = ''
             if w['hosps_given'] or w['hosps_received']:
                 hosp_tag = f' | 🏥 gave {w["hosps_given"]} / received {w["hosps_received"]}'

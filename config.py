@@ -114,6 +114,12 @@ ASK_AI_MEMBERS = os.getenv("ASK_AI_MEMBERS", "0").strip().lower() in ("1", "true
 # Seconds a member waits between answered questions (management: no limit).
 # Groq's free plan has 200,000 tokens a day; one question costs 3-7k.
 ASK_AI_MEMBER_COOLDOWN_S = int(os.getenv("ASK_AI_MEMBER_COOLDOWN_S", "120"))
+# Launch time for members, unix seconds (features/member_launch.py): from
+# then on members can ask, and the launch announcement posts once. 0 = none.
+ASK_AI_MEMBERS_FROM = int(os.getenv("ASK_AI_MEMBERS_FROM", "0") or 0)
+# Bot-made fun/chat replies (jokes, greetings...) skip the 2 minute cooldown
+# because they cost nothing, so they get their own spam cap per member.
+ASK_AI_FUN_PER_MIN = int(os.getenv("ASK_AI_FUN_PER_MIN", "5"))
 
 # Where the bot reports its own operational problems (#management). A config
 # id pointing at a deleted channel otherwise fails in total silence, because
