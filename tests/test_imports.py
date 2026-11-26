@@ -11129,6 +11129,13 @@ def test_about_the_bot_and_fun_are_bot_made_and_never_aim_at_others():
     assert fun_reply('rate my activity', 'u', mem, rng) is None
     assert fun_reply('rate my war hits', 'u', mem, rng) is None
     assert 'd20' in fun_reply('roll a d20', 'u', mem, rng)
+    # "am I fat?" (live 26/11/2026) got the asker's whole record: now a
+    # bot-made line. "am I active?" is still a records question.
+    from features.ask_chat import SELF_CHECKS
+    for q in ['am I fat?', 'am i cute', "I'm ugly", 'am I a legend?', 'am I too old?']:
+        assert fun_reply(q, 'u', mem, rng) in SELF_CHECKS, q
+    for q in ['am I active?', 'am I in an OC?', 'am I lazy?', 'am I on the target list?']:
+        assert fun_reply(q, 'u', mem, rng) is None, q
     assert fun_reply('pick tacos or pizza', 'u', mem, rng)
     assert fun_reply('who is in an OC?', 'u', mem, rng) is None
 
@@ -11145,7 +11152,7 @@ def test_about_the_bot_and_fun_are_bot_made_and_never_aim_at_others():
 
     async def no_ai(session, messages, f, used):
         raise AssertionError('the AI should not be asked')
-    for q in ['tell me a joke', 'roast me', 'who made you?', 'flip a coin']:
+    for q in ['tell me a joke', 'roast me', 'who made you?', 'flip a coin', 'am I fat?']:
         ans = asyncio.run(answer_question(None, q, Facts(), [], providers=[('x', no_ai)]))
         assert ans.provider == 'none' and ans.text, q
     # "roast Ellanna" never gets a roast (existing judging path, AI stub).

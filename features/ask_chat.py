@@ -989,6 +989,23 @@ NUMBER_RX = re.compile(r"^\s*(?:pick|choose|give me|gimme|random)\s+(?:me\s+)?(?
                        r"(?:\s+(?:between|from)\s+(-?\d{1,9})\s+(?:and|to|-)\s+(-?\d{1,9}))?\s*[!.?]*\s*$", re.I)
 RATE_RX = re.compile(r"^\s*(?:rate|score)\s+(?:my|our)\s+([\w' \-]{2,40}?)\s*(?:out of (?:10|ten)|/10)?\s*[!.?]*\s*$", re.I)
 CHOOSE_RX = re.compile(r"^\s*(?:pick|choose|decide)[:,]?\s+(?:one[:,]?\s+|between\s+)?(.{1,60}?)\s+or\s+(.{1,60}?)\s*[?!.]*\s*$", re.I)
+# "am I fat?", "am I cute?", "am I dumb?" (live 26/11/2026: "am I fat?" got
+# the member's whole activity record). Looks and vibes, never records words
+# ("am I active?" still goes to the records). Kind and cheeky, never about
+# bodies: the bot can't see anyone and says so.
+SELF_CHECK_RX = re.compile(
+    r"^\s*(?:am i|am l|m i|r i|i'?m|im|is it just me or am i)\s+(?:(?:too|so|really|very|kinda|a bit|actually|still)\s+)?"
+    r"(?:fat|skinny|thin|ugly|hot|cute|pretty|handsome|sexy|beautiful|gorgeous|attractive|fit|tall|short|old|"
+    r"dumb|stupid|smart|clever|weird|cool|funny|annoying|boring|special|loved|cringe|a (?:legend|good punk|noob|nerd|clown|bot))"
+    r"\s*[!?.]*\s*$", re.I)
+SELF_CHECKS = [
+    "I'm a vending machine bolted to the armoury wall, I can't even see you. From here you look like a punk. 🤘",
+    "No cameras on me, punk. Only thing I can measure is hits, and that's not what you asked. 😏",
+    "Can't see you from the armoury. You sound like crew though, and crew is the best look there is. 🖤",
+    "My scanner only picks up police radio, not looks. Verdict: certified punk. ✅",
+    "I judge nobody, I just count bullets. You're one of ours and that's what matters. 🤝",
+]
+
 RPS_RX = re.compile(r"^\s*(?:rock[\s,]*paper[\s,]*scissors|rps)[\s,:!-]*(rock|paper|scissors)?\s*[!.?]*\s*$|"
                     r"^\s*(rock|paper|scissors)\s*[!.?]*\s*$", re.I)
 
@@ -1069,6 +1086,8 @@ def fun_reply(question, uid=None, mem=None, rng=None, others=()):
         score = rng.randint(2, 10)
         comment = next(rng.choice(v) for (a, b), v in RATE_COMMENTS.items() if a <= score <= b)
         return f'Your {m.group(1).strip()}? **{score}/10**. {comment}'
+    if SELF_CHECK_RX.match(q) and not others:
+        return pick_part(SELF_CHECKS, 'selfcheck', uid, mem, rng)
     m = CHOOSE_RX.match(q)
     if m and not others and not RATE_RECORDS_RX.search(q):
         a, b = m.group(1).strip(' ,'), m.group(2).strip(' ,')
@@ -1092,7 +1111,7 @@ def fun_reply(question, uid=None, mem=None, rng=None, others=()):
 
 def all_fun_parts():
     out = JOKE_INTROS + JOKES + JOKE_OUTROS + ROAST_INTROS + ROASTS + ROAST_OUTROS + SELF_ROASTS + \
-          ROAST_REFUSALS + EIGHT_BALL + BALL_INTROS + COIN_INTROS + COIN_OUTROS
+          ROAST_REFUSALS + EIGHT_BALL + BALL_INTROS + COIN_INTROS + COIN_OUTROS + SELF_CHECKS
     for v in RATE_COMMENTS.values():
         out += v
     for spec in ABOUT.values():
@@ -1116,7 +1135,7 @@ def is_canned(question):
         return False
     if chat_kind(q):
         return True
-    for rx in (JOKE_RX, ROAST_ME_RX, ROAST_SELF_RX, COIN_RX, WHAT_CAN_RX):
+    for rx in (JOKE_RX, ROAST_ME_RX, ROAST_SELF_RX, COIN_RX, WHAT_CAN_RX, SELF_CHECK_RX):
         if rx.match(q):
             return True
     if any(spec['rx'].match(q) for spec in ABOUT.values()):
