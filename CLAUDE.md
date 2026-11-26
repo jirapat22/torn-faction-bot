@@ -7,7 +7,7 @@ A Discord bot for a Torn.com faction (Ascended Punks), running on Pat's home Mac
 ## Commands
 
 ```bash
-<py> -m pytest -q tests/          # full suite (206 tests), the one to trust
+<py> -m pytest -q tests/          # full suite (207 tests), the one to trust
 <py> -m pytest -q tests/test_imports.py::test_flytrack_logic   # single test
 <py> tests/test_imports.py        # runs test_imports.py ONLY, see note below
 <py> bot.py                       # run locally (needs .env)
@@ -219,4 +219,5 @@ Anything accumulating per-player needs an explicit retention policy; several fil
 - Slash commands use a single command with an `action`/`view` choice dropdown rather than many top-level commands (`/war`, `/avail`, `/verify`). Management-gated actions check `is_management(interaction)` per-action, not per-command.
 - Channel IDs come from `config.py` env vars. Features post to their own channel; none is hardcoded.
 - Commands that are management-only from top to bottom (`/announce`, `/createevent`, `/strikes`, `/faction`, `/rolesync`, `/rules`, `/verify`, `/test`) carry `@app_commands.default_permissions(kick_members=True)`, which hides them from members' `/` menu (the Management role has Kick Members; admins see everything). The in-code `is_management` check stays as the real lock. Mixed commands (`/war`, `/avail`, `/stakeout`...) can't be hidden per option, so they stay visible.
+- Every slash command logs one `Command /name opt=value by user in #channel` line to bot.log (`on_app_command_completion`, `command_log_line`), and a failing one logs `... FAILED: ...` as an ERROR and tells the person (`bot.tree.error`). The ApexPunk watch on the Mac (`.standby_run/`, launchd `dev.jirapat.apexpunk-watch`, Saturday 4am weekly review) reads these.
 - Restricting a command to certain channels is done in Discord's own server settings, not in code. Note that **Discord exempts Administrators from command permissions entirely**, so testing as an admin will not reflect what members see.

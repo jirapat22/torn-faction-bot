@@ -1146,6 +1146,47 @@ async def on_member_join(member):
         logger.error(f'Failed to DM welcome message to {member.name}: {e}')
 
 
+def command_log_line(name, options, user, channel):
+    """One readable bot.log line per slash command (Pat, 26/11/2026: the
+    weekly check reads these to see which commands get used and which fail;
+    before this, a command left no trace unless it crashed). Option values
+    are cut short so a long announcement text doesn't flood the log."""
+    opts = ' '.join(f'{k}={str(v)[:40]}' for k, v in (options or {}).items() if v is not None)
+    return f'Command /{name}{" " + opts if opts else ""} by {user} in #{channel}'
+
+
+def _command_bits(interaction, command):
+    name = getattr(command, 'qualified_name', None) or getattr(interaction.command, 'qualified_name', '?')
+    try:
+        options = dict(iter(interaction.namespace))
+    except Exception:
+        options = {}
+    return command_log_line(name, options, interaction.user, getattr(interaction.channel, 'name', '?'))
+
+
+@bot.event
+async def on_app_command_completion(interaction, command):
+    """Fires after a slash command finished without raising."""
+    logger.info(_command_bits(interaction, command))
+
+
+@bot.tree.error
+async def on_app_command_error(interaction, error):
+    """A slash command raised: log it as an ERROR (the watch flags those) and
+    tell the person, instead of Discord's silent "The application did not
+    respond"."""
+    logger.error(f'{_command_bits(interaction, interaction.command)} FAILED: {error!r}',
+                 exc_info=getattr(error, 'original', error))
+    msg = 'Something went wrong with that command. It has been logged.'
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(msg, ephemeral=True)
+        else:
+            await interaction.response.send_message(msg, ephemeral=True)
+    except Exception:
+        pass
+
+
 @bot.event
 async def on_error(event, *args, **kwargs):
     """Global error handler"""

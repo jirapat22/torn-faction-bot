@@ -11384,6 +11384,20 @@ def test_faction_facts_from_pat():
     assert 'Welcome to the Punks' in basics_reply("i'm new here")
 
 
+def test_slash_commands_leave_a_log_line():
+    """Every slash command writes one bot.log line (the weekly check reads
+    them), a failure is an ERROR line and the person is told, and long option
+    text is cut so an announcement can't flood the log."""
+    import bot
+    line = bot.command_log_line('war', {'view': 'board', 'member': None}, 'Ikaros22', 'war-room')
+    assert line == 'Command /war view=board by Ikaros22 in #war-room', line
+    assert 'member' not in line, 'unset options are left out'
+    long = bot.command_log_line('announce', {'text': 'x' * 100}, 'a', 'b')
+    assert 'x' * 41 not in long, 'option values are cut at 40 characters'
+    assert bot.command_log_line('help', {}, 'a', 'b') == 'Command /help by a in #b'
+    assert bot.bot.tree.on_error.__name__ == 'on_app_command_error', 'failures must be logged and answered'
+
+
 if __name__ == '__main__':
     test_faction_facts_from_pat()
     test_all_modules_import()
@@ -11587,4 +11601,5 @@ if __name__ == '__main__':
     test_casual_chat_mixes_parts_and_never_repeats_for_a_person()
     test_about_the_bot_and_fun_are_bot_made_and_never_aim_at_others()
     test_new_member_basics_and_faction_facts_are_quoted_not_invented()
+    test_slash_commands_leave_a_log_line()
     print('All smoke tests passed.')
