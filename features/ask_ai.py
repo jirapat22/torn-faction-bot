@@ -48,7 +48,7 @@ import discord
 
 from config import STRIKE_EXPIRY_DAYS
 from utils import torn_api
-from utils.helpers import member_is_management
+from utils.helpers import member_is_management, plural
 
 logger = logging.getLogger(__name__)
 
@@ -1854,7 +1854,7 @@ def member_card(report):
     if tot:
         plus = lambda a: '+' if a else ''
         where = f' (in {seen.group(2)} of the last {seen.group(1)})' if seen else ''
-        out.append(f'- ⚔️ Wars{where}: {tot.group(1)} hits made · {tot.group(3)}{plus(tot.group(2))} taken '
+        out.append(f'- ⚔️ Wars{where}: {plural(tot.group(1), "hit")} made · {tot.group(3)}{plus(tot.group(2))} taken '
                    f'· {tot.group(5)}{plus(tot.group(4))} from outside')
         wars = [m for m in (re.match(r'- War \d+ vs (.+?) \(([\d/]+), [^)]*\): hits made (\d+), hits taken '
                                      r'from the enemy (\w+)', l) for l in lines) if m]
@@ -1869,11 +1869,12 @@ def member_card(report):
     c60 = find(r'^- Last 60 days: .* (\d+) chain hits in total')
     last = find(r'^- Last chain hit on record: ([\d/]+)')
     if c14 and c60:
-        out.append(f'- ⛓️ Chains: {c14.group(1)} hits in 14 days · {c60.group(1)} in 60 days'
+        # plural(): a member with one chain hit read "1 hits in 14 days" (launch day, 26/11/2026).
+        out.append(f'- ⛓️ Chains: {plural(c14.group(1), "hit")} in 14 days · {c60.group(1)} in 60 days'
                    + (f' · last {last.group(1)}' if last else ''))
     oc = find(r'^Last seen in an OC: ([\d/]+) \((\d+) days ago\)')
     if oc:
-        out.append(f'- 🕵️ Last OC {oc.group(1)} ({oc.group(2)} days ago)')
+        out.append(f'- 🕵️ Last OC {oc.group(1)} ({plural(oc.group(2), "day")} ago)')
     elif find(r'^OC: never seen'):
         out.append('- 🕵️ Never seen in an OC')
     st = find(r'^Strikes active now: (\d+)\. Strikes ever recorded: (\d+)')

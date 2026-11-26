@@ -10752,6 +10752,10 @@ Active strikes all clear on 11/01/2027 if no new strike comes first (60 days aft
         assert bit in card, (bit, card)
     assert '\n\n' not in card and len(card) < 600 and '\u2014' not in card
     assert member_card('I have no records of anyone called **bob**.') is None   # not a report: AI as before
+    # One chain hit / one day must read singular (launch day: "1 hits in 14 days").
+    one = member_card(report.replace('0 chain hits in total', '1 chain hits in total', 1)
+                      .replace('(6 days ago)', '(1 days ago)'))
+    assert '1 hit in 14 days' in one and '(1 day ago)' in one, one
     left = member_card('MEMBER: Bob [1]\nIn the faction now: no, they have left. Last seen in the faction on '
                        '01/11/2026.\nWARS: not in any of the wars the bot has stats for.\nOC: never seen in an OC by the bot.')
     assert 'Left the faction (last seen 01/11/2026)' in left and 'Never seen in an OC' in left
