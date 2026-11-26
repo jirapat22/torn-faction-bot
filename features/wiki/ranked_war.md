@@ -3,7 +3,7 @@ Source: https://wiki.torn.com/wiki/Ranked_War
 Saved: 22/11/2026
 Keywords: rw, ranked, matchmaking, enlist, enlisting, rank, ranks, division, diamond, platinum, gold, silver, bronze, target score, target, war score, rewards, caches, template, templates, sacrifice, forfeit, roster lock, recruit, recruits
 
-## What a ranked war is
+## What a ranked war is (how it works)
 Ranked warring is a warring mode where factions fight one another 1v1 to move up through ranked tiers and earn rewards. It is a "tug of war": each side attacks members of the other to gain score, and the first to cross the target net score wins.
 
 ## Enlisting
@@ -34,14 +34,14 @@ Five ranks, each with four divisions: Bronze (about 30% of ranked factions), Sil
 
 Rank decay: a faction that doesn't fight a ranked war for about six weeks is unranked outright, with a warning a week before. Staying enlisted prevents this. Re-enlisting gives a new rank at matchmaking.
 
-## During the war (how score is gained)
+## During the war (how score is gained, how it works)
 - Score = the respect earned by each hit on the opponent, so mugs give 75% of a leave or hosp, and chain bonus hits give a lot.
 - Any active chain is forced into cooldown 5 seconds before the war starts.
 - Early Discharge is available from the start for all incoming outside hits.
 - Members of both factions get 60 seconds of protection from outside hitters after leaving hospital or jail.
 - Nobody can join, leave or be kicked from either faction until the war ends.
 
-## Target score, how long a war lasts and how it ends
+## Target score, how long a war lasts and how it ends (how it works)
 The target net score depends on both factions' ranks and member counts. If it isn't met within 24 hours, it drops by 1% of the original value every hour, so a war can last at most 123 hours. There is normally no forfeit: a war ends only when one side reaches the target or a faction is destroyed. If a faction loses 20% or more of its members to federal jail, the other side can file a bug report and admins can force a forfeit.
 
 ## Rewards

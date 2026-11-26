@@ -298,6 +298,42 @@ MOTTO_CLOSE = [
 ]
 
 
+# "Are we Punks that Ascended, or did we ascend to punkdom?" (acid_leaks,
+# launch day 26/11/2026; the AI answered "What's up?"). No official story
+# exists (Pat), so the bot says so and gives its own take, mixed and matched.
+NAME_RX = re.compile(
+    r"\bascend\w*\b.{0,60}\bpunk|\bpunk\w*\b.{0,60}\bascend|"
+    r"\bwhy (?:are we|is it|we'?re|r we) (?:called|named)\b|"
+    r"\bwhat does (?:the |our |this )?(?:faction(?:'s)? )?name mean\b|"
+    r"\b(?:meaning|origin|story) (?:of|behind) (?:the |our |this )?(?:faction(?:'s)? )?name\b|"
+    r"\bwhere (?:does|did) (?:the |our )?(?:faction(?:'s)? )?name come from\b", re.I)
+NAME_OPEN = [
+    "No official story on file, so here's mine 📜", "Nobody wrote it down, so I'll make it legend 🧙",
+    "Great question, deep lore incoming 🔥", "Officially? Unknown. Unofficially? 😏",
+    "The archives are blank, so trust me on this 🗄️", "Gather round, punks 🪑",
+]
+NAME_MIDDLE = [
+    "Both. We were born punks, and every war win is another floor up.",
+    "We started in the gutter and ascended one hospital stay at a time.",
+    "Ascended doesn't mean we got polite. It means we climbed higher and kept the attitude.",
+    "The punk part is the attitude, the ascended part is the climb.",
+    "Punks who ascend still punch like punks. That's the whole point.",
+    "Some say we ascended to a higher plane. I say we ascended to a higher hosp count.",
+    "We didn't ascend out of punkdom, we dragged punkdom up the ladder with us.",
+    "Normal people ascend to heaven. We ascended to the top of the hit list.",
+]
+NAME_CLOSE = [
+    f"{FACTION_TAGLINE} 🧗", f"**{FACTION_MOTTO}** 🔥", "Nobody gets carried up there 💪",
+    "Now go earn the name 🤘", "Still climbing, by the way 🚀", "And we're not done ascending 😈",
+]
+
+
+def name_reply(rng=None):
+    import random
+    rng = rng or random
+    return f'{rng.choice(NAME_OPEN)} {rng.choice(NAME_MIDDLE)} {rng.choice(NAME_CLOSE)}'
+
+
 def motto_hype(rng=None):
     """'Fuck yes 😤 We climb, they drop. Now hit something 🎯': one line
     from each pool, so it is never the same few lines on rotation."""
@@ -336,7 +372,7 @@ CREATIVE_RX = re.compile(r"\b(?:poem|song|rap|story|haiku|limerick|joke|write|dr
 def faction_question(question):
     q = question or ''
     # "what's our motto?" is a question; "write us a motto" is creative.
-    if MOTTO_RX.search(q) and not MAKE_RX.search(q):
+    if (MOTTO_RX.search(q) or NAME_RX.search(q)) and not MAKE_RX.search(q):
         return True
     if CREATIVE_RX.search(q):
         return False
@@ -497,6 +533,8 @@ async def faction_reply(question, guild=None, fetch=None):
     """Faction facts for a faction question, or None. fetch: test hook."""
     if not faction_question(question):
         return None
+    if NAME_RX.search(question or '') and not MOTTO_RX.search(question or ''):
+        return name_reply()   # no Torn data needed, and Torn being down shouldn't block it
     if fetch is None:
         from utils import torn_api
         fetch = torn_api.fetch_faction_data

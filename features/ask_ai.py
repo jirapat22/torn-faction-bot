@@ -1798,7 +1798,7 @@ _OVERVIEW_WORDS = {
     'how', 'hows', "how's", 'is', 'are', 'was', 'active', 'activity', 'activities', 'activites', 'activty',
     'actvity', 'activeness', 'doing', 'going', 'lately', 'recently', 'been', 'looking', 'tell', 'me', 'about',
     'check', 'on', 'look', 'up', 'lookup', 'info', 'the', 'of', 'for', 'report', 'overview', 'profile',
-    'record', 'records', 'summary', 'summarise', 'summarize', 'overall', 'and', 'his', 'her', 'their', 'war',
+    'record', 'records', 'progress', 'summary', 'summarise', 'summarize', 'overall', 'and', 'his', 'her', 'their', 'war',
     'wars', 'hits', 'chain', 'chains', 'quick', 'give', 'show', 'pull', 'files', 'file', 'pls', 'please',
     'what', 'whats', "what's", 'about', 'x', 's', 'any', 'good', 'a', 'an', 'he', 'she', 'they', 'them', 'him',
     # A greeting in front ("yo, how active is X?") is still an overview.
@@ -3495,6 +3495,17 @@ class ShowDataView(discord.ui.View):
             await interaction.followup.send(embed=e, ephemeral=True)
 
 
+async def _mark_waiting(message):
+    """⏳ on the member's own message when the bot holds back (cooldown or
+    spam cap). The nudge deletes itself after 10s, which left the question
+    sitting there unanswered with no sign the bot had seen it (Pat, launch
+    day 26/11/2026). The reaction stays."""
+    try:
+        await message.add_reaction('\u23f3')
+    except Exception:
+        pass   # can't react here (no permission, message gone): the nudge alone will do
+
+
 # Said once when a member goes over the fun/chat cap (then silence for the
 # rest of the minute). Deletes itself after 10 seconds.
 FUN_CAP_TEXT = "Easy, spam lord 😅 I'm a bot, not a jukebox. Give me a minute and go again. 🤘"
@@ -3643,12 +3654,14 @@ class AskAI:
             # "thanks" right after an answer got "wait 2 minutes".
             if left and not (not bare or HELP_WORDS.match(bare) or skips_cooldown(bare)):
                 await message.reply(cooldown_text(left), mention_author=False, delete_after=10)
+                await _mark_waiting(message)
                 return
             if bare and skips_cooldown(bare):
                 capped = self.fun_capped(message.author.id)
                 if capped == 'warn':
                     await message.reply(FUN_CAP_TEXT, mention_author=False, delete_after=10)
                 if capped:
+                    await _mark_waiting(message)
                     return
 
         history, earlier = [], ''
@@ -3693,8 +3706,11 @@ class AskAI:
         # "yes" after "Did you mean X?" is remembered as the full question,
         # so the next follow-up still knows who it was about.
         question = ans.asked or question
-        if not management and ans.provider != 'none':
-            # Only an answered question starts the cooldown, not a refusal.
+        if not management and ans.provider not in ('none', 'bot'):
+            # Only an AI answer starts the cooldown: the cooldown protects the
+            # AI's daily allowance, and a bot-made card costs none. Launch
+            # day: dakkkz's "how's my progress?" right after "how active am
+            # I?" got "wait 2 minutes" for a card that costs nothing.
             self.last_answered[message.author.id] = time.time()
 
         logger.info(f'ask_ai: {message.author} asked {question[:80]!r} -> {ans.provider}, '

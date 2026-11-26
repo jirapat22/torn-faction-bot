@@ -3,10 +3,10 @@ Source: https://wiki.torn.com/wiki/Organized_Crime_2.0
 Saved: 22/11/2026
 Keywords: oc, ocs, organised crime, organized crimes, scope, cpr, planning, scenario, scenarios, initiating, tools, materials, hand drill
 
-## What an OC is
+## What an OC is (how it works)
 An Organized Crime (OC, the 2.0 system) is a group activity for faction members that earns the faction respect and rewards, and gives the members Crime Experience if it succeeds. While planning, an OC icon shows in the sidebar with a countdown on hover. Everyone gets an event when planning finishes. The crime experience gained does not depend on how long you spent in planning.
 
-## Planning phase
+## Planning phase (how it works)
 - Players can join until the OC is full (you can join while jailed). Planning starts when you join.
 - Each member has 24 hours to complete their planning step, then progress moves to the next member in the queue.
 - When every role has finished planning, the OC moves to execution. If it's not full and nobody is next, it pauses.

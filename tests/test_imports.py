@@ -1896,6 +1896,43 @@ def test_member_launch_and_fun_cap():
         assert JAILBREAK_RX.search(bad), bad
 
 
+def test_launch_day_fixes():
+    """
+    From the launch day chat (26/11/2026): "explain how the rank war works"
+    got enlisting/matchmaking instead of how a war is won; the faction name
+    question got "What's up?"; a held-back member saw the nudge vanish with
+    no trace (now a lasting hourglass reaction); bot-made cards don't start
+    the cooldown (only AI answers do).
+    """
+    import asyncio, inspect
+    from features.torn_wiki import find_wiki, load_pages
+    from features.ask_basics import faction_question, faction_reply, NAME_OPEN, NAME_MIDDLE, NAME_CLOSE
+    import features.ask_ai as a
+
+    heads = [b.split(';')[0] for b in find_wiki('explain how the rank war works', load_pages())]
+    assert heads and all('how it works' in h for h in heads), heads
+    assert 'Matchmaking' not in ' '.join(heads)
+
+    q = 'are we Punks that have Ascended to something else, or did we start it normal and ascend to punkdom?'
+    assert faction_question(q)
+    async def no_torn(sel):
+        raise AssertionError('the name answer needs no Torn call')
+    out = asyncio.run(faction_reply(q, None, no_torn))
+    assert any(out.startswith(o) for o in NAME_OPEN) and any(m in out for m in NAME_MIDDLE)
+    assert not faction_question('write a poem about ascended punks')
+    assert not any('\u2014' in x for x in NAME_OPEN + NAME_MIDDLE + NAME_CLOSE)
+
+    reacted = []
+    class Msg:
+        async def add_reaction(self, e):
+            reacted.append(e)
+    asyncio.run(a._mark_waiting(Msg()))
+    assert reacted == ['\u23f3']
+
+    src = inspect.getsource(a.AskAI._answer)
+    assert "ans.provider not in ('none', 'bot')" in src, 'bot-made cards must not start the cooldown'
+
+
 def test_attacks_shape_change_is_not_read_as_no_attacks():
     """
     The outage door closed, so this checks the shape door. The paginator stops
@@ -11347,6 +11384,7 @@ if __name__ == '__main__':
     test_war_reports_keep_members_who_left()
     test_war_trends_never_count_no_result_as_a_loss()
     test_member_launch_and_fun_cap()
+    test_launch_day_fixes()
     test_attacks_shape_change_is_not_read_as_no_attacks()
     test_attack_log_outage_is_not_a_quiet_war()
     test_attack_log_paging_does_not_skip_the_boundary_second()

@@ -203,6 +203,10 @@ def question_stems(question):
     return kw
 
 
+GENERIC_RX = re.compile(r"\bhow (?:does|do|is|are)\b.*\bwork|\bexplain\b|\bwhat (?:is|are) (?:a |an |the )?\w+(?: \w+)?\s*\??$|"
+                        r"\btell me about\b|\bhow .* works?\b", re.I)
+
+
 def find_wiki(question, pages):
     """
     Best saved sections for the question. Two steps:
@@ -215,6 +219,7 @@ def find_wiki(question, pages):
     kw = question_stems(question)
     if not kw:
         return []
+    generic = bool(GENERIC_RX.search(question or ''))
     scored = []
     for title, source, sections, topic in pages:
         if not any(t <= kw for t in topic):
@@ -226,6 +231,15 @@ def find_wiki(question, pages):
             # +3 when the question names this page itself ("how do I revive
             # someone?" belongs on Revive before Hospital's revive section).
             score = 4 * len(kw & hs) + 2 * len(kw - tw - hs & body_words) + (3 if kw & tw else 0)
+            # "explain how the rank war works" names only the topic, so every
+            # section tied and the first three went out (intro, enlisting,
+            # matchmaking) instead of how a war is actually played and won
+            # (launch day, 26/11/2026). Such generic asks prefer the sections
+            # tagged "(how it works)" in the saved page.
+            # Generic only when the question names nothing but the topic
+            # itself: "what is a sacrifice match?" wants that section.
+            if generic and kw <= tw and 'how it works' in head.lower():
+                score += 4
             scored.append((score, -order, title, source, head, body))
     # Ties go to the earlier section, which is the page's overview.
     scored.sort(key=lambda s: (-s[0], -s[1]))
