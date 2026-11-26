@@ -1836,8 +1836,15 @@ def member_card(report):
     else:
         la = find(r'^Last action in Torn: [\d/]+ \((.+?)\), status now (\w+)')
         if la:
-            ago = 'just now' if re.match(r'0 (?:hours?|h|minutes?|m)\b', la.group(1)) else la.group(1)
-            out.append(f'- 🟢 Last action {ago} ({la.group(2)})')
+            status = la.group(2)
+            ago = la.group(1)
+            if re.match(r'0 (?:hours?|h|minutes?|m)\b', ago):
+                # Torn only says Offline after a while without action, so
+                # "just now (Offline)" read as a contradiction on launch day.
+                ago = 'just now' if status in ('Online', 'Idle') else 'under an hour ago'
+            # The dot follows Torn's own colours instead of always green.
+            dot = {'Online': '🟢', 'Idle': '🟡'}.get(status, '⚫')
+            out.append(f'- {dot} Last action {ago} ({status})')
         elif find(r'^In the faction now: unknown'):
             out.append("- ❔ Torn isn't answering, so no live status")
     days = find(r'^Days online in the 14 days before (?:now|they left): (\d+)')

@@ -10756,6 +10756,10 @@ Active strikes all clear on 11/01/2027 if no new strike comes first (60 days aft
     one = member_card(report.replace('0 chain hits in total', '1 chain hits in total', 1)
                       .replace('(6 days ago)', '(1 days ago)'))
     assert '1 hit in 14 days' in one and '(1 day ago)' in one, one
+    # Offline within the hour is not "just now" (launch day: "just now (Offline)"), and the dot follows status.
+    off = member_card(report.replace('status now Idle', 'status now Offline'))
+    assert '⚫ Last action under an hour ago (Offline)' in off and 'just now' not in off, off
+    assert '🟡 Last action just now (Idle)' in card, card
     left = member_card('MEMBER: Bob [1]\nIn the faction now: no, they have left. Last seen in the faction on '
                        '01/11/2026.\nWARS: not in any of the wars the bot has stats for.\nOC: never seen in an OC by the bot.')
     assert 'Left the faction (last seen 01/11/2026)' in left and 'Never seen in an OC' in left
