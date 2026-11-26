@@ -1933,6 +1933,40 @@ def test_launch_day_fixes():
     assert "ans.provider not in ('none', 'bot')" in src, 'bot-made cards must not start the cooldown'
 
 
+def test_thinking_advice_and_clean_chat():
+    """
+    Pat, 26/11/2026: accuracy and banter over speed (up to ~30s), but simple
+    ones stay quick. Hard questions ask Groq/Gemini for 'high' reasoning;
+    advice gets a take with no numbers instead of a wiki dead end; a chat
+    reply loses only its bad sentence (not the whole reply for "What's up?");
+    naming the person you're talking to is fine.
+    """
+    import features.ask_ai as a
+    from types import SimpleNamespace
+    assert a.needs_thinking('is it worth flying to Japan during war or should I stay in Torn?')
+    assert a.needs_thinking('are we Punks that have Ascended to something else, or did we start normal?')
+    assert not a.needs_thinking('war score?') and not a.needs_thinking('hi')
+    fb = SimpleNamespace(reasoning='high', tool_specs=[])
+    assert a._payload('Groq', 'm', [], fb)['reasoning_effort'] == 'high'
+    assert 'reasoning_effort' not in a._payload('OpenRouter', 'm', [], fb), 'others would reject it'
+    assert a.ADVICE_RX.search('should I stay in Torn?') and a.ADVICE_RX.search('is it worth flying')
+    assert not a.ADVICE_RX.search('how long can a ranked war last?')
+    assert a.mechanics_sections('is it worth flying to japan during war?', None) == []
+
+    class Facts:
+        asker = ('1', 'Ikaros22')
+        def _known_names(self):
+            return {'1': 'Ikaros22', '2': 'Ellanna'}
+    f = Facts()
+    assert a.is_small_talk('I miss us', 'We miss you too, Ikaros22! 🤘', f), 'the asker may be named'
+    assert not a.is_small_talk('I miss us', 'Ellanna misses you too!', f), 'nobody else'
+    kept = a.chat_keep_clean('Love that question. We hit 500 enemies last week. Stay dangerous.', 'lore?', f)
+    assert kept == 'Love that question. Stay dangerous.', kept
+    assert a.chat_keep_clean('Yo! 😎', 'hi', f) == 'Yo! 😎'
+    bullets = a.chat_keep_clean('- Stay in Torn. 💥\n- Japan is a break.\n- Up to you.', 'should i fly?', f)
+    assert bullets.count('\n') == 2, 'bullets keep their own lines'
+
+
 def test_attacks_shape_change_is_not_read_as_no_attacks():
     """
     The outage door closed, so this checks the shape door. The paginator stops
@@ -8371,7 +8405,7 @@ def test_ask_ai_audit_fixes_chat_numbers_war_order_and_groq_hiccups():
 
     # Cerebras and Gemini: same code path, skipped instantly with no key, in
     # the chain after Groq's big model and before its small one.
-    assert [n for n, _ in a.PROVIDERS] == ['Groq', 'Cerebras', 'Gemini', 'Mistral', 'OpenRouter', 'NVIDIA',
+    assert [n for n, _ in a.PROVIDERS] == ['Groq', 'Cerebras', 'OpenRouter', 'Gemini', 'Mistral', 'NVIDIA',
                                           'Gemini lite', 'Groq small', 'local AI']
     # Mistral and OpenRouter (free backups, Pat 24/11/2026): skipped
     # instantly while no key is set, like Cerebras
@@ -11385,6 +11419,7 @@ if __name__ == '__main__':
     test_war_trends_never_count_no_result_as_a_loss()
     test_member_launch_and_fun_cap()
     test_launch_day_fixes()
+    test_thinking_advice_and_clean_chat()
     test_attacks_shape_change_is_not_read_as_no_attacks()
     test_attack_log_outage_is_not_a_quiet_war()
     test_attack_log_paging_does_not_skip_the_boundary_second()

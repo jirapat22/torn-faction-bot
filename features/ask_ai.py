@@ -59,6 +59,11 @@ GROQ_SMALL_MODEL = os.getenv('GROQ_SMALL_MODEL', 'openai/gpt-oss-20b')
 MAX_ROUNDS = 5          # tool calls per question, so a confused model can't loop forever
 LOCAL_BUDGET_S = 120    # the local AI (the backup) gets this long before giving up
 GROQ_TIMEOUT_S = 60
+# A backup gets less time: Gemini answered "high demand" 503s only after ~18s
+# and once hung 60s (26/11/2026), so a busy moment cost a minute. Pat's
+# budget is ~30s for a careful answer, so a stuck backup is cut off and the
+# next one tried.
+BACKUP_TIMEOUT_S = 25
 FACTS_EMBED_LIMIT = 3900   # Discord embed descriptions max out at 4096
 ANSWER_LIMIT = 1900        # Discord messages max out at 2000
 MEMORY_SIZE = 50           # recent answers remembered so replies can ask follow-ups
@@ -1226,8 +1231,11 @@ PERSONALITY = (
     'If asked to judge or insult a member ("is X lazy?"), do not; call member_report and give their '
     'records neutrally instead.\n'
     'CHAT (casual messages, greetings, jokes, random topics, nothing about members/wars/chains/OCs/strikes): '
-    'reply in character in one to three sentences, Torn slang welcome (hosp, mug, bonus hit, chain, '
-    'stacking, turtling), a couple of emojis is fine, no tools needed. Never mention Xanax, drugs, money or items. Never mention or '
+    'reply in character in one to three sentences, a couple of emojis is fine, no tools needed. Actually '
+    'engage with what they said: answer their question or riff on it with a real, funny take. Never brush '
+    'them off with a generic "what\'s up?" or "got a real question?" (a lore question about the faction '
+    'name once got "What\'s up?"). Plain, clear English: some of the crew are not native speakers, so no '
+    'wordplay or slang that needs explaining; if they write in another language, reply in that language. Never mention Xanax, drugs, money or items. Never mention or '
     'describe any member in chat. For general Torn game questions, answer only if you are sure, and say so '
     'if you are not.\n'
     'RECORDS ANSWERS (anything from the tools): the facts stay neutral, exact and complete. You may add ONE '
@@ -1428,6 +1436,48 @@ CLOUD = {
 }
 
 
+def _payload(provider, model, msgs, facts):
+    body = {'model': model, 'messages': msgs, 'tools': getattr(facts, 'tool_specs', TOOL_SPECS),
+            'tool_choice': 'auto', 'temperature': 0.2}
+    effort = getattr(facts, 'reasoning', None)
+    if effort and provider in REASONING_PROVIDERS:
+        body['reasoning_effort'] = effort
+    return body
+
+
+# "Think longer" (Pat, 26/11/2026: "I would value more accurate and banter
+# more than speed", up to ~30s, but "some should be faster if not
+# complicated"). Groq's gpt-oss and Gemini take a reasoning effort: a hard
+# question gets 'high', a simple one stays at the normal 'medium'. Only
+# these two take the setting; the others would reject an unknown field.
+REASONING_PROVIDERS = {'Groq', 'Gemini'}
+THINK_RX = re.compile(
+    r"\bwhy\b|\bhow (?:come|does|do|did|would|should|can|could)\b|\bexplain\b|\bwhat if\b|\bshould (?:i|we)\b|"
+    r"\bwould you\b|\bwhat do you think\b|\bopinion\b|\bcompare\b|\bdifference\b|\bbetter\b|\bworth\b|"
+    r"\bstrateg\w*|\badvice\b|\btips?\b|\bmean(?:s|ing)?\b|\bor did\b|\bor are\b|\blore\b|\bstory\b", re.I)
+
+
+# "Is it worth flying to Japan during war or should I stay?" wants a take,
+# not a wiki quote: it was forced into the wiki path and dead-ended (Pat's
+# test, 26/11/2026). Such answers may hold NO numbers (they can't invent
+# stats that way) and say they are the bot's take.
+ADVICE_RX = re.compile(
+    r"\bshould (?:i|we|u|you)\b|\bis it (?:worth|better|smart|a good idea)\b|\bworth it\b|\bbetter to\b|"
+    r"\bbest way to\b|\bany tips?\b|\bgive me (?:some )?(?:tips|advice)\b|\badvice\b|"
+    r"\bwhat would you do\b|\bwhat do you (?:think|reckon|recommend)\b|\bstrateg\w*\b", re.I)
+ADVICE_NOTE = '\n-# My take, not official Torn info. Ask management if you need a ruling.'
+
+
+def needs_thinking(question, history=None):
+    """True for questions worth the slower, more careful answer: long ones,
+    why/how/opinion/advice/compare ones, and follow-ups (a conversation
+    needs the context weighed). "war score?" or "hi" stay quick."""
+    q = (question or '').strip()
+    if len(q.split()) >= 14 or THINK_RX.search(q):
+        return True
+    return bool(history) and len(q.split()) >= 5
+
+
 async def _ask_groq(session, messages, facts, used, model=None, max_wait=None, provider='Groq'):
     url, key_env, default_model = CLOUD[provider]
     key = os.getenv(key_env)
@@ -1438,11 +1488,10 @@ async def _ask_groq(session, messages, facts, used, model=None, max_wait=None, p
     for _ in range(MAX_ROUNDS + 3):   # +3: two waits for the rate limit, one retry after a 400
         try:
             async with session.post(url,
-                                    timeout=aiohttp.ClientTimeout(total=GROQ_TIMEOUT_S),
+                                    timeout=aiohttp.ClientTimeout(
+                                        total=GROQ_TIMEOUT_S if provider == 'Groq' else BACKUP_TIMEOUT_S),
                                     headers={'Authorization': f'Bearer {key}'},
-                                    json={'model': model or default_model, 'messages': msgs,
-                                          'tools': getattr(facts, 'tool_specs', TOOL_SPECS),
-                                          'tool_choice': 'auto', 'temperature': 0.2}) as r:
+                                    json=_payload(provider, model or default_model, msgs, facts)) as r:
                 if r.status == 429 and waits < 2:
                     # Free plan: 8,000 tokens/min. A big question can hit it;
                     # waiting beats the local fallback. Two waits, because one
@@ -1539,11 +1588,12 @@ async def _ask_gemini_lite(session, messages, facts, used):
 # Big, capable models first (each with its own free allowance), then Groq's
 # small model, then the Mac (chat only; it never words records). A provider
 # with no key set is skipped instantly.
-PROVIDERS = [('Groq', _ask_groq_big), ('Cerebras', _ask_cerebras), ('Gemini', _ask_gemini),
-             # OpenRouter before NVIDIA: measured 24/11/2026, both right, but
-             # NVIDIA took 52s on a follow-up and timed out once (OpenRouter
-             # 7-13s). Mistral answers 429 at once until its free plan is on.
-             ('Mistral', _ask_mistral), ('OpenRouter', _ask_openrouter), ('NVIDIA', _ask_nvidia),
+# OpenRouter before Gemini: on launch day Gemini answered "high demand" 503s
+# after ~18s each, while OpenRouter answered right in 7-13s (24/11/2026).
+# NVIDIA last of the big ones (right, but once 52s). Mistral answers 429 at
+# once until its free plan is on, so its place costs nothing.
+PROVIDERS = [('Groq', _ask_groq_big), ('Cerebras', _ask_cerebras), ('OpenRouter', _ask_openrouter),
+             ('Gemini', _ask_gemini), ('Mistral', _ask_mistral), ('NVIDIA', _ask_nvidia),
              ('Gemini lite', _ask_gemini_lite), ('Groq small', _ask_groq_small), ('local AI', _ask_local)]
 # Up to a minute: measured, the Mac's AI takes 40-90s AND is weaker (it once
 # quoted the wrong war's hits for "Ikaros vs Kaos Korner"), so waiting out
@@ -1732,6 +1782,28 @@ def pronoun_target(question, history, facts):
     return None
 
 
+def chat_keep_clean(text, question, facts):
+    """The AI's chat reply minus any sentence with a number the person
+    didn't say or a claim of having done something; '' when too little is
+    left to be worth posting."""
+    chat = tidy_answer(text or '', [], '')
+    lines, cut = [], False
+    # Line by line, so bullets keep their own lines (the advice answer came
+    # out as one squashed paragraph).
+    for line in chat.split('\n'):
+        sens = [x for x in re.split(r'(?<=[.!?])\s+', line) if x.strip()]
+        good = [x for x in sens if not CLAIMS_DONE.search(x) and not unsupported_numbers(x, question)]
+        cut = cut or len(good) != len(sens)
+        if good:
+            lines.append(' '.join(good))
+        elif not sens:
+            lines.append('')
+    out = '\n'.join(lines).strip()
+    if not cut:
+        return out   # nothing cut: even a short "Yo! 😎" is a whole reply
+    return out if len(out.split()) >= 3 else ''
+
+
 def is_small_talk(question, answer, facts):
     """
     True when a message and its AI reply are plain chat ("hi", "tell me a
@@ -1746,7 +1818,10 @@ def is_small_talk(question, answer, facts):
     for sentence in re.split(r'(?<=[.!?\n])\s*', answer or ''):
         if numbers_in(sentence) and DATA_WORDS.search(sentence):
             return False
-    return not names_in(f'{question}\n{answer}', facts)
+    # The person talking may be named: "We miss you too, Ikaros!" is just
+    # friendly. Anyone else named means it should have been looked up.
+    asker = (getattr(facts, 'asker', None) or (None, ''))[1].lower()
+    return not [n for n in names_in(f'{question}\n{answer}', facts) if n.lower() != asker]
 
 
 # Short on purpose: it once answered a casual "I upgraded the bot, just tag
@@ -2052,6 +2127,8 @@ def mechanics_sections(question, facts, rules_ok=False):
     q = question or ''
     if not MECH_RX.search(q) or _records_cue(q) or ANNOUNCE_RX.search(q):
         return []
+    if ADVICE_RX.search(q):
+        return []   # wants a take, not a quote (ADVICE_RX)
     if RULES_CUE.search(q) and not rules_ok:
         return []
     if names_in(q, facts):
@@ -2753,6 +2830,7 @@ async def _answer_question(session, question, facts, history=None, earlier_facts
     """
     providers = providers or PROVIDERS
     facts.management = management
+    facts.reasoning = 'high' if needs_thinking(question, history) else 'medium'
     # Everyone: strikes by chat, kicks, payouts, battle stats, Xanax. Before
     # anything else, so no rewrite or lookup can route around them.
     fixed = guard_question(question, True)
@@ -3010,6 +3088,11 @@ async def _answer_question(session, question, facts, history=None, earlier_facts
     if who:
         base.append({'role': 'system', 'content': f'In the next question, he/she/they/him/her/them/his/their '
                      f'means {who}, the member from earlier in this conversation. Look them up by that name.'})
+    if ADVICE_RX.search(question or '') and not mech and not acting and not announcing:
+        base.append({'role': 'system', 'content': 'The next question asks for advice or your opinion. Give an '
+                     'honest, useful take in 2 to 4 short bullets or sentences, in character, in plain English. '
+                     'Use NO numbers at all (no times, levels, stats or percentages): you cannot check them. '
+                     'If it is about this person\'s own records, look them up first.'})
     if mech:
         base.append({'role': 'system', 'content': 'The next question is about how Torn works. Answer only from '
                      'the TORN WIKI text above, numbers exactly as written, and include the wiki search link. '
@@ -3170,15 +3253,24 @@ async def _answer_question(session, question, facts, history=None, earlier_facts
                 return Answer(last_bot, pname, '', True, took(), kind='action_ask')
             # A Torn game question with nothing saved gets the wiki link, not
             # chat: the AI "explained" travel with a made-up level requirement.
-            if game_question(question, facts) and GAME_TOPIC.search(question) and MECH_RX.search(question):
+            advice = bool(ADVICE_RX.search(question or ''))
+            if advice:
+                take = chat_keep_clean(text, question, facts)
+                if take and not numbers_in(take):
+                    return Answer(take + ADVICE_NOTE, pname, '', True, took(), kind='chat')
+            if game_question(question, facts) and GAME_TOPIC.search(question) and MECH_RX.search(question) \
+                    and not advice:
                 return Answer(wiki_fallback(question), pname, '', True, took(), kind='ask')
             # ...unless it was just chit-chat, which needs no records at all.
             if is_small_talk(question, text, facts):
-                chat = tidy_answer(text, [], '')
                 # Chat numbers must be the person's own too: "give me a random
                 # number" got "42! Or 73?", and a made-up number in the bot's
-                # voice is exactly what Pat ruled out.
-                if not chat or CLAIMS_DONE.search(chat) or unsupported_numbers(chat, question):
+                # voice is exactly what Pat ruled out. Only the offending
+                # sentences go now: the whole reply used to be swapped for
+                # "What's up?", which is how acid_leaks' lore question got
+                # brushed off (launch day).
+                chat = chat_keep_clean(text, question, facts)
+                if not chat:
                     # Chat never does anything (only ✅ cards do). A chat line
                     # saying it did ("Deleted everything 💀", "strike issued")
                     # would be believed, so it is swapped for a harmless one.
@@ -3280,6 +3372,16 @@ async def _answer_question(session, question, facts, history=None, earlier_facts
             bad = unsupported_numbers(text, *sources())
             if bad or facts.final:
                 logger.warning(f'ask_ai: {pname} rewrite still had {bad}; showing raw facts instead')
+                # A wiki question quotes the page itself; the "tap 📎" line
+                # pointed members at a button only management gets (launch
+                # day, "explain how the rank war works").
+                if mech or mixed:
+                    return Answer(wiki_quote(question, mech or mixed), pname, lookup_facts, True, took(),
+                                  fallback=True)
+                if not management:
+                    raw = raw_records_text(facts, question)
+                    if raw:
+                        return Answer(raw, pname, _facts_text(used), True, took(), fallback=True)
                 return Answer(
                     "I couldn't word that without risking a wrong number, so I'm not going to. "
                     'Tap 📎 Show data for the records exactly as they are.', pname, _facts_text(used), True,
