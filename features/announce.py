@@ -93,6 +93,70 @@ def build_post(text, prefix):
     return f'{prefix}\n{text}' if prefix else text
 
 
+def event_from_post(text, now=None):
+    """
+    The Discord Event an announcement describes, or None. Everything comes
+    from the post: the name from its first **heading**, the start from its
+    first stamped time, the end from its "Ends" line (else 1 hour later,
+    Discord needs one), the description is the post without time codes.
+    None when there is no time, or it has already passed.
+    """
+    import re, time as _t
+    now = now or _t.time()
+    lines = [l for l in (text or '').split('\n') if l.strip()]
+    stamps = re.findall(r'<t:(\d+):f>', text or '')
+    if not stamps or int(stamps[0]) <= now:
+        return None
+    start = int(stamps[0])
+    end_line = next((l for l in lines if re.match(r'\s*[-•*]?\s*Ends\b', l)), '')
+    end_ts = re.search(r'<t:(\d+):f>', end_line)
+    end = int(end_ts.group(1)) if end_ts and int(end_ts.group(1)) > start else start + 3600
+    heading = next((l for l in lines if l.lstrip().startswith('**')), lines[0])
+    # "**🦘 Happy Jump**" -> "Happy Jump": no stars, emoji or stray punctuation.
+    name = re.sub(r'[^\w\s&\'’!?:()-]', '', re.sub(r'<[^>]+>', '', heading)).strip(' -:') or 'Faction event'
+    return {'name': name[:100], 'start': start, 'end': end,
+            'description': unstamp_times(text).strip()[:1000]}
+
+
+class PostedView(discord.ui.View):
+    """"📅 Also create event" under a posted announcement. Fixed custom_id so
+    a press after a restart says "expired" instead of failing silently."""
+
+    def __init__(self, store):
+        super().__init__(timeout=None)
+        self.store = store
+
+    @discord.ui.button(label='Also create event', emoji='📅', style=discord.ButtonStyle.primary,
+                       custom_id='announce:event')
+    async def make_event(self, interaction: discord.Interaction, button: discord.ui.Button):
+        from datetime import datetime, timezone
+        plan = self.store.get(interaction.message.id)
+        if plan is None:
+            await interaction.response.send_message(
+                'This button expired (the bot restarted since). Use `/createevent` instead.', ephemeral=True)
+            return
+        if interaction.user.id != plan['author_id']:
+            await interaction.response.send_message('Only the person who posted this can do that 🔒', ephemeral=True)
+            return
+        await interaction.response.defer()
+        try:
+            event = await interaction.guild.create_scheduled_event(
+                name=plan['name'], description=plan['description'],
+                start_time=datetime.fromtimestamp(plan['start'], timezone.utc),
+                end_time=datetime.fromtimestamp(plan['end'], timezone.utc),
+                privacy_level=discord.PrivacyLevel.guild_only, entity_type=discord.EntityType.external,
+                location='Torn City')
+        except discord.HTTPException as e:
+            logger.error(f'Announcement event failed: {e!r}')
+            await interaction.followup.send('⚠️ Discord refused the event, so nothing was made. '
+                                            'Try `/createevent`.', ephemeral=True)
+            return
+        self.store.pop(interaction.message.id, None)
+        await interaction.message.edit(content=interaction.message.content + f'\n📅 Event created: {event.url}',
+                                       view=None, allowed_mentions=discord.AllowedMentions.none())
+        logger.info(f'Event "{plan["name"]}" created from an announcement by {interaction.user}')
+
+
 class DraftView(discord.ui.View):
     """The ✅ Post / ✏️ Change / ❌ Cancel buttons under a draft. Fixed
     custom_ids and one registration at startup, so a press after a restart
@@ -130,9 +194,18 @@ class DraftView(discord.ui.View):
         await interaction.response.defer()
         sent = await channel.send(build_post(draft['text'], prefix), allowed_mentions=allowed)
         self.store.pop(interaction.message.id, None)
+        # A post with a time still ahead gets one more button: the same event
+        # as a Discord Event (Interested + Discord's own reminder), built from
+        # the post itself so nothing is typed twice (Pat, 27/11/2026).
+        plan = event_from_post(draft['text'])
+        view = None
+        if plan:
+            plan['author_id'] = draft['author_id']
+            self.store[interaction.message.id] = plan
+            view = PostedView(self.store)
         await interaction.message.edit(
             content=f'✅ Posted in {channel.mention} by {interaction.user.mention} (ping: {label}). {sent.jump_url}',
-            embed=None, view=None, allowed_mentions=discord.AllowedMentions.none())
+            embed=None, view=view, allowed_mentions=discord.AllowedMentions.none())
         logger.info(f'Announcement posted in #{channel} by {interaction.user} (ping: {label})')
 
     @discord.ui.button(label='Change', emoji='✏️', style=discord.ButtonStyle.secondary, custom_id='announce:edit')

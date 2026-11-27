@@ -390,8 +390,9 @@ async def on_ready():
         bot.add_listener(ask_ai.on_message, 'on_message')
         from features.ask_ai import ShowDataView
         bot.add_view(ShowDataView(ask_ai))   # keeps old 📎 buttons answering after a restart
-        from features.announce import DraftView
+        from features.announce import DraftView, PostedView
         bot.add_view(DraftView(ask_ai.drafts))   # draft buttons say "expired" after a restart
+        bot.add_view(PostedView(ask_ai.drafts))  # same for "Also create event"
         # What @ApexPunk can look up live and act on (features/ask_live.py,
         # features/ask_actions.py): the same managers the slash commands use.
         from types import SimpleNamespace

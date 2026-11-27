@@ -11490,6 +11490,27 @@ def test_every_announcement_time_shows_tct_local_and_countdown():
     assert stamped.count('- Ends') == 1
 
 
+def test_posted_announcement_offers_its_discord_event():
+    """Pat, 27/11/2026: after posting an announcement, one tap makes the
+    same thing a Discord Event. Everything comes from the post itself."""
+    from datetime import datetime, timezone
+    from features.announce import event_from_post, PostedView
+    from features.ask_ai import stamp_times
+
+    fri = datetime(2026, 11, 27, 9, 35, tzinfo=timezone.utc)
+    post = stamp_times('**🦘 Happy Jump**\n- Saturday 1pm TCT (24 hours)\n- Bring your energy.\nHop, punks! 🎉', fri)
+    plan = event_from_post(post, fri.timestamp())
+    assert plan['name'] == 'Happy Jump', plan
+    assert plan['start'] == 1795870800 and plan['end'] == 1795870800 + 24 * 3600, plan
+    assert '<t:' not in plan['description'] and 'Bring your energy' in plan['description']
+    # No length: Discord still needs an end, an hour later.
+    short = event_from_post(stamp_times('**War prep**\n- Saturday 18:00 TCT', fri), fri.timestamp())
+    assert short['end'] - short['start'] == 3600
+    assert event_from_post('Just a note, no time.') is None
+    assert event_from_post(post, 1795870800 + 1) is None, 'a time already passed gets no button'
+    assert [c.custom_id for c in PostedView({}).children] == ['announce:event']
+
+
 if __name__ == '__main__':
     test_faction_facts_from_pat()
     test_all_modules_import()
@@ -11697,4 +11718,5 @@ if __name__ == '__main__':
     test_mid_draft_replies_go_to_the_draft_not_shortcuts()
     test_announcement_weekday_times_get_dates_and_end_times()
     test_every_announcement_time_shows_tct_local_and_countdown()
+    test_posted_announcement_offers_its_discord_event()
     print('All smoke tests passed.')
