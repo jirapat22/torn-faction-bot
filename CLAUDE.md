@@ -7,7 +7,7 @@ A Discord bot for a Torn.com faction (Ascended Punks), running on Pat's home Mac
 ## Commands
 
 ```bash
-<py> -m pytest -q tests/          # full suite (208 tests), the one to trust
+<py> -m pytest -q tests/          # full suite (209 tests), the one to trust
 <py> -m pytest -q tests/test_imports.py::test_flytrack_logic   # single test
 <py> tests/test_imports.py        # runs test_imports.py ONLY, see note below
 <py> bot.py                       # run locally (needs .env)
@@ -161,7 +161,7 @@ The design rule is **the AI must not make up numbers**, because strikes get deci
 
 **Groq limits that matter:** besides 8,000 tokens/min, the free plan allows **200,000 tokens per DAY per model** (not shown in the rate-limit headers; only in the 429 body). A question costs ~3-7k tokens, mostly the prompt, so the announcement rules (`ANNOUNCE_PROMPT`) are only sent in announcement conversations. Heavy testing burns the day's allowance and pushes real users onto the small model.
 
-Announcement layout (Pat's picks): bold emoji headings + bullets, blank line between events (`space_events`), Discord local-time stamps + countdown after each TCT time (`add_local_times`), standard details added by the bot (`torn_events.FACTION_DETAILS`, Torn effect + start-time pick).
+Announcement layout (Pat's picks): bold emoji headings + bullets, blank line between events (`space_events`), Discord local-time stamps + countdown after each TCT time (`add_local_times`); a weekday + time with no date ("Saturday 1pm TCT") becomes the next real date in Python (`resolve_times`, TCT, today counts if still ahead) and an event with one start and a length ("24 hours", "2 days") gets an "Ends ..." line (`add_end_times`), so both get stamps (Pat, 27/11/2026: the happy jump draft had none). The AI itself still never computes an end, standard details added by the bot (`torn_events.FACTION_DETAILS`, Torn effect + start-time pick).
 
 **Live lookups** (`features/ask_live.py`, 07/11/2026): three more tools, `live_status` (war, chain, chain event, flights, and `oc`: who is in an organised crime right now, live from Torn with the daily OC check's rules: Expired crimes don't count, open slots only on Recruiting, Torn down is said, never "nobody"), `members_extra` (leave notices, timezones, trials, availability poll) and `faction_extra` (war trends, targets, enemy watchlist, enemy faction overview). They reuse the slash commands' own embeds via `embed_text()` (countdowns worked out in Python), so chat says what the command says. They are async: `FactBook.run` returns a coroutine for them and the provider loops await it. The managers come from `AskAI.live`, a namespace bot.py fills after construction. **Pat's rule: money, items, Xanax (use AND payouts) and battle stats never appear in chat**: `FORBIDDEN_LINE` drops such lines before the AI sees them, and `tidy_answer` strips Xanax sentences even from flavour lines. Leave notices are quoted word for word by the bot (`notices_answer`), never summarised or date-judged by the AI. "Did anyone post a notice?" lists only notices POSTED in the last 14 days (`RECENT_NOTICE_DAYS`, plus a count of older ones); asking about one member shows their last 60 days. `ChainTracker.get_current_chain()` returns None for both "no chain" and "Torn down", so the chat reads the chain itself.
 

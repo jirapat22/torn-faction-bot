@@ -11429,6 +11429,40 @@ def test_mid_draft_replies_go_to_the_draft_not_shortcuts():
     assert faction_question('are we Punks that Ascended to something?')
 
 
+def test_announcement_weekday_times_get_dates_and_end_times():
+    """Live 27/11/2026: the happy jump draft said "Saturday 1pm TCT (24
+    hours)", so it got no local time or countdown. Python now turns a
+    weekday + time into the next real date and adds an "Ends" line from the
+    length, and both get Discord timestamps."""
+    import asyncio, tempfile
+    from datetime import datetime, timezone
+    from features.ask_ai import resolve_times, add_end_times, FactBook, answer_question
+
+    fri = datetime(2026, 11, 27, 9, 35, tzinfo=timezone.utc)
+    assert resolve_times('- Saturday 1pm TCT (24 hours)', fri) == '- Saturday 28/11/2026 13:00 TCT (24 hours)'
+    assert resolve_times('Friday 11:00 TCT', fri) == 'Friday 27/11/2026 11:00 TCT', 'later today counts'
+    assert resolve_times('Friday 9:00 TCT', fri) == 'Friday 04/12/2026 09:00 TCT', 'already past: next week'
+    assert resolve_times('28/11/2026 1pm', fri) == '28/11/2026 13:00'
+    assert resolve_times('Saturday 2 wars', fri) == 'Saturday 2 wars', 'a bare number is not a time'
+
+    two = add_end_times('**🦘 Happy Jump**\n- Saturday 28/11/2026 13:00 TCT\n- Lasts 2 days')
+    assert '- Ends Monday 30/11/2026 13:00 TCT' in two, two
+    ranged = '- 07/11/2026 13:00 TCT to 08/11/2026 13:00 TCT (24 h)'
+    assert add_end_times(ranged) == ranged, 'an event that already has an end is left alone'
+    assert add_end_times('- Saturday 28/11/2026 13:00 TCT') == '- Saturday 28/11/2026 13:00 TCT', 'no length, no end'
+
+    said = 'make an announcement for happy jump, Saturday 1pm TCT for 24 hours, ping Ascended Punks role'
+    async def ask(session, messages, fb, used):
+        used.append(('announce_draft', {}, fb.run('announce_draft', {
+            'channel': '', 'ping': 'Ascended Punks',
+            'text': '**🦘 Happy Jump**\n- Saturday 1pm TCT (24 hours)\n- A weekly faction event that lasts 24 hours.\n'
+                    'Get ready to hop, punks! 🎉'})))
+        return fb.final, list(messages)
+    ans = asyncio.run(answer_question(None, said, FactBook(tempfile.mkdtemp(), roster={}), providers=[('fake', ask)]))
+    assert ans.kind == 'draft', (ans.kind, ans.text)
+    assert ans.text.count(':R>') == 2 and '- Ends ' in ans.text, ans.text
+
+
 if __name__ == '__main__':
     test_faction_facts_from_pat()
     test_all_modules_import()
@@ -11634,4 +11668,5 @@ if __name__ == '__main__':
     test_new_member_basics_and_faction_facts_are_quoted_not_invented()
     test_slash_commands_leave_a_log_line()
     test_mid_draft_replies_go_to_the_draft_not_shortcuts()
+    test_announcement_weekday_times_get_dates_and_end_times()
     print('All smoke tests passed.')

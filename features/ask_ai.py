@@ -2268,6 +2268,105 @@ def fix_durations(text):
     return rx.sub(fix, text)
 
 
+# "1pm", "1:30 pm", "13:00" -> (hour, minute), or None.
+_CLOCK_RX = r'(\d{1,2})(?::(\d{2}))?\s*(am|pm)?'
+
+
+def _clock(h, m, ampm):
+    h, m = int(h), int(m or 0)
+    if ampm:
+        if not 1 <= h <= 12:
+            return None
+        h = h % 12 + (12 if ampm.lower() == 'pm' else 0)
+    return (h, m) if h < 24 and m < 60 else None
+
+
+def resolve_times(text, now=None):
+    """
+    "Saturday 1pm TCT" -> "Saturday 28/11/2026 13:00 TCT" (Pat, 27/11/2026: a
+    draft with no date got no local time or countdown, because only a full
+    DD/MM/YYYY HH:MM can be stamped). The date is the NEXT such weekday in TCT
+    (UTC), worked out here, never by the AI; today counts if the time is
+    still ahead. "28/11/2026 1pm" becomes "28/11/2026 13:00". A time needs
+    am/pm, a colon or "TCT" after it, so "Saturday 2 wars" is left alone.
+    """
+    now = now or datetime.now(timezone.utc)
+    day_rx = re.compile(rf'\b{_DAY_RX}\b(,?\s+(?:at\s+)?){_CLOCK_RX}(?=\s*TCT\b|(?<=[mM])|(?<=:\d\d))',
+                        re.I)
+
+    def weekday(m):
+        hm = _clock(m.group(3), m.group(4), m.group(5))
+        word = m.group(0)[:m.start(2) - m.start(0)]
+        idx = [d[:3].lower() for d in _DAYS].index(m.group(1)[:3].lower())
+        if hm is None:
+            return m.group(0)
+        start = now.replace(hour=hm[0], minute=hm[1], second=0, microsecond=0)
+        start += timedelta(days=(idx - now.weekday()) % 7)
+        if start <= now:
+            start += timedelta(days=7)
+        # The clock pattern eats the space before "TCT"; put it back.
+        return f'{word} {start:%d/%m/%Y %H:%M}' + (' ' if m.group(0)[-1].isspace() else '')
+
+    text = day_rx.sub(weekday, text)
+
+    def ampm(m):
+        hm = _clock(m.group(4), m.group(5), m.group(6))
+        return f'{m.group(1)}/{m.group(2)}/{m.group(3)} {hm[0]:02d}:{hm[1]:02d}' if hm else m.group(0)
+    text = re.sub(r'\b(\d{1,2})/(\d{1,2})/(\d{4}),?\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b',
+                  ampm, text, flags=re.I)
+    return text
+
+
+_START_RX = re.compile(r'(\d{1,2})/(\d{1,2})/(\d{4})\s+(\d{1,2}):(\d{2})')
+_LENGTH_RX = re.compile(r'\b(?:for|lasts?|lasting|runs?)?\s*\(?(\d{1,3})\s*(h|hrs?|hours?|d|days?)\b', re.I)
+
+
+def add_end_times(text):
+    """
+    An event with ONE start time and a length ("24 hours", "for 2 days")
+    gets an "Ends ..." line under its start, worked out in Python so the end
+    gets the reader's local time and a countdown too (Pat, 27/11/2026). The
+    AI is still told never to compute ends: a wrong end is worse than none.
+    Events that already give an end (two dates) are left alone.
+    """
+    lines = text.split('\n')
+    # Events are blocks split by blank lines or **headings**.
+    blocks, cur = [], []
+    for i, line in enumerate(lines):
+        if (not line.strip() or line.startswith('**')) and cur:
+            blocks.append(cur)
+            cur = []
+        cur.append(i)
+    if cur:
+        blocks.append(cur)
+    inserts = {}
+    for block in blocks:
+        starts = [(i, m) for i in block for m in _START_RX.finditer(lines[i])]
+        if len(starts) != 1 or any(re.search(r'\bends?\b', lines[i], re.I) for i in block):
+            continue
+        i, m = starts[0]
+        length = next((_LENGTH_RX.search(lines[j]) for j in [i] + block if _LENGTH_RX.search(lines[j])), None)
+        if not length:
+            continue
+        n = int(length.group(1))
+        hours = n * 24 if length.group(2).lower().startswith('d') else n
+        if not 0 < hours <= 24 * 31:
+            continue
+        try:
+            start = datetime(int(m.group(3)), int(m.group(2)), int(m.group(1)), int(m.group(4)), int(m.group(5)))
+        except ValueError:
+            continue
+        end = start + timedelta(hours=hours)
+        bullet = re.match(r'\s*[-•*]\s+', lines[i])
+        inserts[i] = f'{bullet.group(0) if bullet else "- "}Ends {_DAYS[end.weekday()]} {end:%d/%m/%Y %H:%M} TCT'
+    out = []
+    for i, line in enumerate(lines):
+        out.append(line)
+        if i in inserts:
+            out.append(inserts[i])
+    return '\n'.join(out)
+
+
 def space_events(text):
     """A blank line before each event heading ("**🦘 Happy Jump**"), so events
     stand apart (Pat's layout: headings + bullets)."""
@@ -3213,7 +3312,7 @@ async def _answer_question(session, question, facts, history=None, earlier_facts
                 # dates too (14/11 for Diabetes Day), so the number check let a
                 # miscalculated "07/11 13:00 to 14/11 13:00 (24 h)" through.
                 before = facts.draft['text']
-                facts.draft['text'] = fix_durations(before)
+                facts.draft['text'] = add_end_times(resolve_times(fix_durations(before)))
                 # An end date the bot computed from their own start + length counts as theirs.
                 derived = ' '.join(f'{d}/{m}' for d, m in _dates(facts.draft['text']) - _dates(before))
                 person = '\n'.join([question, derived] + [t.get('content', '') for t in history or []
