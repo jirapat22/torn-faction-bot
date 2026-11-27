@@ -8899,6 +8899,16 @@ def test_torn_events_from_the_official_calendar():
     assert win('World Diabetes Day', '14/11/2026 00:00', '14/11/2026 23:59') == ('13/11 10:00', '15/11 10:00')
     # Pat, 27/11/2026: Black Friday is 12:00 to 12:00 TCT for everyone, no picking.
     assert win('Black Friday', '27/11/2026 00:00', '27/11/2026 23:59') == ('27/11 12:00', '28/11 12:00')
+    # The wiki's "Events without event time slot" (pasted by Pat 28/11/2026): 12:00 TCT for everyone.
+    assert win('Torn Anniversary', '15/11/2026 00:00', '15/11/2026 23:59') == ('15/11 12:00', '16/11 12:00')
+    assert win('Awareness Awareness Week', '19/01/2026 00:00', '25/01/2026 23:59') == ('19/01 12:00', '25/01 12:00')
+    from features import calendar_sync as _cs
+    from datetime import datetime as _dt, timezone as _tz
+    rt = _cs.torn_event_window('Weekend Road Trip', 1, 31, _dt(2026, 12, 1, tzinfo=_tz.utc))
+    assert f'{rt[0]:%d/%m %H:%M}' == '31/01 12:00', rt
+    from features.torn_events import fixed_hour
+    assert fixed_hour('Elimination') == 12 and fixed_hour('Employee Appreciation Day') == 12
+    assert fixed_hour('Valentine\'s Day') is None and fixed_hour('Christmas Town') is None
     assert api_window({'title': 'Black Friday', 'start': ts('27/11/2026 00:00'), 'end': ts('27/11/2026 23:59'),
                        'kind': 'Torn event'})[2] is False, 'nobody picks a start'
     from features.event_reminders import start_post_text

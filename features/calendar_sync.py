@@ -106,12 +106,15 @@ def desired(now, calendar_events, chain_event=None, upcoming_war=None,
         # future. A second check would be dead code pretending to be a guard.
         if start > horizon:
             continue
+        from features.torn_events import fixed_hour
         label = name.format(year=start.year)
         out[f'torn:{name}:{start.year}'] = {
             'name': f'\U0001f3ae {label}',
             'start': int(start.timestamp()),
             'end': int(end.timestamp()),
             'description': (
+                'Torn event, 12:00 TCT for everyone.'
+                if fixed_hour(name) is not None else
                 'Torn event. Start and end are approximate: Torn lets each '
                 'player choose their own start between 10:00 and 16:00 TCT, '
                 'so check the Torn calendar for yours.'),

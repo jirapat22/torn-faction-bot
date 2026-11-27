@@ -100,11 +100,16 @@ SINGLE_DATE_EVENTS = {'torn anniversary', 'black friday'}
 # the wiki listed Slash Wednesday as starting on the Wednesday itself (10/12
 # in 2025). Not confirmed for 2026; Pat to check the in-game calendar.
 STARTS_ON_THE_DAY = {'slash wednesday'}
-# Fixed-time events: the same start for everyone, no picking, starting at
-# this TCT hour on the API date and lasting a day. Pat, 27/11/2026: Black
-# Friday runs 12:00 to 12:00 TCT (the bot said "pick 10:00-16:00, 10:00 to
-# 10:00"). The wiki can't be read by bots, so this is Pat's word.
-FIXED_START_HOURS = {'black friday': 12}
+# Events WITHOUT an event time slot: the same start for everyone, 12:00 TCT
+# (the time all events began before slots, patch 20/02/2024). From the wiki
+# Calendar page Pat pasted on 28/11/2026: "Events without event time slot:
+# Awareness Awareness Week, Weekend Road Trip, Employee Appreciation Day,
+# Torn Anniversary, Black Friday". Elimination's API times also say 12:00.
+# A one-day one runs 12:00 to 12:00 next day (Pat: Black Friday "was 12:00
+# to 12:00"); a longer one ends at 12:00 on its last date. Every other event
+# has a time slot: the player's start is between 10:00 and 16:00, 48 hours.
+FIXED_START_HOURS = {'black friday': 12, 'torn anniversary': 12, 'awareness week': 12,
+                     'weekend road trip': 12, 'employee appreciation': 12, 'elimination': 12}
 
 
 def fixed_hour(title):
@@ -131,7 +136,9 @@ def api_window(e):
         return start, end, False
     if fixed_hour(title) is not None:
         fixed = start.replace(hour=fixed_hour(title), minute=0, second=0)
-        return fixed, fixed + timedelta(days=max(1, round((e_ts - s_ts) / DAY))), False
+        if e_ts - s_ts < DAY:
+            return fixed, fixed + timedelta(days=1), False
+        return fixed, end.replace(hour=fixed_hour(title), minute=0, second=0), False
     first_day = start.replace(hour=10, minute=0)
     if e_ts - s_ts < DAY and not any(t in title for t in SINGLE_DATE_EVENTS):
         if not any(t in title for t in STARTS_ON_THE_DAY):
