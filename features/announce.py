@@ -118,6 +118,18 @@ def event_from_post(text, now=None):
             'description': unstamp_times(text).strip()[:1000]}
 
 
+async def create_event(guild, plan):
+    """The Discord Event for a plan from event_from_post. Raises
+    discord.HTTPException when Discord refuses."""
+    from datetime import datetime, timezone
+    return await guild.create_scheduled_event(
+        name=plan['name'], description=plan['description'],
+        start_time=datetime.fromtimestamp(plan['start'], timezone.utc),
+        end_time=datetime.fromtimestamp(plan['end'], timezone.utc),
+        privacy_level=discord.PrivacyLevel.guild_only, entity_type=discord.EntityType.external,
+        location='Torn City')
+
+
 class PostedView(discord.ui.View):
     """"📅 Also create event" under a posted announcement. Fixed custom_id so
     a press after a restart says "expired" instead of failing silently."""
@@ -129,7 +141,6 @@ class PostedView(discord.ui.View):
     @discord.ui.button(label='Also create event', emoji='📅', style=discord.ButtonStyle.primary,
                        custom_id='announce:event')
     async def make_event(self, interaction: discord.Interaction, button: discord.ui.Button):
-        from datetime import datetime, timezone
         plan = self.store.get(interaction.message.id)
         if plan is None:
             await interaction.response.send_message(
@@ -140,12 +151,7 @@ class PostedView(discord.ui.View):
             return
         await interaction.response.defer()
         try:
-            event = await interaction.guild.create_scheduled_event(
-                name=plan['name'], description=plan['description'],
-                start_time=datetime.fromtimestamp(plan['start'], timezone.utc),
-                end_time=datetime.fromtimestamp(plan['end'], timezone.utc),
-                privacy_level=discord.PrivacyLevel.guild_only, entity_type=discord.EntityType.external,
-                location='Torn City')
+            event = await create_event(interaction.guild, plan)
         except discord.HTTPException as e:
             logger.error(f'Announcement event failed: {e!r}')
             await interaction.followup.send('⚠️ Discord refused the event, so nothing was made. '
@@ -180,6 +186,16 @@ class DraftView(discord.ui.View):
 
     @discord.ui.button(label='Post', emoji='✅', style=discord.ButtonStyle.success, custom_id='announce:post')
     async def post(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._post(interaction, with_event=False)
+
+    # Pat, 27/11/2026: "when I create an announcement it offers the Discord
+    # event". Shown only when the draft has a time still ahead (send_draft).
+    @discord.ui.button(label='Post + Event', emoji='📅', style=discord.ButtonStyle.success,
+                       custom_id='announce:post_event')
+    async def post_event(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._post(interaction, with_event=True)
+
+    async def _post(self, interaction, with_event):
         draft = await self._draft_for(interaction)
         if draft is None:
             return
@@ -198,13 +214,25 @@ class DraftView(discord.ui.View):
         # as a Discord Event (Interested + Discord's own reminder), built from
         # the post itself so nothing is typed twice (Pat, 27/11/2026).
         plan = event_from_post(draft['text'])
-        view = None
-        if plan:
+        view, done = None, ''
+        if plan and with_event:
+            try:
+                event = await create_event(guild, plan)
+                done = f'\n📅 Event created: {event.url}'
+                logger.info(f'Event "{plan["name"]}" created with its announcement by {interaction.user}')
+            except discord.HTTPException as e:
+                # The post is out either way; the button below lets them retry.
+                logger.error(f'Announcement event failed: {e!r}')
+                done = '\n⚠️ Discord refused the event. Try the button below.'
+        elif with_event:
+            done = '\n⚠️ No time still ahead in the post, so no event was made.'
+        if plan and not done.startswith('\n📅'):
             plan['author_id'] = draft['author_id']
             self.store[interaction.message.id] = plan
             view = PostedView(self.store)
         await interaction.message.edit(
-            content=f'✅ Posted in {channel.mention} by {interaction.user.mention} (ping: {label}). {sent.jump_url}',
+            content=f'✅ Posted in {channel.mention} by {interaction.user.mention} (ping: {label}). {sent.jump_url}'
+                    + done,
             embed=None, view=view, allowed_mentions=discord.AllowedMentions.none())
         logger.info(f'Announcement posted in #{channel} by {interaction.user} (ping: {label})')
 
@@ -293,8 +321,11 @@ async def send_draft(message, store, draft, unsure=()):
         return None, 'That came out too long for one Discord message. Want it shorter, or split into two?'
     # The preview IS the post: same text, same ping line, but AllowedMentions
     # .none() so nobody is actually pinged until Post is pressed.
+    view = DraftView(store)
+    if event_from_post(text) is None:
+        view.remove_item(view.post_event)
     sent = await message.reply(build_post(text, prefix), embed=draft_info(channel, label, unsure, draft.get('cut') or ()),
-                               view=DraftView(store), mention_author=False,
+                               view=view, mention_author=False,
                                allowed_mentions=discord.AllowedMentions.none())
     store[sent.id] = {'author_id': message.author.id, 'channel_id': channel.id, 'ping': draft.get('ping') or '',
                       'ping_label': label, 'text': text, 'at': time.time()}

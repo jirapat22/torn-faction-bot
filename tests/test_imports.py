@@ -11511,6 +11511,64 @@ def test_posted_announcement_offers_its_discord_event():
     assert [c.custom_id for c in PostedView({}).children] == ['announce:event']
 
 
+def test_draft_card_post_plus_event_does_both():
+    """Pat, 27/11/2026: the draft card itself offers the Discord Event. The
+    Post + Event button shows only when the draft has a time still ahead,
+    posts exactly the preview and makes the event from the post."""
+    import asyncio, time
+    import features.announce as an
+
+    class Ch:
+        id, name, mention = 1, '📢-ascended-broadcasts', '<#1>'
+        def __init__(self):
+            self.sent = []
+        async def send(self, content, allowed_mentions=None):
+            self.sent.append(content)
+            return type('S', (), {'jump_url': 'https://discord.com/x'})()
+    class Guild:
+        def __init__(self):
+            self.channels, self.threads, self.roles, self.events = [Ch()], [], [], []
+        def get_channel(self, i):
+            return self.channels[0] if i == 1 else None
+        def get_role(self, i):
+            return None
+        async def create_scheduled_event(self, **kw):
+            self.events.append(kw)
+            return type('E', (), {'url': 'https://discord.com/events/1'})()
+    g = Guild()
+    an.ANNOUNCEMENTS_CHANNEL_ID = 1
+    views = []
+    class Msg:
+        guild = g
+        author = type('A', (), {'id': 42})()
+        async def reply(self, content, **kw):
+            views.append(kw['view'])
+            return type('M', (), {'id': 999})()
+
+    soon = int(time.time()) + 86400
+    store = {}
+    asyncio.run(an.send_draft(Msg(), store, {'channel': '', 'ping': '',
+        'text': f'**🦘 Happy Jump**\n- 01/01/2030 13:00 TCT (<t:{soon}:f>, <t:{soon}:R>)'}))
+    assert 'announce:post_event' in [c.custom_id for c in views[0].children]
+    asyncio.run(an.send_draft(Msg(), {}, {'channel': '', 'ping': '', 'text': 'No time in this one.'}))
+    assert 'announce:post_event' not in [c.custom_id for c in views[1].children], 'no time, no Post + Event'
+
+    class Resp:
+        async def defer(self):
+            pass
+    class Inter:
+        guild = g
+        user = type('U', (), {'id': 42, 'mention': '<@42>'})()
+        response = Resp()
+        message = type('DM', (), {'id': 999})()
+    async def edit(**kw):
+        Inter.edited = kw
+    Inter.message.edit = edit
+    asyncio.run(an.DraftView(store).post_event.callback(Inter()))
+    assert g.channels[0].sent and g.events[0]['name'] == 'Happy Jump', g.events
+    assert '📅 Event created' in Inter.edited['content'] and Inter.edited['view'] is None
+
+
 if __name__ == '__main__':
     test_faction_facts_from_pat()
     test_all_modules_import()
@@ -11719,4 +11777,5 @@ if __name__ == '__main__':
     test_announcement_weekday_times_get_dates_and_end_times()
     test_every_announcement_time_shows_tct_local_and_countdown()
     test_posted_announcement_offers_its_discord_event()
+    test_draft_card_post_plus_event_does_both()
     print('All smoke tests passed.')
