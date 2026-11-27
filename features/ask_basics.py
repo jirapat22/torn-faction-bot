@@ -307,6 +307,9 @@ NAME_RX = re.compile(
     r"\bwhat does (?:the |our |this )?(?:faction(?:'s)? )?name mean\b|"
     r"\b(?:meaning|origin|story) (?:of|behind) (?:the |our |this )?(?:faction(?:'s)? )?name\b|"
     r"\bwhere (?:does|did) (?:the |our )?(?:faction(?:'s)? )?name come from\b", re.I)
+# "ping the Ascended Punks role" names the faction, it doesn't ask about the
+# name (it got the lore line mid-announcement, 27/11/2026).
+NAME_NOT_RX = re.compile(r"\b(?:role|ping|tag|mention|announce\w*|channel)\b", re.I)
 NAME_OPEN = [
     "No official story on file, so here's mine 📜", "Nobody wrote it down, so I'll make it legend 🧙",
     "Great question, deep lore incoming 🔥", "Officially? Unknown. Unofficially? 😏",
@@ -372,7 +375,7 @@ CREATIVE_RX = re.compile(r"\b(?:poem|song|rap|story|haiku|limerick|joke|write|dr
 def faction_question(question):
     q = question or ''
     # "what's our motto?" is a question; "write us a motto" is creative.
-    if (MOTTO_RX.search(q) or NAME_RX.search(q)) and not MAKE_RX.search(q):
+    if (MOTTO_RX.search(q) or (NAME_RX.search(q) and not NAME_NOT_RX.search(q))) and not MAKE_RX.search(q):
         return True
     if CREATIVE_RX.search(q):
         return False
@@ -533,7 +536,8 @@ async def faction_reply(question, guild=None, fetch=None):
     """Faction facts for a faction question, or None. fetch: test hook."""
     if not faction_question(question):
         return None
-    if NAME_RX.search(question or '') and not MOTTO_RX.search(question or ''):
+    if NAME_RX.search(question or '') and not NAME_NOT_RX.search(question or '') \
+            and not MOTTO_RX.search(question or ''):
         return name_reply()   # no Torn data needed, and Torn being down shouldn't block it
     if fetch is None:
         from utils import torn_api

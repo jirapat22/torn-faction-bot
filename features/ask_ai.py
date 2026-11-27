@@ -2837,7 +2837,13 @@ async def _answer_question(session, question, facts, history=None, earlier_facts
     if fixed:
         # 'none' = not remembered as a conversation.
         return Answer(fixed, 'none', '', True, 0, kind='ask')
-    chat = canned_reply(question, facts)
+    # Mid-draft (announcement or chat action), every reply belongs to the
+    # draft: "Saturday 1pm, ping the Ascended Punks role" once got the
+    # faction-name lore line instead of the next draft step (27/11/2026).
+    from features.ask_actions import ACTION_RX
+    earlier = ' '.join(t.get('content', '') for t in history or [] if t.get('role') == 'user')
+    in_draft = management and bool(ANNOUNCE_RX.search(earlier) or ACTION_RX.search(earlier))
+    chat = None if in_draft else canned_reply(question, facts)
     if chat:
         # 'none': a "thanks" doesn't start a member's cooldown either.
         return Answer(chat, 'none', '', True, 0, kind='chat')
@@ -2846,10 +2852,11 @@ async def _answer_question(session, question, facts, history=None, earlier_facts
     # words, no AI, open to members (features/ask_basics.py).
     from features.ask_basics import basics_reply, faction_reply
     guild = getattr(getattr(facts, 'live_tools', None), 'guild', None)
-    basics = basics_reply(question, guild)
+    basics = None if in_draft else basics_reply(question, guild)
     if basics:
         return Answer(basics, 'none', '', True, 0, kind='chat')
-    if guild is not None or getattr(facts, 'live_tools', None) is not None or getattr(facts, 'faction_fetch', None):
+    if not in_draft and (guild is not None or getattr(facts, 'live_tools', None) is not None
+                         or getattr(facts, 'faction_fetch', None)):
         about = await faction_reply(question, guild, getattr(facts, 'faction_fetch', None))
         if about:
             return Answer(about, 'none', '', True, 0, kind='chat')

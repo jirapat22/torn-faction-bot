@@ -11398,6 +11398,37 @@ def test_slash_commands_leave_a_log_line():
     assert bot.bot.tree.on_error.__name__ == 'on_app_command_error', 'failures must be logged and answered'
 
 
+def test_mid_draft_replies_go_to_the_draft_not_shortcuts():
+    """Live 27/11/2026: mid-announcement, "Saturday 1pm TCT for 24 hours and
+    ping ascended punk role" got the faction-name lore line. A reply inside
+    an announcement/action draft skips every canned shortcut, and naming the
+    role is never a question about the name."""
+    import asyncio, tempfile
+    from features.ask_ai import FactBook, answer_question
+    from features.ask_basics import faction_question
+
+    reached = []
+    async def ask(session, messages, fb, used):
+        reached.append(messages[-1]['content'])
+        return 'When should it go out, and in which channel?', list(messages)
+
+    history = [{'role': 'user', 'content': 'help me create annoucement for happyjump'},
+               {'role': 'assistant', 'content': 'When is the happy jump scheduled and who should be pinged?'}]
+    reply = 'it will be Saturday 1pm TCT for 24 hours and ping ascended punk role'
+    ans = asyncio.run(answer_question(None, reply, FactBook(tempfile.mkdtemp(), roster={}),
+                                      history=history, providers=[('fake', ask)]))
+    assert reached, 'the draft reply must reach the AI, not a canned line: ' + ans.text
+    # Even a canned-looking reply mid-draft belongs to the draft.
+    reached.clear()
+    asyncio.run(answer_question(None, 'thanks', FactBook(tempfile.mkdtemp(), roster={}),
+                                history=history, providers=[('fake', ask)]))
+    assert reached, '"thanks" mid-draft goes to the draft'
+    # Naming the role is not a lore question; asking about the name still is.
+    assert not faction_question('ping the ascended punks role')
+    assert not faction_question('announce it in #general for ascended punks')
+    assert faction_question('are we Punks that Ascended to something?')
+
+
 if __name__ == '__main__':
     test_faction_facts_from_pat()
     test_all_modules_import()
@@ -11602,4 +11633,5 @@ if __name__ == '__main__':
     test_about_the_bot_and_fun_are_bot_made_and_never_aim_at_others()
     test_new_member_basics_and_faction_facts_are_quoted_not_invented()
     test_slash_commands_leave_a_log_line()
+    test_mid_draft_replies_go_to_the_draft_not_shortcuts()
     print('All smoke tests passed.')
