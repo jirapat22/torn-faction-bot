@@ -11607,6 +11607,26 @@ def test_calendar_sync_leaves_the_start_of_a_live_event_alone():
         cs.desired, te.effective_calendar_events = old_desired, old_eff
     assert edits and 'start_time' not in edits[0], edits
     assert edits[0]['end_time'].timestamp() == w['end']
+    # A refused edit keeps the old record, so the next sync tries again.
+    class Refuses(Ev):
+        async def edit(self, **kw):
+            raise discord.HTTPException(type('R', (), {'status': 400, 'reason': 'Bad'})(), 'Invalid Form Body')
+    class Guild2:
+        async def fetch_scheduled_events(self):
+            return [Refuses()]
+    with open(state) as f:
+        before = json.load(f)
+    before['torn:black friday']['end'] = 1
+    with open(state, 'w') as f:
+        json.dump(before, f)
+    cs.desired = lambda *a, **k: {'torn:black friday': w}
+    te.effective_calendar_events = lambda *a, **k: []
+    try:
+        asyncio.run(cs.sync(None, Guild2(), state_file=state))
+    finally:
+        cs.desired, te.effective_calendar_events = old_desired, old_eff
+    with open(state) as f:
+        assert json.load(f)['torn:black friday']['end'] == 1, 'a failed edit must not be saved as done'
 
 
 if __name__ == '__main__':

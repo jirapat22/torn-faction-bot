@@ -262,6 +262,10 @@ async def sync(bot, guild, chain_event_manager=None, war_tracker=None,
                 updated += 1
             except Exception as e:
                 logger.error(f'Calendar sync: could not edit "{w["name"]}": {e}')
+                # Keep what is really on Discord, so the next sync tries
+                # again (saving the wanted times here hid a failed edit).
+                new_state[key] = tracked
+                continue
         new_state[key] = {'id': str(event.id), 'name': w['name'],
                           'start': w['start'], 'end': w['end'],
                           'description': w['description']}
