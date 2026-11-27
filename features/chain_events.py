@@ -34,7 +34,7 @@ import time
 
 import discord
 
-from utils.helpers import save_json, plural
+from utils.helpers import save_json, plural, when_tct
 
 logger = logging.getLogger(__name__)
 
@@ -786,8 +786,8 @@ def announce_text(event):
             if event.get('target') else '')
     return (
         f"⛓️ **{event['name']} is live**\n\n"
-        f"⏱️ **Counting:** `{start:%d %b %H:%M}` to "
-        f"`{end:%d %b %H:%M} TCT` ({days} days)\n"
+        f"⏱️ **Counting:** {when_tct(event['start'], countdown=False)}\n"
+        f"to {when_tct(event['end'])} ({days} days)\n"
         f"{goal}"
         f"⚠️ **Minimum: {mn} chain hits each. That is the floor, not the "
         f"goal.**\n\n"

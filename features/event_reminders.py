@@ -23,7 +23,7 @@ Everything the bot posts in announcements pings the Ascended Punks role
 import re
 import discord
 from datetime import datetime, date, timezone, timedelta
-from utils.helpers import load_json, save_json, create_embed
+from utils.helpers import load_json, save_json, create_embed, when_tct
 from utils.torn_api import fetch_user_messages
 from features.event_ui import CreateEventPromptView
 from config import (
@@ -259,8 +259,7 @@ class EventReminderManager:
                 embed = create_embed(
                     title='📅 Torn Event Reminder',
                     description=(
-                        f"**{display_name}** starts <t:{int(start.timestamp())}:R> "
-                        f"(<t:{int(start.timestamp())}:F>).\n"
+                        f"**{display_name}** starts {when_tct(start.timestamp())}.\n"
                         f"_Exact start may shift a few hours. Torn staggers some events per-player._"
                     ),
                     color=EMBED_COLOR_INFO
@@ -351,7 +350,7 @@ class EventReminderManager:
         # the channel, and a frozen number read "starts in 36.4 hours" right
         # above "(in 2 hours)" by the time people looked (Pat, 13/11/2026).
         # <t:..:R> counts down live and <t:..:F> shows each reader's own time.
-        head = f"**{event_name}** starts <t:{start_ts}:R> (<t:{start_ts}:F>)."
+        head = f"**{event_name}** starts {when_tct(start_ts)}."
         if 'happy' in name_lower or 'jump' in name_lower:
             head += " Let's get stacking!!"
         elif 'chain' in name_lower:

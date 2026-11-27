@@ -11463,6 +11463,33 @@ def test_announcement_weekday_times_get_dates_and_end_times():
     assert ans.text.count(':R>') == 2 and '- Ends ' in ans.text, ans.text
 
 
+def test_every_announcement_time_shows_tct_local_and_countdown():
+    """Pat, 27/11/2026: "check with other announcement as well". Torn event
+    reminders had local + countdown but no TCT, the chain event post had TCT
+    only, /announce and the draft's Change box stamped nothing."""
+    from utils.helpers import when_tct
+    from features.ask_ai import stamp_times, unstamp_times
+    from features.chain_events import announce_text
+    from features.event_reminders import EventReminderManager
+
+    sat = 1795870800   # Saturday 28/11/2026 13:00 TCT
+    assert when_tct(sat) == f'Saturday 28/11/2026 13:00 TCT (<t:{sat}:f>, <t:{sat}:R>)'
+    assert when_tct(sat, countdown=False) == f'Saturday 28/11/2026 13:00 TCT (<t:{sat}:f>)'
+
+    head = EventReminderManager._get_reminder_message(None, 'Happy Jump', sat)
+    assert '13:00 TCT' in head and f'<t:{sat}:R>' in head, head
+
+    post = announce_text({'name': 'Halloween Chain', 'start': sat, 'end': sat + 4 * 86400, 'minimum': 50})
+    assert '13:00 TCT (<t:' in post and f'<t:{sat + 4 * 86400}:R>' in post, post
+
+    # The draft's Change box: no raw codes to edit, and saving restores them.
+    typed = 'War prep: Sunday 18:00 TCT for 2 hours'
+    stamped = stamp_times(typed)
+    assert '<t:' not in unstamp_times(stamped)
+    assert stamp_times(unstamp_times(stamped)) == stamped, 'edit + save must not change or double anything'
+    assert stamped.count('- Ends') == 1
+
+
 if __name__ == '__main__':
     test_faction_facts_from_pat()
     test_all_modules_import()
@@ -11669,4 +11696,5 @@ if __name__ == '__main__':
     test_slash_commands_leave_a_log_line()
     test_mid_draft_replies_go_to_the_draft_not_shortcuts()
     test_announcement_weekday_times_get_dates_and_end_times()
+    test_every_announcement_time_shows_tct_local_and_countdown()
     print('All smoke tests passed.')

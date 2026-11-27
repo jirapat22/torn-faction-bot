@@ -218,6 +218,17 @@ def next_occurrence_of_hour(hour, minute=0):
     return int(candidate.timestamp())
 
 
+def when_tct(timestamp, countdown=True):
+    """The faction's one time format (Pat, 27/11/2026: "countdown with TCT as
+    well as local time"): "Saturday 28/11/2026 13:00 TCT (<local>, <in 1 day>)".
+    TCT first because that is what the faction plans in; Discord renders the
+    <t:..> parts in each reader's own time and counts down live."""
+    ts = int(timestamp)
+    at = datetime.fromtimestamp(ts, tz=timezone.utc)
+    stamps = f'<t:{ts}:f>' + (f', <t:{ts}:R>' if countdown else '')
+    return f'{at:%A %d/%m/%Y %H:%M} TCT ({stamps})'
+
+
 def get_days_since(timestamp):
     """
     Calculate days since a given timestamp

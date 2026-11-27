@@ -7,7 +7,7 @@ A Discord bot for a Torn.com faction (Ascended Punks), running on Pat's home Mac
 ## Commands
 
 ```bash
-<py> -m pytest -q tests/          # full suite (209 tests), the one to trust
+<py> -m pytest -q tests/          # full suite (210 tests), the one to trust
 <py> -m pytest -q tests/test_imports.py::test_flytrack_logic   # single test
 <py> tests/test_imports.py        # runs test_imports.py ONLY, see note below
 <py> bot.py                       # run locally (needs .env)
@@ -213,6 +213,7 @@ Anything accumulating per-player needs an explicit retention policy; several fil
 
 ## Conventions
 
+- Posted times use ONE format, `when_tct()` in `utils/helpers.py`: "Saturday 28/11/2026 13:00 TCT (<local>, <countdown>)" (Pat, 27/11/2026). Typed text (chat drafts, the draft's ✏️ Change box, `/announce`) goes through `stamp_times()` (dates a weekday time, adds Ends, stamps); the Change box shows text without the codes (`unstamp_times`).
 - User-facing counts use `plural()` / `verb()` from `utils/helpers.py` ("1 member has"), never "member(s) have" (UX audit 14/11/2026, read from the real channels).
 
 - Comments explain **why**, especially the non-obvious constraint a line defends against. Much of this codebase's value is in knowing which failure a guard exists for.

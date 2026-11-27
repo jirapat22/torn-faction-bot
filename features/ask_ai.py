@@ -2367,6 +2367,20 @@ def add_end_times(text):
     return '\n'.join(out)
 
 
+
+def stamp_times(text, now=None):
+    """Everything a typed announcement gets: weekday times dated, an Ends
+    line from a length, then local time + countdown after each TCT time.
+    Safe to run twice (stamped times and existing Ends lines are skipped)."""
+    return add_local_times(add_end_times(resolve_times(text, now)))
+
+
+def unstamp_times(text):
+    """Hide the Discord time codes for an edit box: people would otherwise
+    see and mangle raw "<t:1795870800:f>" text. stamp_times puts them back."""
+    return re.sub(r' \((?:<t:\d+:[a-zA-Z]>(?:, )?)+\)', '', text or '')
+
+
 def space_events(text):
     """A blank line before each event heading ("**🦘 Happy Jump**"), so events
     stand apart (Pat's layout: headings + bullets)."""

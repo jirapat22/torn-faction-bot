@@ -31,6 +31,7 @@ import discord
 from config import ANNOUNCEMENTS_CHANNEL_ID
 from features.rules_posts import guild_channel_names, names_to_links
 from utils.helpers import member_is_management
+from features.ask_ai import stamp_times, unstamp_times
 
 logger = logging.getLogger(__name__)
 
@@ -158,11 +159,12 @@ class EditDraftModal(discord.ui.Modal):
         names = guild_channel_names(message.guild)
         from features.rules_posts import links_to_names
         self.body = discord.ui.TextInput(label='Text (type channels as #war-room)', style=discord.TextStyle.paragraph,
-                                         default=links_to_names(draft['text'], names), max_length=1900)
+                                         default=unstamp_times(links_to_names(draft['text'], names)), max_length=1900)
         self.add_item(self.body)
 
     async def on_submit(self, interaction: discord.Interaction):
         text, unknown = names_to_links(self.body.value.strip(), guild_channel_names(interaction.guild))
+        text = stamp_times(text)   # edited or new times get TCT + local + countdown again
         pinged = resolve_ping(interaction.guild, self.draft['ping'])
         prefix = pinged[0] if pinged else ''
         if len(build_post(text, prefix)) > POST_LIMIT:

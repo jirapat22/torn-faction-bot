@@ -6,9 +6,10 @@ Defines all slash commands for the bot
 import discord
 from discord import app_commands
 from datetime import datetime, timezone
-from utils.helpers import create_embed, format_timestamp, format_timestamp_with_tct, get_days_since, is_management, plural
+from utils.helpers import create_embed, format_timestamp, format_timestamp_with_tct, get_days_since, is_management, plural, when_tct
 from utils.torn_api import fetch_faction_members
 from features.event_ui import EventTypeView
+from features.ask_ai import stamp_times
 from config import (
     EMBED_COLOR_INFO,
     EMBED_COLOR_SUCCESS,
@@ -393,7 +394,7 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
                 when_word = ('Scheduled' if ev['status'] == 'scheduled'
                              else 'Started')
                 msg = (f"⛓️ **{ev['name']}** {when_word.lower()}\n"
-                       f"Counting `{s:%d %b %H:%M}` → `{e:%d %b %H:%M} TCT`"
+                       f"Counting {when_tct(ev['start'])}\nto {when_tct(ev['end'])}\n"
                        f" · minimum **{mn}** each")
                 if ev['status'] == 'scheduled':
                     msg += (f"\nI will announce it in the chain channel when "
@@ -888,7 +889,9 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
             # Create announcement embed
             announcement_embed = create_embed(
                 title='📢 Faction Announcement',
-                description=self.announcement_text.value,
+                # Typed times get TCT + local time + countdown, like chat drafts.
+                description=stamp_times(
+                    self.announcement_text.value)[:4096],
                 color=EMBED_COLOR_INFO
             )
             announcement_embed.set_footer(text=f'Posted by {interaction.user.display_name}')
