@@ -168,7 +168,9 @@ def torn_effect(title, path='data/torn_calendar.json'):
 
 def start_post_text(name, effect=''):
     """The "it's on" message for a Torn event. Pure, for tests."""
-    out = f"\U0001f3ae **{name}** has started! Check your start time between {START_WINDOW}."
+    from features.torn_events import fixed_hour
+    out = (f"\U0001f3ae **{name}** has started!" if fixed_hour(name) is not None   # same time for everyone
+           else f"\U0001f3ae **{name}** has started! Check your start time between {START_WINDOW}.")
     if effect:
         out += f"\n-# Torn: {effect}."
     return out

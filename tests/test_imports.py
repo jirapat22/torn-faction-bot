@@ -8897,7 +8897,13 @@ def test_torn_events_from_the_official_calendar():
     win = lambda title, a, b: tuple(f'{x:%d/%m %H:%M}' for x in api_window(
         {'title': title, 'start': ts(a), 'end': ts(b), 'kind': 'Torn event'})[:2])
     assert win('World Diabetes Day', '14/11/2026 00:00', '14/11/2026 23:59') == ('13/11 10:00', '15/11 10:00')
-    assert win('Black Friday', '27/11/2026 00:00', '27/11/2026 23:59') == ('27/11 10:00', '28/11 10:00')
+    # Pat, 27/11/2026: Black Friday is 12:00 to 12:00 TCT for everyone, no picking.
+    assert win('Black Friday', '27/11/2026 00:00', '27/11/2026 23:59') == ('27/11 12:00', '28/11 12:00')
+    assert api_window({'title': 'Black Friday', 'start': ts('27/11/2026 00:00'), 'end': ts('27/11/2026 23:59'),
+                       'kind': 'Torn event'})[2] is False, 'nobody picks a start'
+    from features.event_reminders import start_post_text
+    assert 'Check your start time' not in start_post_text('Black Friday')
+    assert 'Check your start time' in start_post_text('World Diabetes Day')
     assert win('Slash Wednesday', '09/12/2026 00:00', '09/12/2026 23:59') == ('09/12 10:00', '11/12 10:00')
     assert win('Trick or Treat', '25/10/2026 00:00', '01/11/2026 23:59') == ('25/10 10:00', '01/11 10:00')
     assert win('Weekend Road Trip', '31/01/2026 12:00', '02/02/2026 11:59') == ('31/01 12:00', '02/02 11:59')

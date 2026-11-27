@@ -100,6 +100,17 @@ SINGLE_DATE_EVENTS = {'torn anniversary', 'black friday'}
 # the wiki listed Slash Wednesday as starting on the Wednesday itself (10/12
 # in 2025). Not confirmed for 2026; Pat to check the in-game calendar.
 STARTS_ON_THE_DAY = {'slash wednesday'}
+# Fixed-time events: the same start for everyone, no picking, starting at
+# this TCT hour on the API date and lasting a day. Pat, 27/11/2026: Black
+# Friday runs 12:00 to 12:00 TCT (the bot said "pick 10:00-16:00, 10:00 to
+# 10:00"). The wiki can't be read by bots, so this is Pat's word.
+FIXED_START_HOURS = {'black friday': 12}
+
+
+def fixed_hour(title):
+    """The fixed TCT start hour for an event everyone starts together, or None."""
+    t = (title or '').lower()
+    return next((h for k, h in FIXED_START_HOURS.items() if k in t), None)
 
 
 def api_window(e):
@@ -118,6 +129,9 @@ def api_window(e):
     staggered = start.hour == 0 and start.minute == 0 and e.get('kind') != 'Torn competition'
     if not staggered:
         return start, end, False
+    if fixed_hour(title) is not None:
+        fixed = start.replace(hour=fixed_hour(title), minute=0, second=0)
+        return fixed, fixed + timedelta(days=max(1, round((e_ts - s_ts) / DAY))), False
     first_day = start.replace(hour=10, minute=0)
     if e_ts - s_ts < DAY and not any(t in title for t in SINGLE_DATE_EVENTS):
         if not any(t in title for t in STARTS_ON_THE_DAY):
@@ -327,7 +341,8 @@ def _torn_detail(title, path):
         if e.get('title') == title:
             desc = (e.get('description') or '').strip().rstrip('.')
             out = []
-            pick = ' Pick your start time in the Torn calendar.' if e in (saved.get('events') or []) else ''
+            pick = ' Pick your start time in the Torn calendar.' \
+                if e in (saved.get('events') or []) and fixed_hour(title) is None else ''
             if desc:
                 # Long descriptions (Christmas Town, Easter) are cut to their first sentence.
                 first = re.split(r'(?<=[.!])\s', desc)[0].rstrip('.')

@@ -71,13 +71,14 @@ def resolve_date(year, month, day):
 def torn_event_window(name, month, day, now):
     """(start, end) for this year's occurrence, or next year's if passed."""
     d = resolve_date(now.year, month, day)
-    start = datetime(d.year, d.month, d.day, TORN_EVENT_START_HOUR, 0,
-                     tzinfo=timezone.utc)
+    # Black Friday & co. start at a fixed hour for everyone (torn_events.FIXED_START_HOURS).
+    from features.torn_events import fixed_hour
+    hour = fixed_hour(name) if fixed_hour(name) is not None else TORN_EVENT_START_HOUR
+    start = datetime(d.year, d.month, d.day, hour, 0, tzinfo=timezone.utc)
     days = TORN_EVENT_DAYS.get(name, DEFAULT_TORN_EVENT_DAYS)
     if start + timedelta(days=days) < now:
         d = resolve_date(now.year + 1, month, day)
-        start = datetime(d.year, d.month, d.day, TORN_EVENT_START_HOUR, 0,
-                         tzinfo=timezone.utc)
+        start = datetime(d.year, d.month, d.day, hour, 0, tzinfo=timezone.utc)
     return start, start + timedelta(days=days)
 
 
