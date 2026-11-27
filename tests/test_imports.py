@@ -11575,6 +11575,40 @@ def test_draft_card_post_plus_event_does_both():
     assert '📅 Event created' in Inter.edited['content'] and Inter.edited['view'] is None
 
 
+def test_calendar_sync_leaves_the_start_of_a_live_event_alone():
+    """27/11/2026: Black Friday's start moved to 12:00 after its Discord event
+    had already started at 10:00; Discord refuses a new start on a live
+    event (400), so every sync failed. The rest is still corrected."""
+    import asyncio, json, os, tempfile
+    import discord
+    import features.calendar_sync as cs
+    import features.torn_events as te
+
+    w = {'name': '🎮 Black Friday', 'description': 'Shop!', 'start': 1795867200, 'end': 1795953600}
+    d = tempfile.mkdtemp()
+    state = os.path.join(d, 'cal.json')
+    with open(state, 'w') as f:
+        json.dump({'torn:black friday': {'id': '5', 'name': w['name'], 'start': w['start'] - 7200,
+                                         'end': w['end'] - 7200, 'description': 'Shop!'}}, f)
+    edits = []
+    class Ev:
+        id, status = 5, discord.EventStatus.active
+        async def edit(self, **kw):
+            edits.append(kw)
+    class Guild:
+        async def fetch_scheduled_events(self):
+            return [Ev()]
+    old_desired, old_eff = cs.desired, te.effective_calendar_events
+    cs.desired = lambda *a, **k: {'torn:black friday': w}
+    te.effective_calendar_events = lambda *a, **k: []
+    try:
+        asyncio.run(cs.sync(None, Guild(), state_file=state))
+    finally:
+        cs.desired, te.effective_calendar_events = old_desired, old_eff
+    assert edits and 'start_time' not in edits[0], edits
+    assert edits[0]['end_time'].timestamp() == w['end']
+
+
 if __name__ == '__main__':
     test_faction_facts_from_pat()
     test_all_modules_import()
@@ -11784,4 +11818,5 @@ if __name__ == '__main__':
     test_every_announcement_time_shows_tct_local_and_countdown()
     test_posted_announcement_offers_its_discord_event()
     test_draft_card_post_plus_event_does_both()
+    test_calendar_sync_leaves_the_start_of_a_live_event_alone()
     print('All smoke tests passed.')

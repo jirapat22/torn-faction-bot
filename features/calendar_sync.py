@@ -18,6 +18,8 @@ reaches you.
 """
 
 import logging
+
+import discord
 from datetime import datetime, date, timedelta, timezone
 
 from utils.helpers import load_json, save_json
@@ -248,12 +250,15 @@ async def sync(bot, guild, chain_event_manager=None, war_tracker=None,
                 continue
         elif changed(tracked, w):
             try:
-                await event.edit(
-                    name=w['name'][:100],
-                    description=w['description'][:1000],
-                    start_time=datetime.fromtimestamp(w['start'], timezone.utc),
-                    end_time=datetime.fromtimestamp(w['end'], timezone.utc),
-                    reason='Faction calendar')
+                fields = dict(name=w['name'][:100], description=w['description'][:1000],
+                              start_time=datetime.fromtimestamp(w['start'], timezone.utc),
+                              end_time=datetime.fromtimestamp(w['end'], timezone.utc))
+                # Discord refuses a new start on an event that has already
+                # started (400 "Invalid Form Body", Black Friday 27/11/2026,
+                # retried every sync): fix the rest, leave the start alone.
+                if getattr(event, 'status', None) == discord.EventStatus.active:
+                    fields.pop('start_time')
+                await event.edit(**fields, reason='Faction calendar')
                 updated += 1
             except Exception as e:
                 logger.error(f'Calendar sync: could not edit "{w["name"]}": {e}')
