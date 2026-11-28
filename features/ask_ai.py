@@ -921,6 +921,59 @@ class FactBook:
                        f'friendly hosps received {_hosp(w, m, "hosps_received")}')
         return '\n'.join(out)
 
+    def war_board(self, question=''):
+        """
+        Members' war stats card (Pat, 28/11/2026: "totals + top 10 + my
+        rank"; spreadjam asked for top performers and got a refusal). Built
+        here, no AI: names and numbers are copied, never picked by a model.
+        Only the TOP of the list is named; the bottom stays hidden, so it
+        can't become a "who is slacking" list. Window from the question:
+        "last 3 wars", "all time", else the latest war.
+        """
+        if not self.wars:
+            return None
+        q = (question or '').lower()
+        wars = sorted(self.wars, key=lambda w: w.get('timestamp', 0))
+        words = {'two': 2, 'three': 3, 'four': 4, 'five': 5, 'six': 6, 'ten': 10}
+        m = re.search(r'\b(?:last|past|previous)\s+(\d+|two|three|four|five|six|ten)\s+wars?\b', q)
+        if re.search(r'\ball[- ]?time\b|\bever\b|\ball (?:the |our )?wars\b|\boverall\b', q):
+            pick, label = wars, f'All {len(wars)} wars on record'
+        elif m:
+            n = int(m.group(1)) if m.group(1).isdigit() else words[m.group(1)]
+            pick = wars[-max(1, n):]
+            label = f'Last {len(pick)} war{"s" if len(pick) != 1 else ""}'
+        else:
+            pick, label = wars[-1:], 'Last war'
+        self.found_any = True
+        icon = {'victory': '✅', 'defeat': '❌'}
+        lines = [f'📊 **{label}**']
+        for w in reversed(pick[-5:]):
+            lines.append(f'{icon.get(w.get("result"), "❔")} vs {w.get("enemy_name", "?")} '
+                         f'{w.get("our_score", "?")}-{w.get("enemy_score", "?")} · {_date(w.get("timestamp", 0))}')
+        if len(pick) > 5:
+            lines.append(f'...and {len(pick) - 5} older')
+        totals, names = {}, {}
+        for w in pick:
+            for tid, mm in (w.get('members') or {}).items():
+                totals[tid] = totals.get(tid, 0) + (mm.get('attacks') or 0)
+                names[tid] = self._name(tid, mm)
+        if not totals:
+            return '\n'.join(lines + ['No member stats saved for these wars.'])
+        made = sum(totals.values())
+        lines.append(f'Faction: **{made:,}** hits by {plural(len(totals), "member")} '
+                     f'· avg {round(made / len(totals), 1)} each')
+        ranked = sorted(totals.items(), key=lambda kv: (-kv[1], names[kv[0]].lower()))
+        lines.append('🏆 **Top 10 hitters**')
+        for i, (tid, n) in enumerate(ranked[:10], 1):
+            lines.append(f'{i}. {names[tid]} · {n:,}')
+        mine = next(((i, tid, n) for i, (tid, n) in enumerate(ranked, 1) if self._is_asker(tid)), None)
+        if mine:
+            lines.append(f'🫵 **You:** #{mine[0]} of {len(ranked)} · {mine[2]:,} hits')
+        elif self.asker:
+            whose = "this war's" if len(pick) == 1 else "these wars'"
+            lines.append(f"🫵 You aren't in {whose} records.")
+        return '\n'.join(lines)
+
     def strikes_overview(self):
         self.found_any = True
         active = self._strikes_active()
@@ -2486,6 +2539,26 @@ JUDGE_RX = re.compile(
     r'inactiv\w*|activ\w*|offline|rank\w*|strikes?|candidates?|compare\w*|comparison|vs|versus|missed|'
     r'missing|behind|leaderboard|naughty|in trouble|warn\w*)\b'
     r"|\bwho (?:has ?n[o']?t|hasn'?t|didn'?t|did not|isn'?t|is not|never)\b", re.I)
+# Members may see the war leaderboard's TOP (Pat, 28/11/2026): "top
+# performers", "top 10 from last 3 wars", "how do I compare / my rank".
+# Anything aimed at the bottom stays management only, so it can't name the
+# slackers ("we block those so there's no drama", Pat to spreadjam).
+WAR_TOP_RX = re.compile(r"\b(?:top|best|most hits|mvps?|leaderboard|performers?|performances?|hitters?|"
+                        r"rank|ranking|rankings|compare|stack up|standings?)\b", re.I)
+WAR_TOP_NEG_RX = re.compile(r"\b(?:worst|least|lowest|bottom|fewest|laz\w*|weakest|slack\w*|inactiv\w*|"
+                            r"useless|behind|not carrying|carry\w* (?:their|the) weight|strikes?|losers?)\b|"
+                            r"\bwho (?:has ?n[o']?t|hasn'?t|didn'?t|did not|isn'?t|never)\b", re.I)
+WAR_TOP_TOPIC_RX = re.compile(r"\bwars?\b|\bhits?\b|\bperform\w*|\bhitters?\b|\bmvps?\b|\bleaderboard\b|"
+                              r"\ball[- ]?time\b|\bcompare\b|\bstack up\b|\brank\w*", re.I)
+
+
+def is_war_top(question):
+    """A member's "top performers / how do I compare" war question."""
+    q = question or ''
+    return bool(WAR_TOP_RX.search(q) and WAR_TOP_TOPIC_RX.search(q) and not WAR_TOP_NEG_RX.search(q)
+                and not re.search(r'\b(?:chains?|oc|crimes?|online|activ\w*|xan\w*|battle stats?)\b', q, re.I))
+
+
 MEMBER_REFUSAL = ("That one's for management only, sorry 🔒 I can tell you about wars, chains, events and the "
                   "rules though.")
 # Announcement drafts are management only too: a member's draft could be posted as the bot.
@@ -3019,6 +3092,10 @@ async def _answer_question(session, question, facts, history=None, earlier_facts
         # ranking words count; with nobody named, a judging word only counts
         # when it is about other people ("who is inactive?").
         mine = bool(asker) and asker[1].lower() in [n.lower() for n in names_in(question, facts)]
+        if is_war_top(question) and hasattr(facts, 'war_board'):
+            board = facts.war_board(question)
+            if board:
+                return Answer(board, 'bot', '', True, 0)
         if RANK_RX.search(question) or (not mine and JUDGE_RX.search(question) and _PEOPLE_RX.search(question)):
             return Answer(MEMBER_REFUSAL, 'none', '', True, 0, kind='ask')
     # Leave notices: looked up and quoted by the bot itself, no AI at all.
@@ -3757,6 +3834,9 @@ class AskAI:
         self.verification_system = None
         self.help_post = None          # features/ask_help_post.HelpPost, for "@ApexPunk help"
         self.last_answered = {}        # discord user id -> when a member last got an answer
+        from features.ask_channels import BusyMeter
+        self.busy = BusyMeter()        # bot answers per channel, for the busy limit (features/ask_channels.py)
+        self.held = {}                 # member id -> [question held back on cooldown, repeats seen]
         self.fun_times = {}            # discord user id -> recent bot-made reply times (spam cap)
         self.fun_warned = {}           # discord user id -> when they were last told to chill
 
@@ -3875,9 +3955,22 @@ class AskAI:
             # and never start the cooldown, so they don't wait for it either:
             # "thanks" right after an answer got "wait 2 minutes".
             if left and not (not bare or HELP_WORDS.match(bare) or skips_cooldown(bare)):
+                # Same question again while waiting: ONE patience line, then
+                # silence (spreadjam sent it 3 times, each got a ⏳).
+                from features.ask_channels import normalise, PATIENCE_LINES
+                import random
+                key = normalise(bare)
+                held = self.held.get(message.author.id)
+                if held and held[0] == key:
+                    held[1] += 1
+                    if held[1] == 1:
+                        await message.reply(random.choice(PATIENCE_LINES), mention_author=False, delete_after=15)
+                    return
+                self.held[message.author.id] = [key, 0]
                 await message.reply(cooldown_text(left), mention_author=False, delete_after=10)
                 await _mark_waiting(message)
                 return
+            self.held.pop(message.author.id, None)
             if bare and skips_cooldown(bare):
                 capped = self.fun_capped(message.author.id)
                 if capped == 'warn':
@@ -3962,8 +4055,7 @@ class AskAI:
         # are long, and most of the time nobody reads them (Pat, 07/11/2026).
         # The 📎 button is management only, so members don't get one.
         view = ShowDataView(self) if ans.facts_text and management else None
-        sent = await message.reply(text, view=view, mention_author=False,
-                                   allowed_mentions=discord.AllowedMentions.none())
+        sent = await self._post_answer(message, question, text, view, management)
         if ans.facts_text:
             footer = (f'{ans.provider} · {ans.seconds:.0f}s · '
                       + ('AI wording rejected, raw records shown' if ans.fallback
@@ -3983,6 +4075,32 @@ class AskAI:
                            drafting=ans.kind in ('announce_ask', 'action_ask')
                            or (ans.kind == 'ask' and bool(about_task))
                            or bool(re.search(r'\bdid you mean\b', ans.text, re.I)))
+
+    async def _post_answer(self, message, question, text, view, management):
+        """Reply where they asked, or (members) in the home channel with a
+        pointer left behind: features/ask_channels.py has the rules."""
+        from features.ask_channels import (channel_topic, question_topic, route, find_channel, pointer_text,
+                                           POINTER_DELETE_S)
+        ch = message.channel
+        where = channel_topic(getattr(ch, 'name', ''), getattr(ch, 'id', None))
+        dest = route(where, question_topic(question, fun=skips_cooldown(question)),
+                     self.busy.busy(getattr(ch, 'id', None)), management)
+        target = find_channel(message.guild, dest) if dest != 'here' else None
+        if target is not None and getattr(target, 'id', None) != getattr(ch, 'id', None):
+            try:
+                head = f'{message.author.mention} asked in {ch.mention}: *{question[:150]}*\n\n'
+                sent = await target.send(head + text[:ANSWER_LIMIT - len(head)], view=view,
+                                         allowed_mentions=discord.AllowedMentions(users=[message.author]))
+                await message.reply(pointer_text(target.mention, sent.jump_url, None, where),
+                                    mention_author=False, delete_after=POINTER_DELETE_S,
+                                    allowed_mentions=discord.AllowedMentions.none())
+                return sent
+            except discord.HTTPException as e:
+                logger.error(f'ask_ai: could not post in #{target}: {e!r}, answering in place')
+        if where != 'home':
+            self.busy.add(getattr(ch, 'id', None))
+        return await message.reply(text, view=view, mention_author=False,
+                                   allowed_mentions=discord.AllowedMentions.none())
 
     def _remember(self, sent, history, question, answer_text, earlier, facts_text, message, drafting=True):
         """Remember the conversation so a reply to this message can follow on

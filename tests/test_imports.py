@@ -10449,7 +10449,10 @@ def test_members_see_only_their_own_records():
     hist = [{'role': 'user', 'content': 'tell me about BunnyBull'}, {'role': 'assistant', 'content': 'ok'}]
     assert ask('is she active?', history=hist)[0].text == OTHERS_REFUSAL
     # Rankings and "who is inactive" stay management only; rules questions pass.
-    assert ask('am I the top hitter?')[0].text == MEMBER_REFUSAL
+    # Pat, 28/11/2026: the war leaderboard's top + your own rank are open to members (bot-made card).
+    top = ask('am I the top hitter?')[0]
+    assert top.provider == 'bot' and '🏆 **Top 10 hitters**' in top.text and '🫵 **You:**' in top.text, top.text
+    assert ask('who is the worst hitter in war?')[0].text == MEMBER_REFUSAL
     assert ask('who is inactive?')[0].text == MEMBER_REFUSAL
     assert ask('any leave notices?')[0].text == OTHERS_REFUSAL
     # Not linked to Torn: their own records need /register first.
@@ -11639,6 +11642,33 @@ def test_calendar_sync_leaves_the_start_of_a_live_event_alone():
         assert json.load(f)['torn:black friday']['end'] == 1, 'a failed edit must not be saved as done'
 
 
+def test_member_answers_go_to_the_right_channel():
+    """Pat, 28/11/2026 (SirAua: "a separate channel so it doesn't spam the main
+    chat"): the home channel answers anything, topic channels their topic,
+    banter stays in #punk-plaza, the rest moves home; busy channels move
+    everything; management is never moved."""
+    from features.ask_channels import channel_topic, question_topic, route, BusyMeter, PATIENCE_LINES
+    assert channel_topic('🤖-ask-apexpunk') == 'home'
+    assert channel_topic('⚔️-war-room') == 'war' and channel_topic('⛓️-chain') == 'chain'
+    assert channel_topic('💣-organised-crimes') == 'oc' and channel_topic('🗨-punk-plaza') == 'plaza'
+    assert question_topic('r we winning?') == 'war' and question_topic('is the chain going?') == 'chain'
+    assert question_topic('who is in an OC?') == 'oc' and question_topic('how active am I?') == 'stats'
+    assert question_topic('tell me a joke', fun=True) == 'fun'
+    assert route('home', 'stats') == 'here'
+    assert route('war', 'war') == 'here' and route('war', 'stats') == 'home' and route('war', 'fun') == 'plaza'
+    assert route('plaza', 'fun') == 'here' and route('plaza', 'stats') == 'home' and route('plaza', 'war') == 'home'
+    assert route('other', 'fun') == 'here' and route('other', 'chain') == 'home'
+    assert route('plaza', 'stats', management=True) == 'here'
+    assert route('war', 'war', busy=True) == 'home' and route('home', 'stats', busy=True) == 'here'
+    meter = BusyMeter()
+    for i in range(4):
+        meter.add(1, now=1000 + i)
+    assert not meter.busy(1, now=1010)
+    meter.add(1, now=1011)
+    assert meter.busy(1, now=1012) and not meter.busy(1, now=1011 + 601), 'busy fades after 10 minutes'
+    assert len(set(PATIENCE_LINES)) >= 5 and not any('—' in l for l in PATIENCE_LINES)
+
+
 if __name__ == '__main__':
     test_faction_facts_from_pat()
     test_all_modules_import()
@@ -11849,4 +11879,5 @@ if __name__ == '__main__':
     test_posted_announcement_offers_its_discord_event()
     test_draft_card_post_plus_event_does_both()
     test_calendar_sync_leaves_the_start_of_a_live_event_alone()
+    test_member_answers_go_to_the_right_channel()
     print('All smoke tests passed.')

@@ -37,6 +37,8 @@ def guide_text(members_on, cooldown_s=120):
     lines = [
         '🤖 **How to ask @ApexPunk**',
         '@mention the bot with a question in plain English. Reply to its answer to keep chatting.',
+        '**🏠 Where** ask in #🤖-ask-apexpunk (anything goes there). War, chain and OC questions also work in their own '
+        'channels, and jokes in #punk-plaza; anything else gets answered in #🤖-ask-apexpunk.',
         '',
         '**📊 Your records** `@ApexPunk how many hits did I make last war?`',
         '-# Your war hits, hits taken, activity, OC, strikes and leave notices. Only your own.',
@@ -45,13 +47,14 @@ def guide_text(members_on, cooldown_s=120):
         '**📜 Faction rules** `@ApexPunk what\'s the OC rule?`',
         '**🎮 How Torn works** `@ApexPunk how long can a ranked war last?`',
         '**🎯 Enemies** `@ApexPunk who hit us this week?`',
+        '**🏆 War top 10** `@ApexPunk top performers last 3 wars` (with your own rank)',
         '**🆕 New here** `@ApexPunk I\'m new` · **🏴 The faction** `@ApexPunk tell me about the faction`',
         '**😈 Fun & chat** `@ApexPunk tell me a joke` · `roast me` · `8ball will we win?`',
         f'**⏱️ Cooldown** one question every {mins} minutes each (management: no limit)',
         '',
         '🔒 **Management only**',
         '**👥 Anyone\'s records** `@ApexPunk how active is BunnyBull?`',
-        '**🏆 Rankings** `@ApexPunk who made the most hits last war?`',
+        '**📋 Full war tables** `@ApexPunk who took the most hits last war?`',
         '**🛠️ Actions (✅ card)** `@ApexPunk start a chain event now, 24 hours, min 10`',
         '**📣 Announcements** `@ApexPunk make an announcement about Friday\'s war`',
         '',
@@ -104,6 +107,12 @@ class HelpPost:
         'unchanged', or None when it could not (then jump_url is cleared, so
         help falls back to the short reply instead of a dead link)."""
         channel = find_channel(guild, fallback_id)
+        # "#🤖-ask-apexpunk" / "#punk-plaza" in the text become real links.
+        try:
+            from features.rules_posts import names_to_links, guild_channel_names
+            text, _ = names_to_links(text, guild_channel_names(guild))
+        except Exception as e:
+            logger.warning(f'Help post: channel links not made: {e!r}')
         if channel is None:
             logger.warning('Help post: no channel named like #commands-the-punk')
             self.data.pop('jump_url', None)
