@@ -589,7 +589,7 @@ async def _post_custom_poll(plan, live, interaction):
     create_poll and day-menu view, so both polls look and behave the same.
     """
     from config import VERIFIED_ROLE_NAME, EMBED_COLOR_INFO
-    from features.availability import poll_post_target, block_list_lines, AvailabilityDropdownView
+    from features.availability import poll_post_target, block_list_lines, fit_lines, AvailabilityDropdownView
     from utils.helpers import create_embed
     am = live.availability_manager
     s = datetime.fromtimestamp(plan['start'], timezone.utc)
@@ -618,10 +618,14 @@ async def _post_custom_poll(plan, live, interaction):
                      f'Times shown are your **local time** with TCT (Torn City Time = UTC) in parentheses.'
                      f'\n\n⏳ **Event starts:** <t:{blocks[0]["start_unix"]}:R> (<t:{blocks[0]["start_unix"]}:F>)'
                      f'\n📊 **Poll closes:** <t:{closes}:R> (<t:{closes}:f>)\n\n'
-                     f'**Time Blocks:**\n' + '\n'.join(block_list_lines(blocks, use_buttons=False))),
+                     f'**Time Blocks:**\n' + fit_lines(block_list_lines(blocks, use_buttons=False), 3300, 'block')),
         color=EMBED_COLOR_INFO)
     embed.set_footer(text=f'Block size: {plan["block_hours"]}h | Only {VERIFIED_ROLE_NAME} members can vote')
-    msg = await target.send(embed=embed, view=AvailabilityDropdownView(am, poll_id, blocks, VERIFIED_ROLE_NAME))
+    try:
+        msg = await target.send(embed=embed, view=AvailabilityDropdownView(am, poll_id, blocks, VERIFIED_ROLE_NAME))
+    except Exception:
+        am.discard_poll(poll_id)   # a failed send must not leave a ghost poll saved
+        raise
     am.polls[poll_id]['message_id'] = msg.id
     await am.save_polls()
     return f'🗳️ Availability poll posted in {target.mention}. {msg.jump_url}'

@@ -233,6 +233,13 @@ class AvailabilityManager:
 
         return poll_id, blocks
 
+    def discard_poll(self, poll_id: str):
+        """Forget a poll that never got posted. create_poll stores it at once
+        with message_id 0; if the send then fails, the next save (any vote on
+        another poll) would persist a "ghost" poll nobody can see or answer."""
+        self.polls.pop(poll_id, None)
+        self.data.pop(poll_id, None)
+
     def toggle_availability(self, poll_id: str, block_id: int, user_id: int) -> bool:
         """
         Toggle a user's availability for a specific block
@@ -716,7 +723,11 @@ class AvailabilityManager:
                               f'Only {verified_role_name} members can vote')
 
         view = AvailabilityDropdownView(self, poll_id, blocks, verified_role_name)
-        message = await channel.send(embed=embed, view=view)
+        try:
+            message = await channel.send(embed=embed, view=view)
+        except Exception:
+            self.discard_poll(poll_id)   # no ghost poll left behind
+            raise
         self.polls[poll_id]['message_id'] = message.id
         await self.save_polls()
         logger.info(f'Availability: auto-posted war poll {poll_id} for war {war_id} '
@@ -1393,10 +1404,14 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
             manager.polls[poll_id]['style'] = 'buttons' if use_buttons else 'menus'
             view = (AvailabilityView if use_buttons else AvailabilityDropdownView)(
                 manager, poll_id, blocks, verified_role_name)
-            if poll_target.id == interaction.channel.id:
-                message = await interaction.followup.send(embed=embed, view=view)
-            else:
-                message = await poll_target.send(embed=embed, view=view)
+            try:
+                if poll_target.id == interaction.channel.id:
+                    message = await interaction.followup.send(embed=embed, view=view)
+                else:
+                    message = await poll_target.send(embed=embed, view=view)
+            except Exception:
+                manager.discard_poll(poll_id)   # no ghost poll left behind
+                raise
                 await interaction.followup.send(
                     embed=create_embed(
                         title='Poll posted',

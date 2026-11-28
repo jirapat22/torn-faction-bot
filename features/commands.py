@@ -7,7 +7,9 @@ import discord
 from discord import app_commands
 from datetime import datetime, timezone
 from utils.helpers import create_embed, format_timestamp, format_timestamp_with_tct, get_days_since, is_management, plural, when_tct
+import time
 from utils.torn_api import fetch_faction_members
+from utils import torn_api
 from features.event_ui import EventTypeView
 from features.ask_ai import stamp_times
 from config import (
@@ -28,6 +30,27 @@ from config import (
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def torn_down_embed(what):
+    """The reply when Torn didn't answer. The status helpers return None for
+    both "nothing running" and "Torn down"; saying "No Active War" during an
+    outage is a confident wrong answer (None-vs-empty rule, CLAUDE.md)."""
+    return create_embed(
+        title="Torn didn't answer",
+        description=f"Couldn't read the {what} from Torn just now, so I can't say "
+                    "whether anything is running. Try again in a minute.",
+        color=EMBED_COLOR_WARNING,
+    )
+
+
+async def read_or_down(fetch, what):
+    """Run a status fetch; return (data, embed_if_torn_was_down)."""
+    t0 = time.time()
+    data = await fetch()
+    if data is None and torn_api.torn_unreachable_since(t0):
+        return None, torn_down_embed(what)
+    return data, None
 
 
 async def _followup(interaction, ephemeral=False, **kwargs):
@@ -575,8 +598,8 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
             await interaction.response.defer()
 
             if view_value == 'report':
-                report_data = await chain_tracker.get_chain_report()
-                embed = await chain_tracker.format_chainreport_embed(report_data)
+                report_data, down = await read_or_down(chain_tracker.get_chain_report, 'chain report')
+                embed = down or await chain_tracker.format_chainreport_embed(report_data)
                 await interaction.followup.send(embed=embed)
 
             elif view_value == 'board':
@@ -589,8 +612,8 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
                     await interaction.followup.send(embed=embeds)
 
             else:  # status (default)
-                chain_data = await chain_tracker.get_current_chain()
-                embed = await chain_tracker.format_chain_embed(chain_data)
+                chain_data, down = await read_or_down(chain_tracker.get_current_chain, 'chain')
+                embed = down or await chain_tracker.format_chain_embed(chain_data)
                 await interaction.followup.send(embed=embed)
 
     # ===== STRIKES COMMAND =====
@@ -861,8 +884,8 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
                 await interaction.followup.send(embed=embed)
 
             else:  # status (default)
-                war_info = await war_tracker.get_current_war()
-                embed = await war_tracker.format_war_embed(war_info)
+                war_info, down = await read_or_down(war_tracker.get_current_war, 'war status')
+                embed = down or await war_tracker.format_war_embed(war_info)
                 await interaction.followup.send(embed=embed)
 
         logger.info('War command registered (/war with status/board/xan/history/trends/fly/flystatus/revives views)')
@@ -1084,6 +1107,11 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
             elif feature == 'events':
                 if event_reminder_manager:
                     result = await event_reminder_manager.check_and_announce_events()
+                    if result.get('error'):
+                        await interaction.followup.send(embed=create_embed(
+                            f"⚠️ {label_map.get(feature, feature)}", result['error'],
+                            color=EMBED_COLOR_WARNING), ephemeral=True)
+                        return
                     checked = result.get('checked', 0)
                     announced = result.get('announced', 0)
                     upcoming = result.get('upcoming', [])
@@ -1104,9 +1132,8 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
 
             elif feature == 'rolesync':
                 if role_sync_manager:
-                    await role_sync_manager.sync_all_members()
-                    note = 'Role sync complete. All members processed.'
-                    color = EMBED_COLOR_SUCCESS
+                    ok, note = await role_sync_manager.sync_all_members()
+                    color = EMBED_COLOR_SUCCESS if ok else EMBED_COLOR_WARNING
                 else:
                     note = 'Role sync manager not available.'
                     color = EMBED_COLOR_WARNING
@@ -1143,7 +1170,10 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
 
             label = label_map.get(feature, feature)
             await interaction.followup.send(
-                embed=create_embed(f'✅ {label}', note, color=color),
+                # ⚠️ when the test did not really pass: a green tick on a
+                # warning read as "it worked" (role sync with sync turned off)
+                embed=create_embed(f"{'✅' if color == EMBED_COLOR_SUCCESS else '⚠️'} {label}",
+                                   note, color=color),
                 ephemeral=True
             )
         except Exception as e:

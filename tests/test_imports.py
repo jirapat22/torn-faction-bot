@@ -11848,6 +11848,59 @@ def test_draft_length_and_management_war_card():
     assert ans.provider == 'bot' and '1. A · 9' in ans.text and 'war report' in ans.text, ans.text
 
 
+
+def test_torn_down_status_and_test_command_honesty():
+    """Audit part 2 (29/11/2026): /chain status, /chain report and /war status
+    said "No Active War" when Torn was down; /test rolesync said "complete"
+    when sync was off; a failed poll send left a ghost poll."""
+    import asyncio, time
+    from utils import torn_api
+    from features import commands
+    from features.roles import RoleSyncManager
+    from features.availability import AvailabilityManager
+
+    # torn_unreachable_since: a failure after t0 with no success since = down
+    saved = (torn_api.last_success_at, torn_api.last_failure_at)
+    try:
+        t0 = time.time()
+        torn_api.last_success_at, torn_api.last_failure_at = t0 - 100, t0 - 50
+        assert not torn_api.torn_unreachable_since(t0)        # old failure only
+        torn_api.last_failure_at = t0 + 1
+        assert torn_api.torn_unreachable_since(t0)            # failed just now
+        torn_api.last_success_at = t0 + 2
+        assert not torn_api.torn_unreachable_since(t0)        # answered since
+
+        torn_api.last_success_at = torn_api.last_failure_at = None
+        async def down():
+            torn_api._note_failure()
+            return None
+        async def nothing():
+            torn_api._note_success()
+            return None
+        data, embed = asyncio.run(commands.read_or_down(down, 'war status'))
+        assert data is None and "didn't answer" in embed.title
+        data, embed = asyncio.run(commands.read_or_down(nothing, 'war status'))
+        assert data is None and embed is None                 # genuinely no war
+    finally:
+        torn_api.last_success_at, torn_api.last_failure_at = saved
+
+    # role sync reports what really happened
+    rs = RoleSyncManager.__new__(RoleSyncManager)
+    rs.config = {'enabled': False}
+    rs.position_roles = {'Member': 1}
+    ok, msg = asyncio.run(rs.sync_all_members())
+    assert not ok and 'off' in msg
+    rs.config = {'enabled': True}
+    rs.position_roles = {}
+    ok, msg = asyncio.run(rs.sync_all_members())
+    assert not ok and 'mapping' in msg
+
+    # a poll that was never posted is dropped
+    am = AvailabilityManager.__new__(AvailabilityManager)
+    am.polls, am.data = {'p1': {'message_id': 0}}, {'p1': {}}
+    am.discard_poll('p1')
+    assert am.polls == {} and am.data == {}
+
 if __name__ == '__main__':
     test_faction_facts_from_pat()
     test_all_modules_import()
@@ -12066,4 +12119,5 @@ if __name__ == '__main__':
     test_who_am_i_card_and_diss_refusal()
     test_audit_slash_command_and_chat_fixes()
     test_draft_length_and_management_war_card()
+    test_torn_down_status_and_test_command_honesty()
     print('All smoke tests passed.')

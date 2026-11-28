@@ -383,7 +383,8 @@ class EventReminderManager:
         guild = self.bot.get_guild(GUILD_ID)
         if not guild:
             logger.warning(f'Event reminders: Could not find guild (ID: {GUILD_ID})')
-            return {'checked': 0, 'announced': 0, 'upcoming': []}
+            return {'checked': 0, 'announced': 0, 'upcoming': [],
+                    'error': 'Could not find the Discord server.'}
 
         now = datetime.now(timezone.utc)
 
@@ -392,7 +393,10 @@ class EventReminderManager:
             events = await guild.fetch_scheduled_events()
         except Exception as e:
             logger.error(f'Event reminders: Failed to fetch events: {e}')
-            return {'checked': 0, 'announced': 0, 'upcoming': []}
+            # 'error' so /test events can say so: it used to show "0 events,
+            # none in window" in success colour when Discord didn't answer.
+            return {'checked': 0, 'announced': 0, 'upcoming': [],
+                    'error': "Discord didn't return the Events tab, so nothing was checked."}
 
         checked = 0
         announced = 0

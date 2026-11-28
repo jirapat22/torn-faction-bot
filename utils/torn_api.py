@@ -59,6 +59,10 @@ _backoff_seconds = 0
 # When Torn last answered with usable data. The health page shows its age, so
 # an hour of failed calls is visible from outside instead of reading "healthy".
 last_success_at = None
+# When a Torn call last came back with nothing usable (refused, paused, timed
+# out, error payload). Paired with last_success_at so a command that got None
+# can tell "Torn didn't answer" apart from "there is genuinely nothing".
+last_failure_at = None
 
 
 def _note_blocked(reason):
@@ -69,6 +73,22 @@ def _note_blocked(reason):
     _blocked_until = time.time() + _backoff_seconds
     logger.error(f'Torn API refused us ({reason}); pausing all Torn calls for '
                  f'{_backoff_seconds}s')
+
+
+def _note_failure():
+    """Remember that a call just failed (see torn_unreachable_since)."""
+    global last_failure_at
+    last_failure_at = time.time()
+
+
+def torn_unreachable_since(t0):
+    """True when a Torn call failed at or after t0 and nothing has succeeded
+    since. Commands use it after a None: their helpers return None for both
+    "no chain/war" and "Torn down", and saying "No Active War" while Torn is
+    down is the confident wrong answer the None-vs-empty rule forbids."""
+    if last_failure_at is None or last_failure_at < t0:
+        return False
+    return last_success_at is None or last_success_at < last_failure_at
 
 
 def _note_success():
@@ -201,6 +221,7 @@ async def _make_api_request(endpoint, params=None, use_personal_key=False, cache
     # pause started; logging every skipped call is the spam this replaces).
     if time.time() < _blocked_until:
         logger.debug(f'Torn API paused, skipping {what}')
+        _note_failure()
         return None
 
     try:
@@ -211,6 +232,7 @@ async def _make_api_request(endpoint, params=None, use_personal_key=False, cache
                 logger.error(f'Torn API error: HTTP {response.status} on {what}')
                 if response.status in (403, 429):
                     _note_blocked(f'HTTP {response.status}')
+                _note_failure()
                 return None
 
             data = _unescape(await response.json())
@@ -222,6 +244,7 @@ async def _make_api_request(endpoint, params=None, use_personal_key=False, cache
                 logger.error(f'Torn API error {error_code}: {error_msg} on {what}')
                 if error_code in BLOCK_ERROR_CODES:
                     _note_blocked(f'error {error_code}')
+                _note_failure()
                 return None
 
             _note_success()
@@ -236,11 +259,13 @@ async def _make_api_request(endpoint, params=None, use_personal_key=False, cache
 
     except aiohttp.ClientError as e:
         logger.error(f'Network error accessing Torn API on {what}: {e!r}')
+        _note_failure()
         return None
     except Exception as e:
         # repr, not str: a timeout's str() is empty, which is why five of
         # these were logged as "Unexpected error with Torn API: " and nothing.
         logger.error(f'Unexpected error with Torn API on {what}: {e!r}')
+        _note_failure()
         return None
 
 

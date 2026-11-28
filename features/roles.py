@@ -10,7 +10,7 @@ Features:
 
 import discord
 from discord.ext import tasks
-from utils.helpers import load_json, save_json
+from utils.helpers import load_json, save_json, plural
 from utils.torn_api import fetch_faction_members
 from config import GUILD_ID
 
@@ -173,24 +173,28 @@ class RoleSyncManager:
             faction_members: Pre-fetched {torn_id: member_data}, to avoid a
                               second Torn API call when the caller already
                               fetched it this tick. Fetches internally if omitted.
+
+        Returns:
+            (ok, message). /test rolesync shows it: it used to say "Role sync
+            complete" when sync was off, had no mappings or Torn was down.
         """
         if not self.config.get('enabled', True):
-            return
+            return False, 'Role sync is turned off, nothing was changed.'
 
         if not self.position_roles:
-            return  # No position mappings configured
+            return False, 'No position-to-role mappings are set up, nothing was changed.'
 
         guild = self.bot.get_guild(GUILD_ID)
         if not guild:
             logger.warning('Role sync: Could not find guild')
-            return
+            return False, 'Could not find the Discord server.'
 
         # Fetch faction members from Torn (unless the caller already has them)
         if faction_members is None:
             faction_members = await fetch_faction_members()
         if not faction_members:
             logger.warning('Role sync: Could not fetch faction members')
-            return
+            return False, "Torn didn't answer (faction roster), nothing was changed."
 
         # Load verified users to get Discord ID -> Torn ID mapping
         verified_users = load_json('data/verified_users.json', default={})
@@ -233,6 +237,7 @@ class RoleSyncManager:
         from utils.helpers import get_current_timestamp
         self.config['last_sync'] = get_current_timestamp()
         await self.save_config()
+        return True, f"Role sync complete: {plural(synced_count, 'member')} updated."
 
 
 async def setup_rolesync_commands(bot, role_sync_manager: RoleSyncManager):
