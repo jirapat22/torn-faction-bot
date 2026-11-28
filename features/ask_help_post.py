@@ -37,8 +37,8 @@ def guide_text(members_on, cooldown_s=120):
     lines = [
         '🤖 **How to ask @ApexPunk**',
         '@mention the bot with a question in plain English. Reply to its answer to keep chatting.',
-        '**🏠 Where** ask in #🤖-ask-apexpunk (anything goes there). War, chain and OC questions also work in their own '
-        'channels, and jokes in #punk-plaza; anything else gets answered in #🤖-ask-apexpunk.',
+        '**🏠 Where** ask in #🤖-ask-apexpunk (anything goes there). Jokes and chat get answered '
+        'wherever you ask; anything else gets answered in #🤖-ask-apexpunk.',
         '',
         '**📊 Your records** `@ApexPunk how many hits did I make last war?`',
         '-# Your war hits, hits taken, activity, OC, strikes and leave notices. Only your own.',

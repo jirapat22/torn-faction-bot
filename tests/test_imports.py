@@ -11643,31 +11643,17 @@ def test_calendar_sync_leaves_the_start_of_a_live_event_alone():
 
 
 def test_member_answers_go_to_the_right_channel():
-    """Pat, 28/11/2026 (SirAua: "a separate channel so it doesn't spam the main
-    chat"): the home channel answers anything, topic channels their topic,
-    banter stays in #punk-plaza, the rest moves home; busy channels move
-    everything; management is never moved."""
-    from features.ask_channels import channel_topic, question_topic, route, BusyMeter, PATIENCE_LINES
-    assert channel_topic('🤖-ask-apexpunk') == 'home'
-    assert channel_topic('⚔️-war-room') == 'war' and channel_topic('⛓️-chain') == 'chain'
-    assert channel_topic('💣-organised-crimes') == 'oc' and channel_topic('🗨-punk-plaza') == 'plaza'
-    assert question_topic('r we winning?') == 'war' and question_topic('is the chain going?') == 'chain'
-    assert question_topic('who is in an OC?') == 'oc' and question_topic('how active am I?') == 'stats'
+    """Pat, 28/11/2026, one simple rule: jokes and chat stay where they were
+    asked, everything else is answered in #🤖-ask-apexpunk; management is
+    never moved. (Topic channels and a busy limit were tried and dropped.)"""
+    from features.ask_channels import channel_topic, question_topic, route, PATIENCE_LINES
+    assert channel_topic('🤖-ask-apexpunk') == 'home' and channel_topic('🗨-punk-plaza') == 'plaza'
     assert question_topic('tell me a joke', fun=True) == 'fun'
     assert route('home', 'stats') == 'here'
-    assert route('war', 'war') == 'here' and route('war', 'stats') == 'home' and route('war', 'fun') == 'plaza'
-    assert route('plaza', 'fun') == 'here' and route('plaza', 'stats') == 'home' and route('plaza', 'war') == 'home'
-    assert route('other', 'fun') == 'here' and route('other', 'chain') == 'home'
+    assert route('plaza', 'fun') == 'here' and route('war', 'fun') == 'here'
+    assert route('plaza', 'stats') == 'home' and route('war', 'war') == 'home' and route('chain', 'chain') == 'home'
     assert route('plaza', 'stats', management=True) == 'here'
-    assert route('war', 'war', busy=True) == 'home' and route('home', 'stats', busy=True) == 'here'
-    meter = BusyMeter()
-    for i in range(4):
-        meter.add(1, now=1000 + i)
-    assert not meter.busy(1, now=1010)
-    meter.add(1, now=1011)
-    assert meter.busy(1, now=1012) and not meter.busy(1, now=1011 + 601), 'busy fades after 10 minutes'
-    assert len(set(PATIENCE_LINES)) >= 5 and not any('—' in l for l in PATIENCE_LINES)
-
+    assert len(set(PATIENCE_LINES)) >= 5 and not any('\u2014' in l for l in PATIENCE_LINES)
 
 def test_moved_answer_forwards_the_question_and_replies_to_it():
     """A member's stats question in #punk-plaza: their message is forwarded

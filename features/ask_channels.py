@@ -4,14 +4,11 @@ separate channel for bot commands so it doesn't spam the main talking
 channel").
 
 - The bot's HOME channel (found by name, `HOME_NAME`) answers everything.
-- Topic channels answer their own topic: war questions in #war-room, chain
-  questions in #chain, OC questions in #organised-crimes.
-- #punk-plaza (and any other channel) keeps the fun: jokes, roasts, hi.
-- Anything else is answered IN THE HOME CHANNEL (pinging the asker), with a
-  short pointer left where they asked, so the chat stays clean but nobody
-  misses their answer. Banter asked in a topic channel goes to #punk-plaza.
-- Busy limit: after `BUSY_ANSWERS` bot answers in `BUSY_WINDOW_S` in one
-  non-home channel, everything new there goes to the home channel.
+- Jokes and chat (bot-made banter) are answered where they were asked.
+- Anything else is answered IN THE HOME CHANNEL: their message is forwarded
+  there and the answer replies to it with a ping, and a short pointer is left
+  where they asked. Pat, 28/11/2026: one simple rule (topic channels and a
+  busy limit were tried the same day and dropped as too messy).
 - Management is never moved.
 
 The decision (`route`) is pure; the AskAI handler does the posting.
@@ -66,17 +63,14 @@ def question_topic(question, fun=False):
 
 
 def route(where, topic, busy=False, management=False):
-    """Where the answer goes: 'here', 'home' or 'plaza'."""
-    if management or where == 'home':
+    """Where the answer goes: 'here' or 'home'. Pat, 28/11/2026, after a
+    day of topic-channel and busy-limit rules ("getting a little messy"):
+    ONE rule. Jokes and chat stay where they were asked; everything else is
+    answered in the home channel. Management is never moved. `busy` is
+    kept in the signature for old callers and ignored."""
+    if management or where == 'home' or topic == 'fun':
         return 'here'
-    if busy:
-        return 'home'
-    if where in ('war', 'chain', 'oc'):
-        if topic == where:
-            return 'here'
-        return 'plaza' if topic == 'fun' else 'home'
-    # #punk-plaza and every other channel: banter stays, the rest moves.
-    return 'here' if topic == 'fun' else 'home'
+    return 'home'
 
 
 class BusyMeter:
@@ -106,12 +100,7 @@ def find_channel(guild, topic):
 
 def pointer_text(target_mention, jump_url, topic, where):
     """The short line left where the member asked."""
-    nudge = {'war': 'War stuff is welcome in here, the rest',
-             'chain': 'Chain stuff is welcome in here, the rest',
-             'oc': 'OC stuff is welcome in here, the rest'}.get(where, 'Stats and lookups')
-    if target_mention and 'plaza' in target_mention.lower():
-        return f'Banter lives in {target_mention} 😏 answered you there 👉 {jump_url}'
-    return f'Answered in {target_mention} 👉 {jump_url}\n-# {nudge} go there to keep chat clean.'
+    return f'Answered in {target_mention} 👉 {jump_url}\n-# Questions go there to keep chat clean.'
 
 
 # Repeats while waiting (Pat, 28/11/2026: spreadjam sent the same question

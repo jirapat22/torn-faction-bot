@@ -4083,8 +4083,7 @@ class AskAI:
                                            POINTER_DELETE_S)
         ch = message.channel
         where = channel_topic(getattr(ch, 'name', ''), getattr(ch, 'id', None))
-        dest = route(where, question_topic(question, fun=skips_cooldown(question)),
-                     self.busy.busy(getattr(ch, 'id', None)), management)
+        dest = route(where, question_topic(question, fun=skips_cooldown(question)), management=management)
         target = find_channel(message.guild, dest) if dest != 'here' else None
         if target is not None and getattr(target, 'id', None) != getattr(ch, 'id', None):
             try:
@@ -4106,8 +4105,6 @@ class AskAI:
                 return sent
             except discord.HTTPException as e:
                 logger.error(f'ask_ai: could not post in #{target}: {e!r}, answering in place')
-        if where != 'home':
-            self.busy.add(getattr(ch, 'id', None))
         return await message.reply(text, view=view, mention_author=False,
                                    allowed_mentions=discord.AllowedMentions.none())
 
