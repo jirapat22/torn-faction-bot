@@ -991,7 +991,10 @@ ROAST_ME_RX = _rx(r"roast me(?: (?:hard|bad|pls|please|bro|then|go|now|again|har
 ROAST_SELF_RX = _rx(r"roast (?:yourself|urself|you|the bot|apex ?punk|bot)|insult yourself")
 ROAST_ANY_RX = re.compile(r"^\s*(?:pls |please |go |can you |could you )?(?:roast|flame|destroy|insult)\s+\S|"
                           r"\b(?:say|tell me) (?:something|anything) (?:mean|nasty|rude|bad) about\b|"
-                          r"\bmake fun of\b|\btrash[- ]?talk\b", re.I)
+                          r"\bmake fun of\b|\btrash[- ]?talk\b|"
+                          # "beat box diss about ikaros22" got the privacy
+                          # refusal instead of the friendly no (28/11/2026).
+                          r"\bdiss(?:es|ing|track)?\b|\bdiss track\b|\bclown on\b|\bcook (?:him|her|them)\b", re.I)
 COIN_RX = _rx(r"(?:flip|toss) (?:a |the )?coin|coin ?(?:flip|toss)|heads or tails\??")
 BALL_RX = re.compile(r"^\s*(?:magic\s*)?(?:8|eight)[\s-]*ball\b[\s,:!?]*(.*)$|^\s*(?:yes or no)\s*[,:?]?\s*(.+)$", re.I)
 ROLL_RX = re.compile(r"^\s*(?:roll|throw)(?: (?:a|the|me a))?\s*(?:(\d{1,2})?\s*d(\d{1,3})|dice|die)\s*[!.?]*\s*$"

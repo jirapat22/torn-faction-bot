@@ -11700,6 +11700,109 @@ def test_moved_answer_forwards_the_question_and_replies_to_it():
     assert log[0][0] == 'pointer' or log[0][0] != 'forward', log
 
 
+def test_war_top_card_wording_ties_and_leavers():
+    """Audit 28/11/2026: "who took the most hits?" got the hits-MADE top 10,
+    "what rank are we?" is the faction's rank, "how do I rank" went to the
+    wiki. Tied members share a place and leavers carry (L)."""
+    from features.ask_ai import FactBook, is_war_top, MY_RANK_RX
+    for q in ['who took the most hits last war', 'most hits taken last war', 'what rank are we',
+              'how do we rank in ranked wars', 'who is the top chainer', 'who was worst last war']:
+        assert not is_war_top(q), q
+    for q in ['who\'s the mvp', 'show me the leaderboard', 'where do I rank', 'am I in the top 10',
+              'top performers last war', 'can you tell me how I compare to other top performers?',
+              'stats and top 10 performances from last 3 wars.']:
+        assert is_war_top(q), q
+    assert MY_RANK_RX.search('how do I rank') and not MY_RANK_RX.search('how do I rank up')
+    fb = FactBook('data', roster={'1': {'name': 'A'}, '2': {'name': 'B'}, '3': {'name': 'C'}})
+    fb.wars = [{'timestamp': 1, 'result': 'victory', 'enemy_name': 'X', 'our_score': 5, 'enemy_score': 1,
+                'members': {'1': {'name': 'A', 'attacks': 9}, '2': {'name': 'B', 'attacks': 9},
+                            '3': {'name': 'C', 'attacks': 4}, '4': {'name': 'Gone', 'attacks': 20}}}]
+    fb.asker = ('2', 'B')
+    card = fb.war_board('top 10 last war')
+    assert '1. Gone (L) · 20' in card and '2. A · 9' in card and '2. B · 9' in card and '4. C · 4' in card, card
+    assert '(L) = has left the faction' in card and '#2 of 4' in card, card
+    fb.roster = None   # Torn down: nobody is marked as left
+    assert '(L)' not in fb.war_board('top 10')
+
+
+def test_announcement_times_edge_cases():
+    """Audit 28/11/2026: "in 2 days" is not a length, "tct" in lower case,
+    "tomorrow 1pm", weeks, and a "X to Y" post becomes a full-length event."""
+    from datetime import datetime, timezone
+    from features.ask_ai import stamp_times
+    from features.announce import event_from_post
+    now = datetime(2026, 11, 28, 9, 0, tzinfo=timezone.utc)   # Saturday 09:00 TCT
+    assert 'Ends' not in stamp_times('Join us in 2 days at Saturday 1pm TCT', now=now)
+    out = stamp_times('Meet on sat at 13:30 tct', now=now)
+    assert '28/11/2026 13:30 TCT (<t:' in out, out
+    out = stamp_times('Happy jump tomorrow 1pm TCT for 24h', now=now)
+    assert '29/11/2026 13:00 TCT' in out and 'Ends Monday 30/11/2026 13:00 TCT' in out, out
+    assert 'Ends Friday 11/12/2026 13:00 TCT' in stamp_times('Friday 1pm TCT for 1 week', now=now)
+    assert 'Ends Sunday 29/11/2026 13:00' in stamp_times('Saturday 1pm TCT, a 24-hour event', now=now)
+    assert stamp_times('today 8am TCT', now=now) == 'today 8am TCT', 'a time already gone is left alone'
+    ev = event_from_post(stamp_times('Event 30/11/2026 18:00 TCT to 01/12/2026 18:00 TCT', now=now),
+                         now=now.timestamp())
+    assert ev['name'] == 'Event' and ev['end'] - ev['start'] == 86400, ev
+    ev = event_from_post(stamp_times('Happy jump Saturday 1pm TCT for 24 hours', now=now), now=now.timestamp())
+    assert ev['name'] == 'Happy jump', ev
+
+
+def test_routing_keeps_ai_chat_and_home_threads_in_place():
+    """Audit 28/11/2026: the AI's own chat replies ("yo wats gud") were moved
+    to #ask-apexpunk, a thread under it forwarded into its parent, and a
+    failed pointer posted the whole answer a second time."""
+    import asyncio, discord
+    from features.ask_ai import AskAI
+    log = []
+    class Sent:
+        jump_url = 'u'
+        async def reply(self, text, **kw):
+            log.append(('reply-to-forward', text))
+            return Sent()
+    class Ch:
+        def __init__(self, i, name, parent=None):
+            self.id, self.name, self.mention, self.parent = i, name, f'<#{i}>', parent
+    home, plaza = Ch(2, '🤖-ask-apexpunk'), Ch(1, '🗨-punk-plaza')
+    class Guild:
+        text_channels = [plaza, home]
+    class Author:
+        id, mention = 42, '<@42>'
+    def msg(channel, pointer_fails=False):
+        class Msg:
+            guild, author = Guild(), Author()
+            async def forward(self, target):
+                log.append(('forward', target.name))
+                return Sent()
+            async def reply(self, text, **kw):
+                if pointer_fails and text.startswith('Answered in'):
+                    raise discord.HTTPException(type('R', (), {'status': 404, 'reason': 'gone'})(), 'gone')
+                log.append(('here', text))
+                return Sent()
+        m = Msg()
+        m.channel = channel
+        return m
+    bot = AskAI.__new__(AskAI)
+    asyncio.run(bot._post_answer(msg(plaza), 'yo wats gud', 'Yo!', None, False, kind='chat'))
+    assert log == [('here', 'Yo!')], log
+    log.clear()
+    asyncio.run(bot._post_answer(msg(Ch(9, 'my question', parent=home)), 'how active am I?', 'Card', None, False))
+    assert log == [('here', 'Card')], log
+    log.clear()
+    asyncio.run(bot._post_answer(msg(plaza, pointer_fails=True), 'how active am I?', 'Card', None, False))
+    assert [x[0] for x in log] == ['forward', 'reply-to-forward'], log
+
+
+def test_who_am_i_card_and_diss_refusal():
+    """Audit 28/11/2026: "who am I?" got a long AI dump instead of the
+    member card, and "beat box diss about ikaros22" got the privacy line
+    instead of the friendly roast no."""
+    from features.ask_ai import first_person, is_overview
+    from features.ask_chat import fun_reply, ROAST_REFUSALS
+    assert is_overview(first_person('who am I?', 'spreadjam'), 'spreadjam')
+    assert fun_reply('beat box diss about ikaros22', others=['Ikaros22']) in ROAST_REFUSALS
+    assert fun_reply('write a diss track about Ellanna', others=['Ellanna']) in ROAST_REFUSALS
+
+
 if __name__ == '__main__':
     test_faction_facts_from_pat()
     test_all_modules_import()
@@ -11912,4 +12015,8 @@ if __name__ == '__main__':
     test_calendar_sync_leaves_the_start_of_a_live_event_alone()
     test_member_answers_go_to_the_right_channel()
     test_moved_answer_forwards_the_question_and_replies_to_it()
+    test_war_top_card_wording_ties_and_leavers()
+    test_announcement_times_edge_cases()
+    test_routing_keeps_ai_chat_and_home_threads_in_place()
+    test_who_am_i_card_and_diss_refusal()
     print('All smoke tests passed.')

@@ -963,10 +963,23 @@ class FactBook:
         lines.append(f'Faction: **{made:,}** hits by {plural(len(totals), "member")} '
                      f'· avg {round(made / len(totals), 1)} each')
         ranked = sorted(totals.items(), key=lambda kv: (-kv[1], names[kv[0]].lower()))
+        # Equal hits share a place (1, 2, 2, 4): alphabetical order alone
+        # told one of two tied members they were a place behind.
+        place, prev = {}, None
+        for i, (tid, n) in enumerate(ranked, 1):
+            if n != prev:
+                pos, prev = i, n
+            place[tid] = pos
+        # Leavers keep their hits (they earned them) but carry " (L)", the
+        # same mark the war board uses. Only with a readable roster: an
+        # outage must not mark the whole faction as gone.
+        left = (lambda tid: self.roster is not None and str(tid) not in self.roster)
         lines.append('🏆 **Top 10 hitters**')
-        for i, (tid, n) in enumerate(ranked[:10], 1):
-            lines.append(f'{i}. {names[tid]} · {n:,}')
-        mine = next(((i, tid, n) for i, (tid, n) in enumerate(ranked, 1) if self._is_asker(tid)), None)
+        for tid, n in ranked[:10]:
+            lines.append(f'{place[tid]}. {names[tid]}{" (L)" if left(tid) else ""} · {n:,}')
+        if any(left(tid) for tid, _ in ranked[:10]):
+            lines.append('(L) = has left the faction')
+        mine = next(((place[tid], tid, n) for tid, n in ranked if self._is_asker(tid)), None)
         if mine:
             lines.append(f'🫵 **You:** #{mine[0]} of {len(ranked)} · {mine[2]:,} hits')
         elif self.asker:
@@ -1923,7 +1936,9 @@ def did_you_mean(names):
 # 3-line bullet) that took a scroll on a phone. The bot now builds a short
 # card from member_report itself: instant, no tokens, every number copied.
 _OVERVIEW_WORDS = {
-    'how', 'hows', "how's", 'is', 'are', 'was', 'active', 'activity', 'activities', 'activites', 'activty',
+    # 'who': "who am I?" / "who is X?" is the same overview (members got a
+    # long AI dump of their own record for it, audit 28/11/2026).
+    'who', 'how', 'hows', "how's", 'is', 'are', 'was', 'active', 'activity', 'activities', 'activites', 'activty',
     'actvity', 'activeness', 'doing', 'going', 'lately', 'recently', 'been', 'looking', 'tell', 'me', 'about',
     'check', 'on', 'look', 'up', 'lookup', 'info', 'the', 'of', 'for', 'report', 'overview', 'profile',
     'record', 'records', 'progress', 'summary', 'summarise', 'summarize', 'overall', 'and', 'his', 'her', 'their', 'war',
@@ -2362,6 +2377,26 @@ def resolve_times(text, now=None):
 
     text = day_rx.sub(weekday, text)
 
+    # "tomorrow 1pm TCT" / "today 18:00 TCT": dated the same way.
+    rel_rx = re.compile(rf'\b(today|tonight|tomorrow)(,?\s+(?:at\s+)?){_CLOCK_RX}(?=\s*TCT\b|(?<=[mM])|(?<=:\d\d))',
+                        re.I)
+
+    def relative(m):
+        hm = _clock(m.group(3), m.group(4), m.group(5))
+        if hm is None:
+            return m.group(0)
+        start = now.replace(hour=hm[0], minute=hm[1], second=0, microsecond=0)
+        if m.group(1).lower() == 'tomorrow':
+            start += timedelta(days=1)
+        elif start <= now:
+            return m.group(0)      # "today 8am" already passed: leave it for a person to fix
+        return (f'{m.group(1)} {_DAYS[start.weekday()]} {start:%d/%m/%Y %H:%M}'
+                + (' ' if m.group(0)[-1].isspace() else ''))
+    text = rel_rx.sub(relative, text)
+    # "13:30 tct" -> "13:30 TCT": the local-time stamps only follow an
+    # upper-case TCT and landed between the time and a lower-case one.
+    text = re.sub(r'(?<=\d)(\s*)tct\b', lambda m: (m.group(1) or ' ') + 'TCT', text, flags=re.I)
+
     def ampm(m):
         hm = _clock(m.group(4), m.group(5), m.group(6))
         return f'{m.group(1)}/{m.group(2)}/{m.group(3)} {hm[0]:02d}:{hm[1]:02d}' if hm else m.group(0)
@@ -2371,7 +2406,12 @@ def resolve_times(text, now=None):
 
 
 _START_RX = re.compile(r'(\d{1,2})/(\d{1,2})/(\d{4})\s+(\d{1,2}):(\d{2})')
-_LENGTH_RX = re.compile(r'\b(?:for|lasts?|lasting|runs?)?\s*\(?(\d{1,3})\s*(h|hrs?|hours?|d|days?)\b', re.I)
+# A LENGTH needs a length word ("for 24 hours", "lasts 2 days", "(24h)",
+# "24-hour event"): "join us in 2 days at Saturday 1pm" once got an Ends
+# line two days later (audit 28/11/2026). Weeks count too.
+_LENGTH_RX = re.compile(r'(?:\b(?:for|lasts?|lasting|runs?(?: for)?|over)\s+(?:a\s+)?|\()\s*'
+                        r'(\d{1,3})\s*(h|hrs?|hours?|d|days?|w|wks?|weeks?)\b|'
+                        r'\b(\d{1,3})[- ](hours?|days?|weeks?)[- ](?:event|long)\b', re.I)
 
 
 def add_end_times(text):
@@ -2401,8 +2441,9 @@ def add_end_times(text):
         length = next((_LENGTH_RX.search(lines[j]) for j in [i] + block if _LENGTH_RX.search(lines[j])), None)
         if not length:
             continue
-        n = int(length.group(1))
-        hours = n * 24 if length.group(2).lower().startswith('d') else n
+        n = int(length.group(1) or length.group(3))
+        unit = (length.group(2) or length.group(4)).lower()
+        hours = n * 24 if unit.startswith('d') else n * 24 * 7 if unit.startswith('w') else n
         if not 0 < hours <= 24 * 31:
             continue
         try:
@@ -2549,14 +2590,29 @@ WAR_TOP_NEG_RX = re.compile(r"\b(?:worst|least|lowest|bottom|fewest|laz\w*|weake
                             r"useless|behind|not carrying|carry\w* (?:their|the) weight|strikes?|losers?)\b|"
                             r"\bwho (?:has ?n[o']?t|hasn'?t|didn'?t|did not|isn'?t|never)\b", re.I)
 WAR_TOP_TOPIC_RX = re.compile(r"\bwars?\b|\bhits?\b|\bperform\w*|\bhitters?\b|\bmvps?\b|\bleaderboard\b|"
-                              r"\ball[- ]?time\b|\bcompare\b|\bstack up\b|\brank\w*", re.I)
+                              r"\ball[- ]?time\b|\bcompare\b|\bstack up\b|\brank\w*|"
+                              r"\btop (?:3|5|10|three|five|ten)\b", re.I)
+# The card counts hits MADE only. "Who took the most hits?" matched "most
+# hits" and got the hits-made top 10, a confident answer to another question
+# (audit 28/11/2026), so hits taken / outside / hosps stay with the records.
+WAR_TOP_OTHER_STAT_RX = re.compile(r"\b(?:taken|took|take|received|got hit|hit on|incoming|outside|"
+                                   r"hosp\w*|defen\w*|respect|score)\b", re.I)
+# "What rank are we?" / "how do we rank?" is the FACTION's rank, not a
+# member leaderboard.
+FACTION_RANK_RX = re.compile(r"\brank\w*\b.{0,25}\b(?:we|us|our faction|the faction|ascended punks)\b|"
+                             r"\b(?:we|our faction|the faction|faction'?s?)\b.{0,15}\brank\w*", re.I)
+# "How do I rank (up)?" is a game question unless it is about the
+# leaderboard; "where do I rank / how do I stack up" is always the board.
+MY_RANK_RX = re.compile(r"\b(?:where|how) do i (?:rank|stack up|compare)\b(?! up)|\bmy (?:rank|ranking|place|spot)\b", re.I)
 
 
 def is_war_top(question):
     """A member's "top performers / how do I compare" war question."""
     q = question or ''
+    if WAR_TOP_OTHER_STAT_RX.search(q) or FACTION_RANK_RX.search(q):
+        return False
     return bool(WAR_TOP_RX.search(q) and WAR_TOP_TOPIC_RX.search(q) and not WAR_TOP_NEG_RX.search(q)
-                and not re.search(r'\b(?:chains?|oc|crimes?|online|activ\w*|xan\w*|battle stats?)\b', q, re.I))
+                and not re.search(r'\b(?:chains?|chainers?|oc|crimes?|online|activ\w*|xan\w*|battle stats?)\b', q, re.I))
 
 
 MEMBER_REFUSAL = ("That one's for management only, sorry 🔒 I can tell you about wars, chains, events and the "
@@ -3085,6 +3141,7 @@ async def _answer_question(session, question, facts, history=None, earlier_facts
                                                      question, re.I):
             return Answer(MEMBER_REFUSAL, 'none', '', True, 0, kind='ask')
     game = not management and not names_in(question, facts) and not _records_cue(question or '') \
+        and not (MY_RANK_RX.search(question or '') and is_war_top(question)) \
         and bool(MECH_RX.search(question or '')) \
         and bool(GAME_TOPIC.search(question or '') or mechanics_sections(question, facts, rules_ok=True))
     if not management and not game:
@@ -4055,7 +4112,7 @@ class AskAI:
         # are long, and most of the time nobody reads them (Pat, 07/11/2026).
         # The 📎 button is management only, so members don't get one.
         view = ShowDataView(self) if ans.facts_text and management else None
-        sent = await self._post_answer(message, question, text, view, management)
+        sent = await self._post_answer(message, question, text, view, management, kind=ans.kind)
         if ans.facts_text:
             footer = (f'{ans.provider} · {ans.seconds:.0f}s · '
                       + ('AI wording rejected, raw records shown' if ans.fallback
@@ -4076,14 +4133,23 @@ class AskAI:
                            or (ans.kind == 'ask' and bool(about_task))
                            or bool(re.search(r'\bdid you mean\b', ans.text, re.I)))
 
-    async def _post_answer(self, message, question, text, view, management):
+    async def _post_answer(self, message, question, text, view, management, kind=None):
         """Reply where they asked, or (members) in the home channel with a
         pointer left behind: features/ask_channels.py has the rules."""
         from features.ask_channels import (channel_topic, question_topic, route, find_channel, pointer_text,
                                            POINTER_DELETE_S)
         ch = message.channel
         where = channel_topic(getattr(ch, 'name', ''), getattr(ch, 'id', None))
-        dest = route(where, question_topic(question, fun=skips_cooldown(question)), management=management)
+        # A thread inside the home channel is the home channel too: it has
+        # its own name, so it used to forward into its own parent.
+        parent = getattr(ch, 'parent', None)
+        if where != 'home' and parent is not None and channel_topic(getattr(parent, 'name', '')) == 'home':
+            where = 'home'
+        # The AI's own chat replies ("yo wats gud", "I miss us") are chat
+        # too, not only the bot-made lines: they were being moved away from
+        # the conversation they belonged to (audit 28/11/2026).
+        fun = skips_cooldown(question) or kind == 'chat'
+        dest = route(where, question_topic(question, fun=fun), management=management)
         target = find_channel(message.guild, dest) if dest != 'here' else None
         if target is not None and getattr(target, 'id', None) != getattr(ch, 'id', None):
             try:
@@ -4099,9 +4165,14 @@ class AskAI:
                     head = f'{message.author.mention} asked in {ch.mention}: *{question[:150]}*\n\n'
                     sent = await target.send(head + text[:ANSWER_LIMIT - len(head)], view=view,
                                              allowed_mentions=ping)
-                await message.reply(pointer_text(target.mention, sent.jump_url, None, where),
-                                    mention_author=False, delete_after=POINTER_DELETE_S,
-                                    allowed_mentions=discord.AllowedMentions.none())
+                try:
+                    await message.reply(pointer_text(target.mention, sent.jump_url, None, where),
+                                        mention_author=False, delete_after=POINTER_DELETE_S,
+                                        allowed_mentions=discord.AllowedMentions.none())
+                except discord.HTTPException as e:
+                    # The answer is already posted: a missing pointer (their
+                    # message deleted meanwhile) must not post it a second time.
+                    logger.warning(f'ask_ai: pointer not posted: {e!r}')
                 return sent
             except discord.HTTPException as e:
                 logger.error(f'ask_ai: could not post in #{target}: {e!r}, answering in place')
