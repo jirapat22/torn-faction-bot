@@ -235,7 +235,7 @@ def _matches(words, title):
     return False
 
 
-def events_text(query='', path=CALENDAR_FILE, now=None, limit=8):
+def events_text(query='', path=CALENDAR_FILE, now=None, limit=8, tab_path=None):
     """
     Plain-English event facts for the AI. A query matches event names (and
     "next"/"upcoming"/empty lists what's coming up). Faction events are
@@ -264,7 +264,42 @@ def events_text(query='', path=CALENDAR_FILE, now=None, limit=8):
     faction = [f for f in FACTION_EVENTS if not words or _matches(words, f[0])]
     for name, desc in faction:
         out.append(f'- {name} (faction event): {desc}')
+    out += events_tab_lines(words, tab_path, now)
     return 'EVENTS (official Torn calendar, plus our faction\'s own weekly events):\n' + '\n'.join(out)
+
+
+TAB_STALE_SECONDS = 3 * 3600
+
+
+def events_tab_lines(words, tab_path, now):
+    """What is actually scheduled in our Discord Events tab (saved hourly by
+    the reminder loop). Matching events, or all upcoming ones for an empty
+    query. Each carries a DISPLAY line, so a question only about events is
+    answered with the real scheduled time instead of the weekly pattern."""
+    if not tab_path:
+        return []
+    saved = load_json(tab_path, default=None)
+    if not isinstance(saved, dict) or 'events' not in saved:
+        return []        # no snapshot yet: say nothing rather than "nothing scheduled"
+    rows = [r for r in saved.get('events') or [] if (r.get('end') or r.get('start') or 0) >= (now or 0) - 3600]
+    if words:
+        rows = [r for r in rows if _matches(words, r.get('name'))]
+    head = 'ON OUR DISCORD EVENTS TAB (what management actually scheduled; use these times):'
+    if (now or 0) - (saved.get('saved_at') or 0) > TAB_STALE_SECONDS and now:
+        head += ' [this copy may be a few hours old]'
+    if not rows:
+        return [head, '- Nothing matching is scheduled there right now.'] if words else []
+    out = [head]
+    for r in rows[:6]:
+        s_ts, e_ts = r.get('start'), r.get('end')
+        live = r.get('status') == 'active' or (s_ts and s_ts <= (now or 0))
+        when = f'{_fmt(s_ts)} TCT' + (f' to {_fmt(e_ts)} TCT' if e_ts else '')
+        stamp = f' (<t:{s_ts}:f>, <t:{s_ts}:R>)' if s_ts else ''
+        display = f'📅 **{r.get("name")}** · {"on now, " if live else ""}{_fmt(s_ts)} TCT{stamp}' + \
+                  (f' to {_fmt(e_ts)} TCT' if e_ts else '')
+        out.append(f'- {r.get("name")} (Discord event, {"on now" if live else "scheduled"}): {when}. '
+                   f'DISPLAY: {display}')
+    return out
 
 
 # Words that say a faction weekly event is in the text.

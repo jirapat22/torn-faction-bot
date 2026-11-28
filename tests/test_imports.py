@@ -11901,6 +11901,34 @@ def test_torn_down_status_and_test_command_honesty():
     am.discard_poll('p1')
     assert am.polls == {} and am.data == {}
 
+
+def test_events_tab_is_in_event_answers():
+    """Audit part 2 (29/11/2026): "what time is happy jump?" got "not in the
+    records"; the Events tab snapshot now answers it with the real time."""
+    import os, tempfile, json
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+    from features.event_reminders import events_tab_rows
+    from features.torn_events import events_text
+    start = datetime(2026, 12, 5, 13, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 12, 6, 13, 0, tzinfo=timezone.utc)
+    ev = lambda n, st: SimpleNamespace(name=n, status=SimpleNamespace(name=st), start_time=start, end_time=end)
+    rows = events_tab_rows([ev('Happy Jump 🦘', 'scheduled'), ev('Old chain', 'completed')])
+    assert [r['name'] for r in rows] == ['Happy Jump 🦘']
+    with tempfile.TemporaryDirectory() as d:
+        tab = os.path.join(d, 'discord_events.json')
+        now = start.timestamp() - 86400
+        with open(tab, 'w') as f:
+            json.dump({'saved_at': int(now), 'events': rows}, f)
+        cal = os.path.join(d, 'cal.json')
+        text = events_text('happy jump', path=cal, now=now, tab_path=tab)
+        assert 'EVENTS TAB' in text and 'Saturday 05/12/2026 13:00 TCT' in text and 'DISPLAY: 📅' in text
+        assert '[this copy may be a few hours old]' not in text
+        text = events_text('christmas town', path=cal, now=now, tab_path=tab)
+        assert 'Nothing matching is scheduled' in text and 'Happy Jump' not in text
+        # no snapshot yet: nothing added, nothing invented
+        assert 'EVENTS TAB' not in events_text('happy jump', path=cal, now=now, tab_path=os.path.join(d, 'x.json'))
+
 if __name__ == '__main__':
     test_faction_facts_from_pat()
     test_all_modules_import()
@@ -12120,4 +12148,5 @@ if __name__ == '__main__':
     test_audit_slash_command_and_chat_fixes()
     test_draft_length_and_management_war_card()
     test_torn_down_status_and_test_command_honesty()
+    test_events_tab_is_in_event_answers()
     print('All smoke tests passed.')

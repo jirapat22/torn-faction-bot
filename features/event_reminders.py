@@ -139,6 +139,36 @@ START_WINDOW = '10:00 and 16:00 TCT'
 START_POST_WITHIN_HOURS = 3
 
 
+EVENTS_TAB_FILE = 'data/discord_events.json'
+
+
+def events_tab_rows(events):
+    """The Events tab as plain rows for the chat (scheduled or live only).
+    Saved hourly by the reminder loop, so the AI can answer "what time is
+    happy jump?" from what management actually scheduled; before this it said
+    "not in the records" and once invented a channel to look in (audit
+    28/11/2026)."""
+    rows = []
+    for e in events:
+        status = getattr(getattr(e, 'status', None), 'name', str(getattr(e, 'status', '')))
+        if status not in ('scheduled', 'active'):
+            continue
+        start, end = getattr(e, 'start_time', None), getattr(e, 'end_time', None)
+        rows.append({'name': e.name, 'status': status,
+                     'start': int(start.timestamp()) if start else None,
+                     'end': int(end.timestamp()) if end else None})
+    rows.sort(key=lambda r: r['start'] or 0)
+    return rows
+
+
+def save_events_tab(events, path=EVENTS_TAB_FILE):
+    try:
+        save_json(path, {'saved_at': int(datetime.now(timezone.utc).timestamp()),
+                         'events': events_tab_rows(events)})
+    except Exception as e:      # a snapshot for chat must never break reminders
+        logger.warning(f'Event reminders: could not save the Events tab snapshot: {e!r}')
+
+
 def members_role_id(path='data/verification_config.json'):
     """The Ascended Punks role (what /register gives), or None if unset."""
     rid = (load_json(path, default={}) or {}).get('verified_role_id')
@@ -397,6 +427,8 @@ class EventReminderManager:
             # none in window" in success colour when Discord didn't answer.
             return {'checked': 0, 'announced': 0, 'upcoming': [],
                     'error': "Discord didn't return the Events tab, so nothing was checked."}
+
+        save_events_tab(events)
 
         checked = 0
         announced = 0

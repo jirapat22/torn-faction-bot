@@ -1115,7 +1115,7 @@ class FactBook:
                 from features.torn_events import events_text, CALENDAR_FILE
                 self.found_any = True
                 return events_text(args.get('query', ''), path=os.path.join(self.data_dir, 'torn_calendar.json'),
-                                   now=self.now)
+                                   now=self.now, tab_path=os.path.join(self.data_dir, 'discord_events.json'))
             from features.ask_live import LIVE_TOOL_NAMES
             if name in LIVE_TOOL_NAMES:
                 if self.live_tools is None:
