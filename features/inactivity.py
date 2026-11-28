@@ -965,6 +965,9 @@ class InactivityTracker:
             'oc_critical': oc_critical,
             'oc_warning': oc_warning,
             'left_faction': left_alerts,
+            # None = crimes unreadable: the OC lists above are then empty for
+            # "unknown", not for "everyone is in a crime" (/test must say so).
+            'oc_unknown': crimes is None,
         }
 
     async def _report_cleared_strikes(self, cleared):

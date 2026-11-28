@@ -88,6 +88,21 @@ def date_to_internal(date_str: str) -> str:
     return dt.strftime('%Y-%m-%d')
 
 
+
+def fit_lines(lines, limit, what='line'):
+    """Join lines but stay under a Discord size limit (embed description 4096,
+    field 1024): 2+ days of 1-hour blocks went over and the whole reply
+    failed (audit 28/11/2026). The cut says how many are not shown."""
+    out, used = [], 0
+    for n, line in enumerate(lines):
+        if used + len(line) + 1 > limit - 40:
+            rest = len(lines) - n
+            out.append(f'...and {rest} more {what}{"s" if rest != 1 else ""}')
+            break
+        out.append(line)
+        used += len(line) + 1
+    return '\n'.join(out)
+
 class AvailabilityManager:
     """Manages availability polls and member responses"""
 
@@ -1366,7 +1381,7 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
                     f"Click buttons to toggle your availability.\n"
                     f"Times shown are your **local time** with TCT (Torn City Time = UTC) in parentheses."
                     f"{countdown_text}\n\n"
-                    f"**Time Blocks:**\n" + '\n'.join(block_list)
+                    f"**Time Blocks:**\n" + fit_lines(block_list, 3300, 'block')
                 ),
                 color=EMBED_COLOR_INFO
             )
@@ -1445,10 +1460,11 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
             else:
                 title = f"🧮 Availability Summary – {summary['start_date']} to {summary['end_date']}"
 
-            embed = create_embed(title=title, description='\n'.join(block_lines), color=EMBED_COLOR_SUCCESS)
+            embed = create_embed(title=title, description=fit_lines(block_lines, 4000, 'block'),
+                                 color=EMBED_COLOR_SUCCESS)
 
             if best_lines:
-                embed.add_field(name='⭐ Best Windows', value='\n'.join(best_lines), inline=False)
+                embed.add_field(name='⭐ Best Windows', value=fit_lines(best_lines, 1000, 'window'), inline=False)
             else:
                 embed.add_field(name='⭐ Best Windows', value='No members have voted yet.', inline=False)
 
@@ -1530,7 +1546,8 @@ async def setup_availability_commands(bot, manager: AvailabilityManager, verifie
             else:
                 title = f"Your Availability – {poll['start_date']} to {poll['end_date']}"
 
-            embed = create_embed(title=title, description='\n'.join(selected_blocks), color=EMBED_COLOR_SUCCESS)
+            embed = create_embed(title=title, description=fit_lines(selected_blocks, 4000, 'block'),
+                                 color=EMBED_COLOR_SUCCESS)
             embed.set_footer(text=f"You've selected {plural(len(selections), 'time block')}")
             await interaction.response.send_message(embed=embed, ephemeral=True)
 

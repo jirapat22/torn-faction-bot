@@ -158,10 +158,16 @@ def _parse_rankedwars(rankedwars: dict, faction_id: int) -> list:
     fid_str = str(faction_id)
     results = []
 
-    # Sort by end time descending (most recent first)
+    # Torn's v1 shape is {id: {factions, war: {start, end, winner}}} (the
+    # same one wars.py reads). This used to read end/winner at the top
+    # level, always 0, so the order was Torn's and a war still running was
+    # scored as a W or L (audit 28/11/2026).
+    def _war(x):
+        return (x[1].get('war') or {}) if isinstance(x[1], dict) else {}
+
     sorted_wars = sorted(
-        rankedwars.items(),
-        key=lambda x: x[1].get('end', 0),
+        (x for x in rankedwars.items() if _war(x).get('end')),   # finished wars only
+        key=lambda x: _war(x).get('end', 0),
         reverse=True
     )
 
@@ -185,7 +191,7 @@ def _parse_rankedwars(rankedwars: dict, faction_id: int) -> list:
             results.append('L')
         else:
             # Scores tied - check winner field as tiebreaker
-            winner = war.get('winner', 0)
+            winner = (war.get('war') or {}).get('winner', 0)
             if winner and str(winner) == fid_str:
                 results.append('W')
             elif winner and str(winner) != fid_str:
@@ -473,6 +479,19 @@ async def setup_faction_commands(bot):
                     title='Faction Not Found',
                     description=f'Could not fetch data for faction ID `{faction_id}`.\n'
                                 'Check the ID is correct and your API key has access.',
+                    color=EMBED_COLOR_WARNING
+                )
+            )
+            return
+
+        if not own_basic:
+            # Our own side unreadable: comparing against nothing showed
+            # "Members 0" and "Outnumbered: 40 vs 0" (audit 28/11/2026).
+            await interaction.followup.send(
+                embed=create_embed(
+                    title='Torn did not answer',
+                    description="Couldn't read our own faction from Torn just now, so there is nothing to "
+                                'compare against. Try again in a minute.',
                     color=EMBED_COLOR_WARNING
                 )
             )

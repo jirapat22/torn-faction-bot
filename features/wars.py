@@ -2538,6 +2538,9 @@ class WarTracker:
         on, off, unknown, total = (result['on'], result['off'],
                                    result['unknown'], result['total'])
 
+        if not on and not off:
+            # Nobody readable at all: not a green "all clear" (audit 28/11/2026).
+            return False
         if not on:
             desc = (f'All **{off}** readable members have revives off. '
                     f'Nothing to chase.')

@@ -254,6 +254,9 @@ class EditPostModal(discord.ui.Modal):
 
     async def on_submit(self, interaction: discord.Interaction):
         text, unknown = names_to_links(self.body.value.strip(), self.names)
+        if not text.strip():
+            await interaction.response.send_message('That post is empty. (Nothing was changed.)', ephemeral=True)
+            return
         if len(text) + len(SEPARATOR) > POST_LIMIT:
             await interaction.response.send_message(
                 f'That post is {len(text) + len(SEPARATOR)} characters with the links and the divider line '
@@ -289,7 +292,9 @@ async def setup_rules_commands(bot, store):
             await interaction.response.send_message('I have no rules posts saved yet.', ephemeral=True)
             return
         if action.value == 'list':
-            lines = [f'**{i + 1}.** {p.splitlines()[0].lstrip("# ")[:60]} ({len(p)} characters)'
+            # (p.splitlines() or ['']): a blank post raised IndexError here.
+            lines = [f'**{i + 1}.** {((p or "").splitlines() or ["(empty)"])[0].lstrip("# ")[:60]} '
+                     f'({len(p or "")} characters)'
                      for i, p in enumerate(store.posts)]
             await interaction.response.send_message('\n'.join(lines), ephemeral=True)
             return

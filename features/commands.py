@@ -107,6 +107,9 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
     async def unregister(interaction: discord.Interaction):
         """Unregister Discord user (remove Torn ID link from all databases)"""
         discord_id = str(interaction.user.id)
+        # Removing the role is a Discord call that can be rate limited; answer
+        # within Discord's 3 seconds first (audit 28/11/2026).
+        await interaction.response.defer(ephemeral=True)
 
         # Remove from both databases and remove verified role
         if verification_system:
@@ -128,7 +131,7 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
                 color=EMBED_COLOR_INFO
             )
 
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
     @bot.tree.command(name='status', description='Show bot and inactivity tracking status')
     async def status(interaction: discord.Interaction):
@@ -446,6 +449,14 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
             return
 
         if action == 'event_cancel':
+            # current() falls back to the last FINISHED event: cancelling that
+            # would rewrite an event whose strikes were already filed, and
+            # each repeat would cancel the next older one (audit 28/11/2026).
+            if event.get('status') not in ('running', 'scheduled'):
+                await interaction.response.send_message(
+                    f"No chain event is running or scheduled (**{event['name']}** already "
+                    f"{event.get('status') or 'ended'}), so there is nothing to cancel.", ephemeral=True)
+                return
             chain_event_manager.cancel(event)
             await interaction.response.send_message(
                 f"⛓️ **{event['name']}** cancelled. No strikes, no "
@@ -1054,11 +1065,18 @@ async def setup_commands(bot, inactivity_tracker, chain_tracker=None, war_tracke
                     for m in lf:
                         lines.append(f'• {m["torn_name"]} · {m["days_gone"]:.0f}d gone')
 
+                if summary.get('oc_unknown'):
+                    # Crimes unreadable: never claim "no OC issues" (audit 28/11/2026).
+                    if lines: lines.append('')
+                    lines.append('⚠️ OC section skipped: Torn\'s crimes list could not be read.')
                 if not lines:
                     lines.append(f'✅ All {total} members active. No inactivity, OC, or left-faction issues.')
+                body = '\n'.join(lines)
+                if len(body) > 4000:   # embed limit 4096: a long list used to fail the whole reply
+                    body = body[:3990].rsplit('\n', 1)[0] + '\n...'
 
                 await interaction.followup.send(
-                    embed=create_embed('📋 Inactivity + OC Check', '\n'.join(lines), color=EMBED_COLOR_INFO),
+                    embed=create_embed('📋 Inactivity + OC Check', body, color=EMBED_COLOR_INFO),
                     ephemeral=True
                 )
                 return

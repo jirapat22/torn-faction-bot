@@ -11803,6 +11803,32 @@ def test_who_am_i_card_and_diss_refusal():
     assert fun_reply('write a diss track about Ellanna', others=['Ellanna']) in ROAST_REFUSALS
 
 
+def test_audit_slash_command_and_chat_fixes():
+    """Audit 28/11/2026: /avail lists over Discord's size limit, /faction's
+    war record read the wrong v1 fields, Black Friday told as 00:00 in chat,
+    "best way to make money" refused as a ranking, "when do I need to do an
+    OC" sent to the wiki only."""
+    from features.availability import fit_lines
+    from features.faction import _parse_rankedwars
+    from features.torn_events import _event_line
+    from features.ask_ai import RULES_CUE, RANK_RX, _PEOPLE_RX, RANKED_PEOPLE_RX
+    out = fit_lines(['x' * 60] * 100, 1000, 'block')
+    assert len(out) < 1000 and out.endswith('more blocks'), out
+    assert fit_lines(['a', 'b'], 1000) == 'a\nb'
+    rw = {'1': {'factions': {'5': {'score': 10}, '6': {'score': 3}}, 'war': {'start': 1, 'end': 100, 'winner': 5}},
+          '2': {'factions': {'5': {'score': 1}, '6': {'score': 3}}, 'war': {'start': 1, 'end': 200, 'winner': 6}},
+          '3': {'factions': {'5': {'score': 1}, '6': {'score': 3}}, 'war': {'start': 1, 'end': 0, 'winner': 0}}}
+    assert _parse_rankedwars(rw, 5) == ['L', 'W'], 'newest first, a running war not scored'
+    line = _event_line({'title': 'Black Friday', 'kind': 'Torn event', 'start': 1795737600, 'end': 1795823999,
+                        'description': 'Sale.'}, 1795850000)
+    assert 'Friday 27/11/2026 12:00 TCT' in line and 'Saturday 28/11/2026 12:00 TCT' in line, line
+    assert RULES_CUE.search('when do I need to do an OC')
+    for q in ['whats the best way to make money', 'whats the best gym']:
+        assert RANK_RX.search(q) and not (_PEOPLE_RX.search(q) or RANKED_PEOPLE_RX.search(q)), q
+    for q in ['who is the best', 'top chainer', 'best hitter in the faction']:
+        assert _PEOPLE_RX.search(q) or RANKED_PEOPLE_RX.search(q), q
+
+
 if __name__ == '__main__':
     test_faction_facts_from_pat()
     test_all_modules_import()
@@ -12019,4 +12045,5 @@ if __name__ == '__main__':
     test_announcement_times_edge_cases()
     test_routing_keeps_ai_chat_and_home_threads_in_place()
     test_who_am_i_card_and_diss_refusal()
+    test_audit_slash_command_and_chat_fixes()
     print('All smoke tests passed.')

@@ -212,10 +212,14 @@ def _event_line(e, now):
         display = (f'{emoji} **{title}** · starts {start:%a %d/%m} (<t:{s_ts}:D>, <t:{s_ts}:R>), '
                    f'pick 10:00 to 16:00 TCT, about {days} day{"s" if days != 1 else ""} · Torn: {effect}.')
     else:
-        s_ts, e_ts = int(e.get('start') or 0), int(e.get('end') or 0)
+        # api_window's times, not the raw API ones: Black Friday (12:00 to
+        # 12:00 for everyone) was told as "Friday 00:00 TCT" in chat (audit
+        # 28/11/2026). Competitions come back unchanged.
+        s_ts, e_ts = int(start.timestamp()), int(end.timestamp())
         state = 'on now' if s_ts <= now <= e_ts else 'finished' if e_ts < now else 'upcoming'
         when = f'{_fmt(s_ts)} to {_fmt(e_ts)} TCT, {_duration(s_ts, e_ts)}'
-        display = (f'{emoji} **{title}** · {_fmt(s_ts)} TCT (<t:{s_ts}:D>, <t:{s_ts}:R>) · Torn: {effect}.')
+        display = (f'{emoji} **{title}** · {_fmt(s_ts)} TCT (<t:{s_ts}:f>, <t:{s_ts}:R>) to {_fmt(e_ts)} TCT '
+                   f'(<t:{e_ts}:f>) · Torn: {effect}.')
     return (f'- {title} ({e["kind"]}, {state}): {when}. Effect, in Torn\'s words: "{effect}". '
             f'DISPLAY: {display}')
 

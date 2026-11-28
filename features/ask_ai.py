@@ -1893,7 +1893,12 @@ def is_small_talk(question, answer, facts):
 # Short on purpose: it once answered a casual "I upgraded the bot, just tag
 # it" with this plus the whole capability list, which read as a malfunction.
 RULES_CUE = re.compile(r'\b(rules?|allowed|happens if|what if|can i|can we|strike for|penalt\w*|punish\w*|'
-                       r'mug\w*|leave notice|turtl\w*|bount\w*|trial|minimum|banned)\b', re.I)
+                       r'mug\w*|leave notice|turtl\w*|bount\w*|trial|minimum|banned|'
+                       # "When do I need to do an OC?" is OUR rule (join within
+                       # days or a strike), not only Torn's: it got wiki-only
+                       # scenario timings (audit 28/11/2026).
+                       r'(?:do|does|did) (?:i|we|you|members?) (?:need|have) to|am i (?:required|supposed)|'
+                       r'are we (?:required|supposed)|supposed to|required to|how often (?:do|should|must))\b', re.I)
 _QUESTION_STOP = {'what', 'when', 'where', 'which', 'who', 'whos', 'how', 'does', 'doing', 'with', 'that',
                   'this', 'they', 'them', 'have', 'about', 'there', 'their', 'from', 'were', 'been', 'will',
                   'should', 'could', 'would', 'tell', 'show', 'give', 'list', 'members', 'member', 'faction'}
@@ -2635,6 +2640,9 @@ RANK_RX = re.compile(r'\b(?:least|most|worst|best|lowest|highest|top|bottom|fewe
 # a strike?" is a rules question and goes through.
 _PEOPLE_RX = re.compile(r"\b(?:who|whos|who's|any ?one|any ?body|every ?one|every ?body|members?|people|"
                         r"players?|list|names?)\b", re.I)
+# People ranked without a people word: "top chainer", "best hitter in the faction".
+RANKED_PEOPLE_RX = re.compile(r"\b(?:chainers?|hitters?|attackers?|earners?|performers?|grinders?|players?|"
+                              r"faction|crew|punks?|of us|mvps?)\b", re.I)
 
 # Everyone's records at once ("show me the faction table", "everyone's
 # strikes"): management only. "I'm management" changes nothing.
@@ -3153,7 +3161,12 @@ async def _answer_question(session, question, facts, history=None, earlier_facts
             board = facts.war_board(question)
             if board:
                 return Answer(board, 'bot', '', True, 0)
-        if RANK_RX.search(question) or (not mine and JUDGE_RX.search(question) and _PEOPLE_RX.search(question)):
+        # A ranking word only refuses when it ranks PEOPLE: "what's the best
+        # way to make money?" / "best gym?" got "management only" (audit
+        # 28/11/2026) and now go on as game questions.
+        ranks_people = _PEOPLE_RX.search(question) or RANKED_PEOPLE_RX.search(question)
+        if (RANK_RX.search(question) and ranks_people) \
+                or (not mine and JUDGE_RX.search(question) and _PEOPLE_RX.search(question)):
             return Answer(MEMBER_REFUSAL, 'none', '', True, 0, kind='ask')
     # Leave notices: looked up and quoted by the bot itself, no AI at all.
     # The AI sometimes skipped the lookup and said "no records of leave
