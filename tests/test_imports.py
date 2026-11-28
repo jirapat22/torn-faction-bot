@@ -11669,6 +11669,51 @@ def test_member_answers_go_to_the_right_channel():
     assert len(set(PATIENCE_LINES)) >= 5 and not any('—' in l for l in PATIENCE_LINES)
 
 
+def test_moved_answer_forwards_the_question_and_replies_to_it():
+    """A member's stats question in #punk-plaza: their message is forwarded
+    to #🤖-ask-apexpunk, the answer replies to that forward with a ping, and
+    plaza gets a short pointer that deletes itself."""
+    import asyncio
+    from features.ask_ai import AskAI
+
+    log = []
+    class Sent:
+        def __init__(self, where, text):
+            self.where, self.text, self.jump_url = where, text, f'https://discord.com/{where}'
+        async def reply(self, text, **kw):
+            log.append(('reply-to-forward', self.where, text, kw.get('allowed_mentions')))
+            return Sent(self.where, text)
+    class Ch:
+        def __init__(self, i, name):
+            self.id, self.name, self.mention = i, name, f'<#{i}>'
+    home, plaza = Ch(2, '🤖-ask-apexpunk'), Ch(1, '🗨-punk-plaza')
+    class Guild:
+        text_channels = [plaza, home]
+    class Author:
+        id, mention = 42, '<@42>'
+    class Msg:
+        guild, channel, author = Guild(), plaza, Author()
+        async def forward(self, target):
+            log.append(('forward', target.name))
+            return Sent(target.name, '(forward)')
+        async def reply(self, text, **kw):
+            log.append(('pointer', text, kw.get('delete_after')))
+            return Sent('plaza', text)
+    bot = AskAI.__new__(AskAI)
+    from features.ask_channels import BusyMeter
+    bot.busy = BusyMeter()
+    sent = asyncio.run(bot._post_answer(Msg(), 'how active am I?', 'You were online 14 days.', None, False))
+    assert log[0] == ('forward', '🤖-ask-apexpunk'), log
+    assert log[1][0] == 'reply-to-forward' and log[1][2].startswith('<@42> You were online'), log
+    assert log[1][3].users == [Msg.author], 'pings only the asker'
+    assert log[2][0] == 'pointer' and 'Answered in <#2>' in log[2][1] and log[2][2] == 60, log
+    assert sent.where == '🤖-ask-apexpunk'
+    # A joke stays put.
+    log.clear()
+    asyncio.run(bot._post_answer(Msg(), 'tell me a joke', 'Why did...', None, False))
+    assert log[0][0] == 'pointer' or log[0][0] != 'forward', log
+
+
 if __name__ == '__main__':
     test_faction_facts_from_pat()
     test_all_modules_import()
@@ -11880,4 +11925,5 @@ if __name__ == '__main__':
     test_draft_card_post_plus_event_does_both()
     test_calendar_sync_leaves_the_start_of_a_live_event_alone()
     test_member_answers_go_to_the_right_channel()
+    test_moved_answer_forwards_the_question_and_replies_to_it()
     print('All smoke tests passed.')

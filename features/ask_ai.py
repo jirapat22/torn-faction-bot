@@ -4088,9 +4088,18 @@ class AskAI:
         target = find_channel(message.guild, dest) if dest != 'here' else None
         if target is not None and getattr(target, 'id', None) != getattr(ch, 'id', None):
             try:
-                head = f'{message.author.mention} asked in {ch.mention}: *{question[:150]}*\n\n'
-                sent = await target.send(head + text[:ANSWER_LIMIT - len(head)], view=view,
-                                         allowed_mentions=discord.AllowedMentions(users=[message.author]))
+                # Forward their message so the home channel shows exactly what
+                # was asked, then answer it as a reply with a ping (Pat,
+                # 28/11/2026: "forward msg so you know what the original was").
+                ping = discord.AllowedMentions(users=[message.author])
+                try:
+                    fwd = await message.forward(target)
+                    sent = await fwd.reply(f'{message.author.mention} {text}'[:ANSWER_LIMIT], view=view,
+                                           mention_author=False, allowed_mentions=ping)
+                except (discord.HTTPException, AttributeError, TypeError):
+                    head = f'{message.author.mention} asked in {ch.mention}: *{question[:150]}*\n\n'
+                    sent = await target.send(head + text[:ANSWER_LIMIT - len(head)], view=view,
+                                             allowed_mentions=ping)
                 await message.reply(pointer_text(target.mention, sent.jump_url, None, where),
                                     mention_author=False, delete_after=POINTER_DELETE_S,
                                     allowed_mentions=discord.AllowedMentions.none())
