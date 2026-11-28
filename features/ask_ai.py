@@ -3148,6 +3148,14 @@ async def _answer_question(session, question, facts, history=None, earlier_facts
         if ANNOUNCE_RX.search(question) and re.search(r'\b(?:make|write|post|draft|send|create|do|put up)\b',
                                                      question, re.I):
             return Answer(MEMBER_REFUSAL, 'none', '', True, 0, kind='ask')
+    if management and is_war_top(question) and not names_in(question, facts) and hasattr(facts, 'war_board'):
+        # Management too: the same question took the AI 40s, then 124s (audit
+        # 28/11/2026) to copy what this card already says. The full report
+        # is still one question away.
+        board = facts.war_board(question)
+        if board:
+            board += ('\n-# Want hits taken, outside hits or the rest of the list? Ask for the war report.')
+            return Answer(board, 'bot', '', True, 0)
     game = not management and not names_in(question, facts) and not _records_cue(question or '') \
         and not (MY_RANK_RX.search(question or '') and is_war_top(question)) \
         and bool(MECH_RX.search(question or '')) \

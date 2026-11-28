@@ -395,6 +395,11 @@ def enrich_draft(text, names, path=CALENDAR_FILE):
             # (re-audit 08/11/2026).
             low = re.sub(r'\s+', ' ', '\n'.join(lines).lower())   # the whole draft, not just this block
             parts = [p for p in re.split(r'(?<=[.!?])\s+', line) if p.strip().rstrip('.').lower() not in low]
+            # The person gave a length ("for 3 hours", an Ends line): the usual
+            # length would contradict it ("Sunday 6pm for 3 hours" got
+            # "Normally runs 24 hours.", audit 28/11/2026).
+            if re.search(r'\b(?:for|lasts?|lasting)\s+\d+\s*(?:h|hrs?|hours?|d|days?)\b|\bEnds\b', block, re.I):
+                parts = [p for p in parts if not re.match(r'\s*(?:Normally runs|Lasts) \d+ \w+\.?\s*$', p, re.I)]
             if parts:
                 new.append('- ' + ' '.join(parts))
         lines[end:end] = new

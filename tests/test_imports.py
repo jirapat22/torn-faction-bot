@@ -11829,6 +11829,25 @@ def test_audit_slash_command_and_chat_fixes():
         assert _PEOPLE_RX.search(q) or RANKED_PEOPLE_RX.search(q), q
 
 
+def test_draft_length_and_management_war_card():
+    """Audit 28/11/2026: a 3-hour chain draft got "Normally runs 24 hours.",
+    and management's "top 10 from last 3 wars" waited 40-124s for the AI."""
+    import asyncio
+    from features.torn_events import enrich_draft
+    from features.ask_ai import FactBook, answer_question
+    out = enrich_draft('**⛓️ Chain**\n- Sunday 18:00 TCT for 3 hours', ['Chain'])
+    assert 'Normally runs' not in out and 'Minimum 10 hits' in out, out
+    assert 'Normally runs 24 hours' in enrich_draft('**⛓️ Chain**\n- Sunday 18:00 TCT', ['Chain'])
+    fb = FactBook('data', roster={'1': {'name': 'A'}})
+    fb.wars = [{'timestamp': 1, 'result': 'victory', 'enemy_name': 'X', 'our_score': 5, 'enemy_score': 1,
+                'members': {'1': {'name': 'A', 'attacks': 9}}}]
+    def boom(*a, **k):
+        raise AssertionError('no AI for this')
+    ans = asyncio.run(answer_question(None, 'stats and top 10 performances from last 3 wars.', fb,
+                                      providers=[('A', boom)], management=True))
+    assert ans.provider == 'bot' and '1. A · 9' in ans.text and 'war report' in ans.text, ans.text
+
+
 if __name__ == '__main__':
     test_faction_facts_from_pat()
     test_all_modules_import()
@@ -12046,4 +12065,5 @@ if __name__ == '__main__':
     test_routing_keeps_ai_chat_and_home_threads_in_place()
     test_who_am_i_card_and_diss_refusal()
     test_audit_slash_command_and_chat_fixes()
+    test_draft_length_and_management_war_card()
     print('All smoke tests passed.')
