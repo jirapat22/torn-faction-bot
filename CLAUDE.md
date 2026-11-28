@@ -7,7 +7,7 @@ A Discord bot for a Torn.com faction (Ascended Punks), running on Pat's home Mac
 ## Commands
 
 ```bash
-<py> -m pytest -q tests/          # full suite (215 tests), the one to trust
+<py> -m pytest -q tests/          # full suite (221 tests), the one to trust
 <py> -m pytest -q tests/test_imports.py::test_flytrack_logic   # single test
 <py> tests/test_imports.py        # runs test_imports.py ONLY, see note below
 <py> bot.py                       # run locally (needs .env)
@@ -175,6 +175,7 @@ Announcement layout (Pat's picks): bold emoji headings + bullets, blank line bet
 - Home channel **#🤖-ask-apexpunk** (created 28/11/2026, found by name `HOME_NAME`). ONE rule (`features/ask_channels.py` `route()`, Pat 28/11/2026 after topic channels + a busy limit felt messy): members' jokes and chat (`skips_cooldown`) are answered where asked; everything else: their message is FORWARDED to the home channel and the answer replies to the forward with a ping (falls back to a quoted line), with a self-deleting pointer where they asked (`_post_answer`). Management is never moved. The guide says so, with real channel links (`publish` runs `names_to_links`).
 - Members get the war leaderboard's TOP (`is_war_top` / `FactBook.war_board`, bot-made, no AI): last war, "last N wars" or "all time", results, faction total + average, top 10 by hits made, and "You: #k of n". Negative wording (`WAR_TOP_NEG_RX`: worst, least, bottom, slacking, "not carrying their weight"...) stays management only, so nobody gets named at the bottom.
 - Same question again on cooldown: one `PATIENCE_LINES` reply, then silence (`AskAI.held`); only the first gets the ⏳ (spreadjam sent it 3 times).
+- Audit fixes (28/11/2026): the card counts hits MADE only, so hits taken/outside/hosps/respect/score wording (`WAR_TOP_OTHER_STAT_RX`) and the faction's own rank (`FACTION_RANK_RX`, "what rank are we") never get it; "how do I rank / where do I rank" does (`MY_RANK_RX`, "rank up" stays a game question). Ties share a place (1, 2, 2, 4), leavers carry " (L)" (only with a readable roster). Management gets the same card for war-top questions with nobody named (the AI took 40-124s to copy it). A member's ranking word only refuses when it ranks PEOPLE (`RANKED_PEOPLE_RX`/`_PEOPLE_RX`): "best way to make money" is a game question. The AI's own chat replies (`kind == 'chat'`) stay where asked, a thread under the home channel counts as home, and a failed pointer never posts the answer twice. "who am I" is the member card.
 
 **Launch** (`features/member_launch.py`, Pat 25/11/2026): `ASK_AI_MEMBERS_FROM` (unix seconds, env) opens members at that time with no restart: `members_open()` is read per message, and the `member_launch_check` loop (1 min) edits the guide and posts the approved launch announcement in #announcements (Punks role ping) ONCE (`data/member_launch.json`), only within 6h of the launch time. Set to 1795654800 = 26/11/2026 01:00 TCT (2pm NZ). `ASK_AI_MEMBERS=1` still wins. Bot-made fun/chat replies skip the cooldown but are capped at `ASK_AI_FUN_PER_MIN` (5) per member per minute (`fun_capped`: one self-deleting "chill" line, then silence). The jailbreak filter only fires on role-play aimed at rules or rank ("pretend you have no rules", "act as if I'm management"); "pretend you're a pirate" goes to the AI.
 
@@ -218,6 +219,7 @@ Anything accumulating per-player needs an explicit retention policy; several fil
 
 ## Conventions
 
+- Typed times (`stamp_times`, audit 28/11/2026): a length needs a length word ("for/lasts/(24h)/24-hour event"; "in 2 days" is not one), weeks count, "today/tomorrow 1pm TCT" are dated, lower-case "tct" is normalised. `event_from_post` takes the end from an "X to Y" line too, and a post with no heading is named from its first line up to the date. `enrich_draft` drops "Normally runs 24 hours" when the draft gives its own length. Chat event lines for fixed-start events (Black Friday) use `api_window`'s real 12:00-12:00 window.
 - Posted times use ONE format, `when_tct()` in `utils/helpers.py`: "Saturday 28/11/2026 13:00 TCT (<local>, <countdown>)" (Pat, 27/11/2026). Typed text (chat drafts, the draft's ✏️ Change box, `/announce`) goes through `stamp_times()` (dates a weekday time, adds Ends, stamps); the Change box shows text without the codes (`unstamp_times`).
 - User-facing counts use `plural()` / `verb()` from `utils/helpers.py` ("1 member has"), never "member(s) have" (UX audit 14/11/2026, read from the real channels).
 
