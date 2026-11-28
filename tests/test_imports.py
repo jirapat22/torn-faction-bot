@@ -11971,6 +11971,20 @@ def test_finished_torn_event_never_falls_back_to_the_old_hand_date():
         after = [e for e in effective_calendar_events(1795910400, cal) if 'Friday' in e[0]]  # 28/11 12:00+
         assert after == [], after
 
+
+def test_draft_with_a_length_drops_the_ais_usual_length_line():
+    """Audit part 2 (29/11/2026): a 3-hour chain draft still said "Weekly
+    faction event, normally runs 24 hours" (the AI's own bullet)."""
+    from features.torn_events import enrich_draft
+    draft = ('**⛓️ Chain**\n- Saturday 28/11/2026 18:00 TCT (3 hours)\n'
+             '- Ends Saturday 28/11/2026 21:00 TCT\n- Weekly faction event, normally runs 24 hours\n'
+             '- Bring energy, normally runs 24 hours.')
+    out = enrich_draft(draft, ['Chain'])
+    assert 'normally runs' not in out.lower() and 'runs 24' not in out.lower(), out
+    assert 'Weekly faction event' not in out and '- Bring energy' in out and 'Ends Saturday' in out, out
+    # no length given: the usual length stays
+    assert 'Normally runs 24 hours' in enrich_draft('**⛓️ Chain**\n- Saturday 18:00 TCT', ['Chain'])
+
 if __name__ == '__main__':
     test_faction_facts_from_pat()
     test_all_modules_import()
@@ -12193,4 +12207,5 @@ if __name__ == '__main__':
     test_events_tab_is_in_event_answers()
     test_money_howto_gets_the_wiki_and_my_stats_gets_the_card()
     test_finished_torn_event_never_falls_back_to_the_old_hand_date()
+    test_draft_with_a_length_drops_the_ais_usual_length_line()
     print('All smoke tests passed.')

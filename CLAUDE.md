@@ -7,7 +7,7 @@ A Discord bot for a Torn.com faction (Ascended Punks), running on Pat's home Mac
 ## Commands
 
 ```bash
-<py> -m pytest -q tests/          # full suite (221 tests), the one to trust
+<py> -m pytest -q tests/          # full suite (226 tests), the one to trust
 <py> -m pytest -q tests/test_imports.py::test_flytrack_logic   # single test
 <py> tests/test_imports.py        # runs test_imports.py ONLY, see note below
 <py> bot.py                       # run locally (needs .env)
@@ -219,7 +219,10 @@ Anything accumulating per-player needs an explicit retention policy; several fil
 
 ## Conventions
 
-- Typed times (`stamp_times`, audit 28/11/2026): a length needs a length word ("for/lasts/(24h)/24-hour event"; "in 2 days" is not one), weeks count, "today/tomorrow 1pm TCT" are dated, lower-case "tct" is normalised. `event_from_post` takes the end from an "X to Y" line too, and a post with no heading is named from its first line up to the date. `enrich_draft` drops "Normally runs 24 hours" when the draft gives its own length. Chat event lines for fixed-start events (Black Friday) use `api_window`'s real 12:00-12:00 window.
+- **Torn down vs nothing on** (audit 29/11/2026): `torn_api.torn_unreachable_since(t0)` says whether a call failed after t0 with no success since. `/chain status`, `/chain report`, `/war status` (`read_or_down` in commands.py) and chat's live war line use it to say "Torn didn't answer" instead of "No active war". `/test rolesync` and `/test events` show ⚠️ with the reason when they did not really run (`sync_all_members` returns `(ok, message)`). A poll whose post fails is dropped (`discard_poll`), never saved as a ghost.
+- **Calendar fallback** (audit 29/11/2026): `effective_calendar_events` leaves out a Torn event that is over for this year. It used to fall back to the hand list's stale date, and on 28/11/2026 created a fake "Black Friday" for Sunday 29/11 (2024's date) in the Events tab and posted "is on the calendar" in #punk-plaza.
+- **Events tab in chat**: the reminder loop saves the Events tab hourly to `data/discord_events.json` (also right after a calendar sync changes it); the `torn_events` tool adds it ("ON OUR DISCORD EVENTS TAB"), so "what time is happy jump?" gets the real scheduled time. Time words ("this week") are not event names; a Torn event the calendar already lists isn't repeated. "Best way to make money" gets the wiki's guides from `guard_question` (`MONEY_HOWTO_RX`), and "what are my stats" is the member card.
+- Typed times (`stamp_times`, audit 28/11/2026): a length needs a length word ("for/lasts/(24h)/24-hour event"; "in 2 days" is not one), weeks count, "today/tomorrow 1pm TCT" are dated, lower-case "tct" is normalised. `event_from_post` takes the end from an "X to Y" line too, and a post with no heading is named from its first line up to the date. `enrich_draft` drops "Normally runs 24 hours" when the draft gives its own length, including the AI's own "normally runs 24 hours" clause. Chat event lines for fixed-start events (Black Friday) use `api_window`'s real 12:00-12:00 window.
 - Posted times use ONE format, `when_tct()` in `utils/helpers.py`: "Saturday 28/11/2026 13:00 TCT (<local>, <countdown>)" (Pat, 27/11/2026). Typed text (chat drafts, the draft's ✏️ Change box, `/announce`) goes through `stamp_times()` (dates a weekday time, adds Ends, stamps); the Change box shows text without the codes (`unstamp_times`).
 - User-facing counts use `plural()` / `verb()` from `utils/helpers.py` ("1 member has"), never "member(s) have" (UX audit 14/11/2026, read from the real channels).
 

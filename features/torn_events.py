@@ -437,6 +437,22 @@ def enrich_draft(text, names, path=CALENDAR_FILE):
         while end < len(lines) and lines[end].lstrip().startswith(('-', '•')):
             end += 1
         block = '\n'.join(lines[at:end])
+        given_length = re.search(r'\b(?:for|lasts?|lasting)\s+\d+\s*(?:h|hrs?|hours?|d|days?)\b|\bEnds\b|'
+                                 r'\(\d+\s*(?:h|hrs?|hours?|d|days?)\)', block, re.I)
+        if given_length:
+            # The AI copies the usual length from the facts too ("- Weekly
+            # faction event, normally runs 24 hours" under a 3-hour chain,
+            # audit 29/11/2026): drop that clause from the AI's own bullets.
+            for i in range(at + 1, end):
+                cut = re.sub(r'[,;]?\s*(?:a\s+)?(?:weekly faction event,?\s*(?:that\s+)?)?'
+                             r'(?:normally|usually) (?:runs|lasts) \d+\s*\w+\.?', '', lines[i], flags=re.I)
+                if cut != lines[i]:
+                    lines[i] = cut if re.sub(r'[-•\s.]|weekly faction event', '', cut, flags=re.I) else None
+            lines = [l for l in lines if l is not None]
+            end = at + 1
+            while end < len(lines) and lines[end].lstrip().startswith(('-', '•')):
+                end += 1
+            block = '\n'.join(lines[at:end])
         new = []
         for line, already in details:
             if re.search(already, block, re.I):
@@ -449,7 +465,7 @@ def enrich_draft(text, names, path=CALENDAR_FILE):
             # The person gave a length ("for 3 hours", an Ends line): the usual
             # length would contradict it ("Sunday 6pm for 3 hours" got
             # "Normally runs 24 hours.", audit 28/11/2026).
-            if re.search(r'\b(?:for|lasts?|lasting)\s+\d+\s*(?:h|hrs?|hours?|d|days?)\b|\bEnds\b', block, re.I):
+            if given_length:
                 parts = [p for p in parts if not re.match(r'\s*(?:Normally runs|Lasts) \d+ \w+\.?\s*$', p, re.I)]
             if parts:
                 new.append('- ' + ' '.join(parts))

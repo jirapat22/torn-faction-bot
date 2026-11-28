@@ -775,8 +775,14 @@ async def role_sync_check():
         try:
             from features.calendar_sync import sync as calendar_sync
             from config import GUILD_ID as _gid
-            await calendar_sync(bot, bot.get_guild(_gid),
-                                chain_event_manager, war_tracker)
+            synced = await calendar_sync(bot, bot.get_guild(_gid),
+                                         chain_event_manager, war_tracker)
+            # The chat reads a saved copy of the Events tab (made hourly by the
+            # reminder loop); refresh it when the sync changed the tab, or chat
+            # kept quoting a removed event for up to an hour (audit 29/11/2026).
+            if synced and (synced.get('created') or synced.get('updated') or synced.get('removed')):
+                from features.event_reminders import save_events_tab
+                save_events_tab(await bot.get_guild(_gid).fetch_scheduled_events())
         except Exception as e:
             logger.error(f'Calendar sync failed: {e}')
         if activity_profile_manager and faction_members:
