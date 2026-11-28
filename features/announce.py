@@ -110,8 +110,20 @@ def event_from_post(text, now=None):
     start = int(stamps[0])
     end_line = next((l for l in lines if re.match(r'\s*[-•*]?\s*Ends\b', l)), '')
     end_ts = re.search(r'<t:(\d+):f>', end_line)
+    if not end_ts:
+        # "30/11 18:00 TCT to 01/12 18:00 TCT": the second time on the start's
+        # line is the end (it used to become a 1-hour event, audit 28/11/2026).
+        first = next((l for l in lines if f'<t:{start}:f>' in l), '')
+        later = [int(t) for t in re.findall(r'<t:(\d+):f>', first)[1:]]
+        if later and re.search(r'\b(?:to|until|till)\b|\s[-–]\s', first):
+            end_ts = re.match(r'(\d+)', str(later[0]))
     end = int(end_ts.group(1)) if end_ts and int(end_ts.group(1)) > start else start + 3600
-    heading = next((l for l in lines if l.lstrip().startswith('**')), lines[0])
+    heading = next((l for l in lines if l.lstrip().startswith('**')), None)
+    if heading is None:
+        # No heading (a typed /announce): the first line up to its first
+        # date or weekday, so the name isn't "Happy jump Saturday 28112026...".
+        heading = re.split(r'\b(?:on |at |this |next )?(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\w*\b|\d{1,2}/\d{1,2}|'
+                           r'\b(?:today|tonight|tomorrow)\b', lines[0], maxsplit=1, flags=re.I)[0]
     # "**🦘 Happy Jump**" -> "Happy Jump": no stars, emoji or stray punctuation.
     name = re.sub(r'[^\w\s&\'’!?:()-]', '', re.sub(r'<[^>]+>', '', heading)).strip(' -:') or 'Faction event'
     return {'name': name[:100], 'start': start, 'end': end,

@@ -1152,7 +1152,7 @@ def command_log_line(name, options, user, channel):
     weekly check reads these to see which commands get used and which fail;
     before this, a command left no trace unless it crashed). Option values
     are cut short so a long announcement text doesn't flood the log."""
-    opts = ' '.join(f'{k}={str(v)[:40]}' for k, v in (options or {}).items() if v is not None)
+    opts = ' '.join(f'{k}={" ".join(str(v).split())[:40]}' for k, v in (options or {}).items() if v is not None)
     return f'Command /{name}{" " + opts if opts else ""} by {user} in #{channel}'
 
 
