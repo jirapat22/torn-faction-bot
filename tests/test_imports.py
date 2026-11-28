@@ -11033,7 +11033,7 @@ def test_live_war_is_a_short_card_built_by_the_bot():
     losing = war_answer(raw.replace('✅ Winning 3435 - 1929', '⚠️ Losing 1000 - 1200')
                         .replace('Our Score: 3435', 'Our Score: 1000').replace('Enemy Score: 1929', 'Enemy Score: 1200'))
     assert 'Behind by 200, target 3318' in losing
-    none = 'No ranked war is on right now and none is enlisted yet (or Torn did not answer).'
+    none = 'No ranked war is on right now and none is enlisted yet.'
     assert war_answer(none) == none
 
     class Live:
@@ -11928,6 +11928,48 @@ def test_events_tab_is_in_event_answers():
         assert 'Nothing matching is scheduled' in text and 'Happy Jump' not in text
         # no snapshot yet: nothing added, nothing invented
         assert 'EVENTS TAB' not in events_text('happy jump', path=cal, now=now, tab_path=os.path.join(d, 'x.json'))
+        # "this week" is not an event name; a Torn event isn't listed twice
+        with open(cal, 'w') as f:
+            json.dump({'events': [{'title': 'Happy Jump', 'description': 'x', 'start': int(start.timestamp()),
+                                   'end': int(end.timestamp()), 'fixed_start_time': True},
+                                  {'title': 'Awareness Week', 'description': 'y', 'start': 1, 'end': 2}]}, f)
+        text = events_text('whats on this week', path=cal, now=now, tab_path=tab)
+        assert 'Awareness' not in text and text.count('DISPLAY') == 1, text
+        assert 'Nothing matching' not in events_text('happy jump', path=cal, now=now, tab_path=tab)
+
+
+def test_money_howto_gets_the_wiki_and_my_stats_gets_the_card():
+    """Audit part 2 (29/11/2026): "best way to make money" was a 19s dead end
+    ("not recorded"), now an instant wiki link; records questions about money
+    are untouched."""
+    from features.ask_ai import guard_question, MONEY_HOWTO_REPLY
+    for q in ['whats the best way to make money', 'how do I make money fast', 'money making tips?',
+              'how can i earn cash in torn']:
+        assert guard_question(q, management=False) == MONEY_HOWTO_REPLY, q
+    for q in ['how many hits did I make', 'when is payday', 'what are my stats']:
+        assert guard_question(q, management=False) != MONEY_HOWTO_REPLY, q
+    assert '\u2014' not in MONEY_HOWTO_REPLY
+    from features.ask_ai import is_overview, STATS_RX
+    assert is_overview('what are SirAua stats', 'SirAua') and is_overview("show SirAua's stats", 'SirAua')
+    assert STATS_RX.search('what are my battle stats')
+
+
+def test_finished_torn_event_never_falls_back_to_the_old_hand_date():
+    """Audit part 2 (29/11/2026): after Black Friday (27/11/2026, 12:00 to
+    12:00) ended, the hand list's 2024 date 29/11 came back and a fake Black
+    Friday was created in the Events tab for Sunday 29/11."""
+    import os, json, tempfile
+    from features.torn_events import effective_calendar_events
+    bf = {'title': 'Black Friday', 'description': 'Sale', 'start': 1795737600, 'end': 1795823999,
+          'earliest_start': 1795737600, 'latest_end': 1795823999, 'fixed_start_time': True}
+    with tempfile.TemporaryDirectory() as d:
+        cal = os.path.join(d, 'cal.json')
+        with open(cal, 'w') as f:
+            json.dump({'events': [bf], 'competitions': []}, f)
+        before = [e for e in effective_calendar_events(1795737600 - 86400, cal) if 'Friday' in e[0]]
+        assert before and before[0][1:] == (11, 27), before        # the API date, not 29/11
+        after = [e for e in effective_calendar_events(1795910400, cal) if 'Friday' in e[0]]  # 28/11 12:00+
+        assert after == [], after
 
 if __name__ == '__main__':
     test_faction_facts_from_pat()
@@ -12149,4 +12191,6 @@ if __name__ == '__main__':
     test_draft_length_and_management_war_card()
     test_torn_down_status_and_test_command_honesty()
     test_events_tab_is_in_event_answers()
+    test_money_howto_gets_the_wiki_and_my_stats_gets_the_card()
+    test_finished_torn_event_never_falls_back_to_the_old_hand_date()
     print('All smoke tests passed.')

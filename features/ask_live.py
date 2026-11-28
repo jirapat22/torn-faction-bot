@@ -313,6 +313,8 @@ class LiveTools:
         wt = self._m('war_tracker')
         if wt is None:
             return self.facts._notice('War tracking is not running on the bot right now.')
+        from utils import torn_api
+        t0 = time.time()
         info = await wt.get_current_war()
         out = []
         if info:
@@ -323,7 +325,13 @@ class LiveTools:
             out.append(f'Next ranked war: war {upcoming["war_id"]}, starts {_tct(upcoming["start"])} '
                        f'({_relative(upcoming["start"], self.now)}).')
         if not out:
-            out.append('No ranked war is on right now and none is enlisted yet (or Torn did not answer).')
+            # Torn down and "no war" both come back as None; say which one it
+            # was (the None-vs-empty rule) instead of an "or" that leaves the
+            # member guessing (audit 29/11/2026).
+            if torn_api.torn_unreachable_since(t0):
+                out.append("Torn didn't answer just now, so I can't say whether a war is on. Try again in a minute.")
+            else:
+                out.append('No ranked war is on right now and none is enlisted yet.')
         return self._found('\n\n'.join(out))
 
     async def _chain(self):

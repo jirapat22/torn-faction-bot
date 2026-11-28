@@ -177,7 +177,8 @@ def effective_calendar_events(now=None, path=CALENDAR_FILE):
     dates taken from Torn's API where it has them. The hand-kept list is stale
     for events that move each year (2026: Black Friday 27/11 not 29/11, Slash
     Wednesday 09/12 not 10/12, Awareness Week 19/01 not 15/01) and stays only
-    as the fallback (no saved calendar, or this year's date already passed).
+    as the fallback for events Torn's calendar doesn't list. One Torn lists
+    that is already over this year is left out (its old hand date is wrong).
     """
     from features.event_reminders import CALENDAR_EVENTS
     now = time.time() if now is None else now
@@ -191,7 +192,12 @@ def effective_calendar_events(now=None, path=CALENDAR_FILE):
             start, end, _ = api_window(match)
             if end.timestamp() >= now:
                 out.append((name, start.month, start.day))
-                continue
+            # Already over this year: leave it out until Torn publishes next
+            # year's date. Falling back to the hand list here is how 2024's
+            # 29/11 came back the day after the real Black Friday (27/11/2026)
+            # ended: a fake "Black Friday" was created in the Events tab for
+            # Sunday 29/11 (audit 29/11/2026).
+            continue
         out.append((name, month, day))
     return out
 
@@ -246,8 +252,12 @@ def events_text(query='', path=CALENDAR_FILE, now=None, limit=8, tab_path=None):
     torn = [dict(e, kind='Torn event') for e in saved.get('events') or []] + \
            [dict(e, kind='Torn competition') for e in saved.get('competitions') or []]
     q = (query or '').lower().strip()
-    words = [w for w in re.findall(r'[a-z0-9]+', q) if w not in {'the', 'day', 'event', 'events', 'when', 'is',
-                                                              'what', 'does', 'next', 'upcoming', 'torn', 'of'}]
+    # Time words are not event names: "what's on this week" matched January's
+    # Awareness Week and listed finished events (audit 29/11/2026).
+    words = [w for w in re.findall(r'[a-z0-9]+', q) if w not in {
+        'the', 'day', 'event', 'events', 'when', 'is', 'what', 'does', 'next', 'upcoming', 'torn', 'of',
+        'this', 'week', 'weeks', 'month', 'today', 'tomorrow', 'tonight', 'soon', 'coming', 'up', 'on', 'whats',
+        's', 'happening', 'any', 'are', 'there', 'in', 'a', 'for', 'time', 'start', 'starts', 'it', 'weekend'}]
     out = []
     if not torn:
         out.append("Torn's calendar is not saved yet, so official event dates are unknown right now.")
@@ -259,19 +269,20 @@ def events_text(query='', path=CALENDAR_FILE, now=None, limit=8, tab_path=None):
         picked.sort(key=lambda e: e.get('start') or 0)
         for e in picked[:limit]:
             out.append(_event_line(e, now))
+        shown = {(e.get('title') or '').lower() for e in picked[:limit]}
         if torn and not picked and words:
             out.append(f'No Torn event matching "{query}" in this year\'s calendar.')
     faction = [f for f in FACTION_EVENTS if not words or _matches(words, f[0])]
     for name, desc in faction:
         out.append(f'- {name} (faction event): {desc}')
-    out += events_tab_lines(words, tab_path, now)
+    out += events_tab_lines(words, tab_path, now, shown if torn else set())
     return 'EVENTS (official Torn calendar, plus our faction\'s own weekly events):\n' + '\n'.join(out)
 
 
 TAB_STALE_SECONDS = 3 * 3600
 
 
-def events_tab_lines(words, tab_path, now):
+def events_tab_lines(words, tab_path, now, shown=()):
     """What is actually scheduled in our Discord Events tab (saved hourly by
     the reminder loop). Matching events, or all upcoming ones for an empty
     query. Each carries a DISPLAY line, so a question only about events is
@@ -284,11 +295,16 @@ def events_tab_lines(words, tab_path, now):
     rows = [r for r in saved.get('events') or [] if (r.get('end') or r.get('start') or 0) >= (now or 0) - 3600]
     if words:
         rows = [r for r in rows if _matches(words, r.get('name'))]
+    # A Torn event the calendar lines above already give (with its effect)
+    # is not repeated: "what's on" listed Slash Wednesday twice.
+    bare = lambda n: re.sub(r'^[^\w]+|[^\w]+$', '', n or '').strip().lower()
+    matched = bool(rows)
+    rows = [r for r in rows if bare(r.get('name')) not in shown]
     head = 'ON OUR DISCORD EVENTS TAB (what management actually scheduled; use these times):'
     if (now or 0) - (saved.get('saved_at') or 0) > TAB_STALE_SECONDS and now:
         head += ' [this copy may be a few hours old]'
     if not rows:
-        return [head, '- Nothing matching is scheduled there right now.'] if words else []
+        return [head, '- Nothing matching is scheduled there right now.'] if words and not matched else []
     out = [head]
     for r in rows[:6]:
         s_ts, e_ts = r.get('start'), r.get('end')

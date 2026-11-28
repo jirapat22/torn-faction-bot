@@ -1951,6 +1951,9 @@ _OVERVIEW_WORDS = {
     'what', 'whats', "what's", 'about', 'x', 's', 'any', 'good', 'a', 'an', 'he', 'she', 'they', 'them', 'him',
     # A greeting in front ("yo, how active is X?") is still an overview.
     'yo', 'hey', 'hi', 'hello', 'so', 'ok', 'okay', 'oi', 'also', 'plus',
+    # "what are my stats" (silence5185, 28/11/2026): a 35s AI dump of their
+    # own record. Battle stats are caught earlier by STATS_RX, never here.
+    'stats', 'stat', 'statistics', 'numbers',
 }
 
 
@@ -2701,6 +2704,14 @@ STATS_RX = re.compile(r'\bbattle ?stats?\b|\bstat (?:estimate|spy)|\bffscouter\b
                       r'\btotal stats?\b|\bhow strong\b', re.I)
 XANAX_RX = re.compile(r'\bxan(?:ax|ny|nies)?s?\b|\brefills?\b', re.I)
 STATS_REFUSAL = "I don't keep battle stats, boss 🤷 Not something I track."
+# "Best way to make money?" (audit 29/11/2026): the AI took 19s to say
+# "money-making strategies are not recorded", a dead end. Money stays out of
+# chat (Pat's rule), so the bot points at the wiki's guides itself, instantly.
+MONEY_HOWTO_RX = re.compile(r"\b(?:make|making|earn|earning|get|getting|farm|farming)\s+(?:some\s+|more\s+|fast\s+|quick\s+|easy\s+)?"
+                            r"(?:money|cash|\$+|bucks|mil+s?)\b|\bmoney[ -]?mak\w*", re.I)
+MONEY_HOWTO_REPLY = ("Making it rich in Torn is a whole topic, boss 💸 The wiki has proper guides: "
+                     "<https://wiki.torn.com/w/index.php?search=making+money>\n"
+                     "-# I stick to our records, the rules and how Torn works.")
 XANAX_REFUSAL = "I don't keep track of Xanax, boss 🤷 Check with management."
 
 
@@ -2796,6 +2807,8 @@ def guard_question(question, management=True, game=False):
         return KICK_DODGE
     if PAYOUT_RX.search(q):
         return PAYOUT_REFUSAL
+    if MONEY_HOWTO_RX.search(q) and not DATA_WORDS.search(q):
+        return MONEY_HOWTO_REPLY
     if not management and not game and JUDGE_RX.search(q):
         return MEMBER_REFUSAL
     if not DATA_WORDS.search(q):
