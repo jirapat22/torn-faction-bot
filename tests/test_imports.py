@@ -11970,6 +11970,10 @@ def test_finished_torn_event_never_falls_back_to_the_old_hand_date():
         assert before and before[0][1:] == (11, 27), before        # the API date, not 29/11
         after = [e for e in effective_calendar_events(1795910400, cal) if 'Friday' in e[0]]  # 28/11 12:00+
         assert after == [], after
+        # "when is black friday?" (a wiki question) gets this year's date too
+        from features.torn_events import detect_events, events_text
+        assert detect_events('when is black friday', path=cal) == ['Black Friday']
+        assert 'Friday 27/11/2026 12:00' in events_text('Black Friday', path=cal, now=1795910400)
 
 
 def test_draft_with_a_length_drops_the_ais_usual_length_line():

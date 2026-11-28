@@ -3340,6 +3340,21 @@ async def _answer_question(session, question, facts, history=None, earlier_facts
             from features.torn_wiki import load_pages, lookup_text
             wiki_txt = lookup_text(question, None, load_pages())[0]
         lookup_facts = 'TORN WIKI (how the game works):\n' + wiki_txt
+        # The saved wiki page gives past years' dates ("Black Friday:
+        # November 29th" is 2024's; 2026's was Friday 27/11), and "when is
+        # Black Friday?" was answered "29 November" from it (audit
+        # 29/11/2026). A question naming a Torn event gets this year's real
+        # dates from Torn's own calendar too, marked as the ones to use.
+        try:
+            from features.torn_events import detect_events, events_text, _FACTION_CUES
+            cal = os.path.join(getattr(facts, 'data_dir', 'data'), 'torn_calendar.json')
+            named = [n for n in detect_events(question, path=cal) if n not in _FACTION_CUES]
+            if named:
+                lookup_facts += ("\n\nTHIS YEAR'S DATES (Torn's own calendar; the wiki's dates are from past "
+                                 'years, so for WHEN use these):\n'
+                                 + events_text(' '.join(named), path=cal, now=getattr(facts, 'now', None)))
+        except Exception as e:
+            logger.warning(f'Ask AI: event dates for a wiki question failed: {e!r}')
         if mixed:
             rules_txt = facts.faction_rules(question)
             if str(rules_txt).startswith('RULEBOOK'):
